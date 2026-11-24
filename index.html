@@ -370,6 +370,18 @@
       return `${util.value} (${util.type || 'Unit'})`;
     }
 
+    function formatStartingPointsList(spList, fallback = '-') {
+      if (!Array.isArray(spList) || spList.length === 0) return fallback;
+      const names = spList
+        .map((sp) => {
+          if (typeof sp === 'string') return sp;
+          if (sp && typeof sp === 'object') return sp.name || sp.zone_name || sp.title || '';
+          return '';
+        })
+        .filter(Boolean);
+      return names.length > 0 ? names.slice(0, 2).join(', ') : fallback;
+    }
+
     function humanizeEventLabel(tr) {
       const state = String(tr.to_state || tr.event_type || '').toLowerCase();
       const map = {
@@ -697,6 +709,8 @@
       const [isLoadingOrderDetail, setIsLoadingOrderDetail] = useState(false);
       const [collapsedDeliveryIds, setCollapsedDeliveryIds] = useState({});
       const [activeTransitionMeta, setActiveTransitionMeta] = useState(null);
+      const [orderDetailSubTab, setOrderDetailSubTab] = useState('deliveries');
+      const [isPickupInstrExpanded, setIsPickupInstrExpanded] = useState(false);
 
       const [copiedId, setCopiedId] = useState(null);
       const [lastRefreshed, setLastRefreshed] = useState('Waiting for first sync...');
@@ -2007,7 +2021,9 @@
         if (!selectedOrder) return null;
         const cleanCode = String(selectedOrder.id).replace(/^HF_EG/i, '').trim();
         const rich = orderDetailsCache[cleanCode] || null;
-        const richOrder = rich?.order || {};
+        const richOrder =
+          rich?.order ||
+          (rich && (rich.code || rich.order_code || rich.pickup_address || rich.dropoff_address) ? rich : {});
         const richDeliveries = Array.isArray(rich?.deliveries) && rich.deliveries.length > 0 ? rich.deliveries : [];
         const richNotes = Array.isArray(rich?.dispatcher_notes) ? rich.dispatcher_notes : [];
 
@@ -2019,6 +2035,30 @@
 
         const pickupAddrObj = richOrder.pickup_address || {};
         const dropoffAddrObj = richOrder.dropoff_address || {};
+        const customerObj = richOrder.customer || {};
+
+        const resolvedCustomerName =
+          dropoffAddrObj.name ||
+          dropoffAddrObj.recipient_name ||
+          dropoffAddrObj.full_name ||
+          [dropoffAddrObj.first_name, dropoffAddrObj.last_name].filter(Boolean).join(' ') ||
+          richOrder.customer_name ||
+          customerObj.name ||
+          [customerObj.first_name, customerObj.last_name].filter(Boolean).join(' ') ||
+          selectedOrder.customerName ||
+          'Customer';
+
+        const resolvedCustomerPhone =
+          dropoffAddrObj.phone_number ||
+          dropoffAddrObj.phone ||
+          dropoffAddrObj.mobile ||
+          dropoffAddrObj.mobile_number ||
+          dropoffAddrObj.contact_number ||
+          richOrder.customer_phone ||
+          customerObj.phone_number ||
+          customerObj.phone ||
+          customerObj.mobile ||
+          '-';
 
         const riderHistory = extractCourierHistoryFromDeliveries(
           richDeliveries,
@@ -2037,11 +2077,21 @@
           return '-';
         })();
 
+        const rawItems = Array.isArray(richOrder.items)
+          ? richOrder.items
+          : Array.isArray(richOrder.order_items)
+          ? richOrder.order_items
+          : Array.isArray(richOrder.line_items)
+          ? richOrder.line_items
+          : selectedOrder.items || [];
+
+        const rawOrderIssues = Array.isArray(richOrder.issues) ? richOrder.issues : [];
+
         return {
           cleanCode,
           orderCode: richOrder.order_code || selectedOrder.orderCode || `HF_EG${cleanCode}`,
           status: formattedStatus,
-          statusSince: formatReadableTimestamp(richOrder.created_at),
+          statusSince: formatReadableTimestamp(richOrder.created_at || richOrder.placed_at),
           platform: richOrder.platform || 'talabat',
           globalEntityId: richOrder.global_entity_id || 'HF_EG',
           vendorCode: richOrder.vendor_code || '-',
@@ -2082,25 +2132,31 @@
           vendorName: richOrder.vendor_name || selectedOrder.vendor,
           vendorStreet: pickupAddrObj.street_address || selectedOrder.pickupAddress || '-',
           vendorCity: pickupAddrObj.city || selectedOrder.city || 'Cairo',
+          vendorArea: pickupAddrObj.area || pickupAddrObj.district || '',
           vendorApt: pickupAddrObj.apartment || 'NA',
           vendorBuilding: pickupAddrObj.building || 'NA',
           vendorFloor: pickupAddrObj.floor || 'NA',
           vendorZip: pickupAddrObj.zipcode || 'NA',
           vendorIntercom: pickupAddrObj.intercom || 'NA',
           vendorEntrance: pickupAddrObj.entrance || 'NA',
-          pickupInstructions: pickupAddrObj.delivery_instructions || '',
+          pickupInstructions:
+            pickupAddrObj.delivery_instructions || pickupAddrObj.instructions || pickupAddrObj.note || '',
           pickupCoords:
             pickupAddrObj.latitude && pickupAddrObj.longitude
               ? `${pickupAddrObj.latitude}, ${pickupAddrObj.longitude}`
               : selectedOrder.pickupCoords,
-          customerName:
-            dropoffAddrObj.name ||
-            dropoffAddrObj.recipient_name ||
-            selectedOrder.customerName ||
-            'Customer',
-          customerPhone: dropoffAddrObj.phone_number || dropoffAddrObj.mobile || '-',
+          customerName: resolvedCustomerName,
+          customerPhone: resolvedCustomerPhone,
           customerStreet: dropoffAddrObj.street_address || selectedOrder.dropoffAddress || '-',
-          customerCity: dropoffAddrObj.city || selectedOrder.city || 'Cairo',
+          customerCity: dropoffAddrObj.city || dropoffAddrObj.area || dropoffAddrObj.district || '',
+          customerApt: dropoffAddrObj.apartment || 'NA',
+          customerBuilding: dropoffAddrObj.building || 'NA',
+          customerFloor: dropoffAddrObj.floor || 'NA',
+          customerZip: dropoffAddrObj.zipcode || 'NA',
+          customerIntercom: dropoffAddrObj.intercom || 'NA',
+          customerEntrance: dropoffAddrObj.entrance || 'NA',
+          dropoffInstructions:
+            dropoffAddrObj.delivery_instructions || dropoffAddrObj.instructions || dropoffAddrObj.note || '',
           dropoffCoords:
             dropoffAddrObj.latitude && dropoffAddrObj.longitude
               ? `${dropoffAddrObj.latitude}, ${dropoffAddrObj.longitude}`
@@ -2109,13 +2165,27 @@
           deadline: selectedOrder.deadline,
           isLate: selectedOrder.isLate,
           orderedAt: formatReadableTimestamp(richOrder.placed_at || richOrder.created_at),
-          sendToRestaurantAt: formatShortTimeNoSec(richOrder.send_to_restaurant_at),
-          restaurantConfirmedAt: formatShortTimeNoSec(richOrder.restaurant_confirmed_at),
-          pickupCommittedAt: formatShortTimeNoSec(richOrder.scheduled_pickup_at),
+          sendToRestaurantAt:
+            richOrder.send_to_restaurant_at
+              ? formatShortTimeNoSec(richOrder.send_to_restaurant_at)
+              : selectedOrder.sentToVendorAt || '-',
+          restaurantConfirmedAt:
+            richOrder.restaurant_confirmed_at
+              ? formatShortTimeNoSec(richOrder.restaurant_confirmed_at)
+              : selectedOrder.confirmedAt || '-',
+          pickupCommittedAt:
+            richOrder.scheduled_pickup_at
+              ? formatShortTimeNoSec(richOrder.scheduled_pickup_at)
+              : selectedOrder.scheduledPickupAt || '-',
           foodReadyAt: formatShortTimeNoSec(richOrder.food_ready_at || richOrder.preparation_completed_at),
           pickedUpAt: pickedUpTransitionTime,
-          promisedDeliveryAt: formatReadableTimestamp(richOrder.scheduled_dropoff_at),
+          promisedDeliveryAt:
+            richOrder.scheduled_dropoff_at
+              ? formatReadableTimestamp(richOrder.scheduled_dropoff_at)
+              : selectedOrder.scheduledDropoffAt || '-',
           deliveries: richDeliveries,
+          items: rawItems,
+          orderIssues: rawOrderIssues,
           notes: richNotes,
           riderHistory,
           hasRichData: Boolean(rich && (rich.order || richDeliveries.length > 0))
@@ -2963,7 +3033,22 @@
                           {/* Vendor Address */}
                           <div className="border border-gray-200 rounded-lg p-3.5 space-y-2.5 text-xs">
                             <div className="flex items-center justify-between">
-                              <span className="font-bold text-gray-800 text-sm">Vendor Address</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-gray-800 text-sm">Vendor Address</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) =>
+                                    handleCopyId(
+                                      e,
+                                      `${selectedOrderFullView.vendorName} - ${selectedOrderFullView.vendorStreet}`
+                                    )
+                                  }
+                                  className="text-blue-600 hover:text-blue-800"
+                                  title="Copy Vendor Address"
+                                >
+                                  <CopyIcon size={12} />
+                                </button>
+                              </div>
                               {selectedOrderFullView.pickupCoords && (
                                 <a
                                   href={`https://maps.google.com/?q=${selectedOrderFullView.pickupCoords}`}
@@ -2981,10 +3066,10 @@
                             </div>
                             <div className="flex items-start gap-1.5 text-gray-700 border-b border-gray-100 pb-2">
                               <MapPinIcon size={14} className="text-gray-400 mt-0.5 flex-shrink-0" />
-                              <span>{selectedOrderFullView.vendorStreet}</span>
-                            </div>
-                            <div className="text-gray-700 font-medium border-b border-gray-100 pb-1.5">
-                              {selectedOrderFullView.vendorCity}
+                              <span>
+                                {selectedOrderFullView.vendorStreet}
+                                {selectedOrderFullView.vendorCity ? ` , ${selectedOrderFullView.vendorCity}` : ''}
+                              </span>
                             </div>
                             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
                               <div className="flex justify-between">
@@ -3012,9 +3097,19 @@
                                 <span className="font-semibold text-gray-700">{selectedOrderFullView.vendorEntrance}</span>
                               </div>
                             </div>
-                            {selectedOrderFullView.pickupInstructions && (
-                              <div className="p-2 rounded bg-blue-50/70 text-blue-900 text-[11px]">
-                                {selectedOrderFullView.pickupInstructions}
+                            {(selectedOrderFullView.pickupInstructions || selectedOrderFullView.vendorArea) && (
+                              <div className="p-2.5 rounded-lg bg-blue-50/80 border border-blue-100 text-gray-700 text-[11px] leading-relaxed">
+                                {selectedOrderFullView.pickupInstructions ||
+                                  `City: ${selectedOrderFullView.vendorCity} Area: ${selectedOrderFullView.vendorArea} ${selectedOrderFullView.pickupCoords || ''}`}
+                                {selectedOrderFullView.pickupInstructions && selectedOrderFullView.pickupInstructions.length > 90 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setIsPickupInstrExpanded((prev) => !prev)}
+                                    className="ml-1.5 text-blue-600 font-semibold hover:underline"
+                                  >
+                                    {isPickupInstrExpanded ? 'Show less' : '...Read more'}
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>
@@ -3022,7 +3117,22 @@
                           {/* Customer Address */}
                           <div className="border border-gray-200 rounded-lg p-3.5 space-y-2.5 text-xs">
                             <div className="flex items-center justify-between">
-                              <span className="font-bold text-gray-800 text-sm">Customer Address</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-gray-800 text-sm">Customer Address</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) =>
+                                    handleCopyId(
+                                      e,
+                                      `${selectedOrderFullView.customerName} | ${selectedOrderFullView.customerPhone} | ${selectedOrderFullView.customerStreet}`
+                                    )
+                                  }
+                                  className="text-blue-600 hover:text-blue-800"
+                                  title="Copy Customer Address"
+                                >
+                                  <CopyIcon size={12} />
+                                </button>
+                              </div>
                               {selectedOrderFullView.dropoffCoords && (
                                 <a
                                   href={`https://maps.google.com/?q=${selectedOrderFullView.dropoffCoords}`}
@@ -3035,10 +3145,18 @@
                               )}
                             </div>
 
-                            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                            <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
                               <div className="flex items-center gap-1.5 font-semibold text-gray-900">
                                 <HomeIcon size={14} className="text-gray-500" />
                                 <span>{selectedOrderFullView.customerName}</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleCopyId(e, selectedOrderFullView.customerName)}
+                                  className="text-blue-600 hover:text-blue-800"
+                                  title="Copy Name"
+                                >
+                                  <CopyIcon size={12} />
+                                </button>
                               </div>
                               {selectedOrderFullView.customerPhone !== '-' && (
                                 <div className="flex items-center gap-1.5 text-gray-800 font-mono">
@@ -3056,10 +3174,49 @@
                               )}
                             </div>
 
-                            <div className="flex items-start gap-1.5 text-gray-700 pt-1">
+                            <div className="flex items-start gap-1.5 text-gray-700 border-b border-gray-100 pb-2">
                               <MapPinIcon size={14} className="text-gray-400 mt-0.5 flex-shrink-0" />
                               <span className="leading-relaxed">{selectedOrderFullView.customerStreet}</span>
                             </div>
+
+                            {selectedOrderFullView.customerCity && (
+                              <div className="text-gray-700 font-medium border-b border-gray-100 pb-1.5">
+                                {selectedOrderFullView.customerCity}
+                              </div>
+                            )}
+
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+                              <div className="flex justify-between">
+                                <span className="text-gray-400">Apartment</span>
+                                <span className="font-semibold text-gray-700">{selectedOrderFullView.customerApt}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-400">Zipcode</span>
+                                <span className="font-semibold text-gray-700">{selectedOrderFullView.customerZip}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-400">Building</span>
+                                <span className="font-semibold text-gray-700">{selectedOrderFullView.customerBuilding}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-400">Intercom</span>
+                                <span className="font-semibold text-gray-700">{selectedOrderFullView.customerIntercom}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-400">Floor</span>
+                                <span className="font-semibold text-gray-700">{selectedOrderFullView.customerFloor}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-gray-400">Entrance</span>
+                                <span className="font-semibold text-gray-700">{selectedOrderFullView.customerEntrance}</span>
+                              </div>
+                            </div>
+
+                            {selectedOrderFullView.dropoffInstructions && (
+                              <div className="p-2 rounded bg-amber-50/70 border border-amber-200/70 text-gray-700 text-[11px]">
+                                {selectedOrderFullView.dropoffInstructions}
+                              </div>
+                            )}
                           </div>
                         </div>
 
@@ -3084,14 +3241,99 @@
                       {/* Deliveries & Transitions Timeline Card */}
                       <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm space-y-4">
                         <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
-                          <div className="flex items-center gap-4 text-sm font-bold">
-                            <span className="text-gray-900 border-b-2 border-gray-900 pb-2 -mb-2.5">
-                              Deliveries ({selectedOrderFullView.deliveries.length || 1})
-                            </span>
+                          <div className="flex items-center gap-5 text-sm font-bold">
+                            {[
+                              { id: 'deliveries', label: `Deliveries (${selectedOrderFullView.deliveries.length || 1})` },
+                              { id: 'issues', label: `Issues${selectedOrderFullView.orderIssues.length ? ` (${selectedOrderFullView.orderIssues.length})` : ''}` },
+                              { id: 'routes', label: 'Routes' },
+                              { id: 'items', label: `Order Items${selectedOrderFullView.items.length ? ` (${selectedOrderFullView.items.length})` : ''}` }
+                            ].map((subTab) => (
+                              <button
+                                key={subTab.id}
+                                type="button"
+                                onClick={() => setOrderDetailSubTab(subTab.id)}
+                                className={`pb-2 -mb-2.5 transition-colors ${
+                                  orderDetailSubTab === subTab.id
+                                    ? 'text-blue-600 border-b-2 border-blue-600'
+                                    : 'text-gray-600 hover:text-gray-900'
+                                }`}
+                              >
+                                {subTab.label}
+                              </button>
+                            ))}
                           </div>
                         </div>
 
-                        {selectedOrderFullView.deliveries.length === 0 ? (
+                        {orderDetailSubTab === 'items' ? (
+                          <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 text-xs">
+                            {selectedOrderFullView.items.length === 0 ? (
+                              <div className="py-6 text-center text-gray-500">No item breakdown available for this order.</div>
+                            ) : (
+                              selectedOrderFullView.items.map((it, idx) => {
+                                const qty = it.quantity ?? it.qty ?? 1;
+                                const name = it.name || it.title || it.product_name || `Item #${idx + 1}`;
+                                const rawPrice = it.total_price ?? it.unit_price ?? it.price;
+                                const priceText =
+                                  typeof rawPrice === 'number'
+                                    ? `${(rawPrice / 100).toFixed(2)} EGP`
+                                    : rawPrice || '-';
+                                return (
+                                  <div key={idx} className="p-3 flex items-center justify-between">
+                                    <div>
+                                      <span className="font-bold text-gray-900 mr-2">{qty}x</span>
+                                      <span className="text-gray-800 font-medium">{name}</span>
+                                      {it.special_instructions && (
+                                        <div className="text-[11px] text-gray-500 mt-0.5">{it.special_instructions}</div>
+                                      )}
+                                    </div>
+                                    <span className="font-semibold text-gray-900">{priceText}</span>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        ) : orderDetailSubTab === 'issues' ? (
+                          <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 text-xs">
+                            {selectedOrderFullView.orderIssues.length === 0 ? (
+                              <div className="py-6 text-center text-gray-500">No issues reported on this order.</div>
+                            ) : (
+                              selectedOrderFullView.orderIssues.map((iss, idx) => (
+                                <div key={iss.id || idx} className="p-3 flex items-center justify-between">
+                                  <div>
+                                    <div className="font-bold text-gray-900">{iss.title || iss.type || 'Issue'}</div>
+                                    <div className="text-gray-500 mt-0.5">{iss.description || iss.reason || '-'}</div>
+                                  </div>
+                                  <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-semibold uppercase">
+                                    {iss.status || 'open'}
+                                  </span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        ) : orderDetailSubTab === 'routes' ? (
+                          <div className="border border-gray-200 rounded-lg p-4 space-y-3 text-xs">
+                            <div className="flex items-start gap-2.5">
+                              <StoreIcon size={15} className="text-blue-600 mt-0.5" />
+                              <div>
+                                <div className="font-bold text-gray-900">1. Pickup: {selectedOrderFullView.vendorName}</div>
+                                <div className="text-gray-600">{selectedOrderFullView.vendorStreet}</div>
+                                {selectedOrderFullView.pickupCoords && (
+                                  <div className="text-[11px] font-mono text-gray-400">{selectedOrderFullView.pickupCoords}</div>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-start gap-2.5 border-t border-gray-100 pt-3">
+                              <HomeIcon size={15} className="text-emerald-600 mt-0.5" />
+                              <div>
+                                <div className="font-bold text-gray-900">2. Dropoff: {selectedOrderFullView.customerName}</div>
+                                <div className="text-gray-600">{selectedOrderFullView.customerStreet}</div>
+                                {selectedOrderFullView.dropoffCoords && (
+                                  <div className="text-[11px] font-mono text-gray-400">{selectedOrderFullView.dropoffCoords}</div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ) : selectedOrderFullView.deliveries.length === 0 ? (
                           <div className="py-8 text-center text-xs text-gray-500">
                             {isLoadingOrderDetail
                               ? 'جاري تحميل خطوات التحول (Transitions Timeline) من Hurrier...'
@@ -3133,9 +3375,7 @@
                                   <div>
                                     <div className="text-[10px] text-gray-400 uppercase font-semibold">Zones</div>
                                     <div className="text-gray-700 max-w-[160px] truncate">
-                                      {Array.isArray(del.starting_points)
-                                        ? del.starting_points.slice(0, 2).join(', ')
-                                        : selectedOrder.zone}
+                                      {formatStartingPointsList(del.starting_points, selectedOrder.zone)}
                                     </div>
                                   </div>
 
