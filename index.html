@@ -85,6 +85,7 @@
     const HomeIcon = (p) => <IconSvg {...p}><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></IconSvg>;
     const CameraIcon = (p) => <IconSvg {...p}><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></IconSvg>;
     const AlertTriangleIcon = (p) => <IconSvg {...p}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></IconSvg>;
+    const GlobeIcon = (p) => <IconSvg {...p}><circle cx="12" cy="12" r="10"/><line x1="2" x2="22" y1="12" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></IconSvg>;
 
     // --- INITIAL SNAPSHOT DATA ---
     const MOCK_DELIVERIES = [
@@ -166,6 +167,10 @@
           { id: 10125, name: "Haram nesting sp" },
           { id: 10181, name: "Haram nesting pt" },
           { id: 10074, name: "Hadayek el ahram sp" },
+          { id: 10277, name: "Hybrid el sayeda zeinab bc" },
+          { id: 10189, name: "Hybrid fleet el sayeda" },
+          { id: 10267, name: "Hybrid al-manial bc" },
+          { id: 10214, name: "Hybrid fleet al manial" },
           { id: 10000, name: "Nasr city sp" },
           { id: 10003, name: "Old maadi" },
           { id: 10002, name: "New maadi" },
@@ -263,18 +268,6 @@
       return `${sign}${absMins}min`;
     }
 
-    function formatReadableTimestamp(isoDate) {
-      const d = parseFlexibleDate(isoDate);
-      if (!d) return '-';
-      return d.toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true
-      });
-    }
-
     function parseFlexibleDate(val) {
       if (val === null || val === undefined || val === '') return null;
       if (val instanceof Date) return Number.isNaN(val.getTime()) ? null : val;
@@ -293,7 +286,6 @@
       }
       let d = new Date(str);
       if (!Number.isNaN(d.getTime())) return d;
-      // معالجة الصيغ التي تحتوي على مسافة أو أجزاء ثانية طويلة أو صيغة +0200
       const normalized = str
         .replace(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})/, '$1T$2')
         .replace(/(\.\d{3})\d+/, '$1')
@@ -301,6 +293,18 @@
         .replace(/\s+UTC$/i, 'Z');
       d = new Date(normalized);
       return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    function formatReadableTimestamp(isoDate) {
+      const d = parseFlexibleDate(isoDate);
+      if (!d) return '-';
+      return d.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
     }
 
     function getTransitionRawTimestamp(tr) {
@@ -412,8 +416,8 @@
               leftPickupAt: null,
               undispatchedAt: null,
               undispatchReason: null,
-              firstSeenAt: tr.created_at || null,
-              lastSeenAt: tr.created_at || null
+              firstSeenAt: getTransitionRawTimestamp(tr) || null,
+              lastSeenAt: getTransitionRawTimestamp(tr) || null
             });
           }
 
@@ -460,7 +464,6 @@
           }
         });
 
-        // التأكد من وجود الطيار الحالي للرحلة حتى لو لم تظهر له transitions
         if (del.courier_id || del.courier_name) {
           const curKey = String(del.courier_id || del.courier_name);
           if (!courierMap.has(curKey)) {
@@ -484,7 +487,6 @@
             });
           } else {
             const existing = courierMap.get(curKey);
-            // إذا وصلت الحالة لما بعد القبول ولم يسجل حدث accepted صريح، نعتبره مقبولاً
             if (
               !existing.acceptedAt &&
               ['accepted', 'near_pickup', 'picked_up', 'left_pickup', 'near_dropoff', 'completed'].includes(String(del.status).toLowerCase())
@@ -495,7 +497,6 @@
         }
       });
 
-      // Fallback من بيانات الجدول الأساسية قبل وصول الـ Detail API
       if (courierMap.size === 0 && fallbackCourier && fallbackCourier !== '-' && fallbackCourier !== 'Assigning...') {
         courierMap.set(String(fallbackCourierId || fallbackCourier), {
           courierId: fallbackCourierId || '-',
@@ -654,8 +655,8 @@
     // --- FULL HURRIER ORDER DETAIL MODAL (READ-ONLY) ---
     function OrderFullInspectionModal({ baseOrder, firebaseUrl, onClose }) {
       const [fullData, setFullData] = useState(null);
-      const [loadingState, setLoadingState] = useState('loading'); // 'loading' | 'live' | 'unavailable'
-      const [detailSubTab, setDetailSubTab] = useState('deliveries'); // 'deliveries' | 'riders' | 'items'
+      const [loadingState, setLoadingState] = useState('loading');
+      const [detailSubTab, setDetailSubTab] = useState('deliveries');
       const [showMoreDetails, setShowMoreDetails] = useState(false);
       const [expandPickupInstr, setExpandPickupInstr] = useState(false);
       const [expandedDeliveryIdx, setExpandedDeliveryIdx] = useState(0);
@@ -679,7 +680,6 @@
 
         setLoadingState('loading');
         try {
-          // 1. التحقق أولاً من وجود تفاصيل مخزنة مسبقاً في Firebase
           const existingRes = await fetch(`${cleanBase}/hurrier_live/order_details/${encodeURIComponent(cleanCode)}.json`, { cache: 'no-store' });
           const existingJson = existingRes.ok ? await existingRes.json() : null;
 
@@ -692,7 +692,6 @@
             }
           }
 
-          // 2. إرسال طلب سحب فوري لمتصفح Hurrier (يُنفذ خلال 1.5 ثانية)
           await fetch(`${cleanBase}/hurrier_live/detail_requests/${encodeURIComponent(cleanCode)}.json`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -729,9 +728,7 @@
                 setLoadingState('live');
               }
             }
-          } catch {
-            // استمرار المحاولة
-          }
+          } catch {}
         }, 1200);
 
         return () => {
@@ -746,7 +743,6 @@
       const apiDeliveries = Array.isArray(fullData?.deliveries) ? fullData.deliveries : [];
       const apiNotes = Array.isArray(fullData?.dispatcher_notes) ? fullData.dispatcher_notes : [];
 
-      // دمج البيانات الحية مع البيانات الأساسية
       const statusText = apiOrder?.status
         ? apiOrder.status.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
         : baseOrder.status;
@@ -781,7 +777,6 @@
       const prepDuration = formatDurationSeconds(apiOrder?.detail?.prep_duration);
       const courierDelay = formatDurationSeconds(apiOrder?.estimated_courier_delay);
 
-      // عناوين الاستلام والتسليم والعميل
       const puAddr = apiOrder?.pickup_address || {};
       const doAddr = apiOrder?.drop_off_address || {};
       const customerInfo = apiOrder?.customer || {};
@@ -791,7 +786,6 @@
       const pickupStreet = puAddr.street_address || baseOrder.pickupAddress || '-';
       const dropoffStreet = doAddr.street_address || baseOrder.dropoffAddress || '-';
 
-      // مواعيد Time Checks
       const orderedAt = formatReadableTimestamp(apiOrder?.placed_at || baseOrder.placedAt);
       const sendToRestAt = formatShortTimeNoSec(apiOrder?.send_to_restaurant_at);
       const restConfirmedAt = formatShortTimeNoSec(apiOrder?.restaurant_confirmed_at);
@@ -799,7 +793,6 @@
       const foodReadyAt = apiOrder?.food_is_ready_at ? formatShortTimeNoSec(apiOrder.food_is_ready_at) : '-';
       const promisedDeliveryAt = formatReadableTimestamp(apiOrder?.estimations?.promised_delivery_time || apiOrder?.timing?.scheduled_drop_off_at);
 
-      // استخراج وقت الاستلام الفعلي من التحولات
       let pickedUpTransitionTime = '-';
       apiDeliveries.forEach((del) => {
         (del.transitions || []).forEach((tr) => {
@@ -810,7 +803,6 @@
         });
       });
 
-      // تحليل كل الطيارين الذين عملوا Accepted أو استلموا الأوردر
       const riderHistory = extractCourierHistoryFromDeliveries(
         apiDeliveries,
         baseOrder.courier,
@@ -819,12 +811,10 @@
       const acceptedRiders = riderHistory.filter((r) => Boolean(r.acceptedAt) || r.events.includes('Accepted'));
       const hasMultiRiderWarning = riderHistory.length > 1 || acceptedRiders.length > 1;
 
-      // عناصر الطلب
       const orderItems = Array.isArray(apiOrder?.detail?.order_items) && apiOrder.detail.order_items.length > 0
         ? apiOrder.detail.order_items
         : baseOrder.items || [];
 
-      // التاجات للعرض في الأعلى
       const allTags = Array.isArray(apiOrder?.tags) ? apiOrder.tags : (baseOrder.tags || []);
       const hasProofOfPickup = allTags.includes('proof_of_pickup');
 
@@ -914,8 +904,7 @@
 
             {/* Scrollable Body */}
             <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5">
-
-              {/* DEDICATED BANNER: ALL RIDERS WHO ACCEPTED / HANDLED THE ORDER */}
+              {/* ALL RIDERS WHO ACCEPTED / HANDLED THE ORDER */}
               <div className={`rounded-lg border p-4 shadow-sm ${
                 hasMultiRiderWarning
                   ? 'bg-red-50/70 border-red-200'
@@ -982,7 +971,6 @@
                               )}
                             </div>
 
-                            {/* Event sequence pills */}
                             <div className="flex flex-wrap gap-1 mt-2">
                               {r.events.map((ev, idx) => (
                                 <span
@@ -1021,7 +1009,6 @@
 
               {/* 3-COLUMN HURRIER ORDER LAYOUT */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-                {/* LEFT COLUMN (3 cols): Important Details */}
                 <div className="lg:col-span-3 bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
                   <div className="px-4 py-3 border-b border-gray-200 font-bold text-gray-900 text-base">
                     Important Details
@@ -1067,7 +1054,6 @@
                       <span className="font-semibold text-red-600">{courierDelay}</span>
                     </div>
 
-                    {/* Collapsible More Details */}
                     <div>
                       <button
                         type="button"
@@ -1105,9 +1091,8 @@
                   </div>
                 </div>
 
-                {/* MIDDLE COLUMN (6 cols): Pick up and Drop off + Deadline Bar + Bottom Tabs */}
+                {/* MIDDLE COLUMN: Pick up and Drop off */}
                 <div className="lg:col-span-6 space-y-4">
-                  {/* Pick up and Drop off Card */}
                   <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 space-y-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="font-bold text-gray-900 text-base">Pick up and Drop off</span>
@@ -1120,7 +1105,6 @@
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {/* Vendor Address Box */}
                       <div className="border border-gray-200 rounded-lg p-3 text-xs space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="font-bold text-gray-800">Vendor Address</span>
@@ -1173,7 +1157,6 @@
                         )}
                       </div>
 
-                      {/* Customer Address Box */}
                       <div className="border border-gray-200 rounded-lg p-3 text-xs space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="font-bold text-gray-800">Customer Address</span>
@@ -1229,7 +1212,6 @@
                       </div>
                     </div>
 
-                    {/* Visual Deadline Progress Bar (Exact Hurrier Style) */}
                     <div className="flex items-center gap-3 pt-1">
                       <div className="w-8 h-8 rounded border border-gray-200 flex items-center justify-center bg-gray-50 text-gray-600 flex-shrink-0">
                         <StoreIcon size={16} />
@@ -1251,9 +1233,8 @@
                   </div>
                 </div>
 
-                {/* RIGHT COLUMN (3 cols): Notes & Time Checks */}
+                {/* RIGHT COLUMN: Notes & Time Checks */}
                 <div className="lg:col-span-3 space-y-4">
-                  {/* Notes Card */}
                   <div className="bg-[#fffbeb] rounded-lg border border-amber-200 shadow-sm p-4">
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-bold text-gray-900 text-sm">
@@ -1281,7 +1262,6 @@
                     )}
                   </div>
 
-                  {/* Time Checks Card (Exact Hurrier Fields) */}
                   <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
                     <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-2 font-bold text-gray-900 text-sm">
                       <ClockIcon size={15} className="text-amber-500" />
@@ -1321,7 +1301,7 @@
                 </div>
               </div>
 
-              {/* BOTTOM FULL-WIDTH SECTION: DELIVERIES & TRANSITIONS TIMELINE (EXACT HURRIER TABLE) */}
+              {/* BOTTOM FULL-WIDTH SECTION: DELIVERIES & TRANSITIONS TIMELINE */}
               <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
                 <div className="px-4 border-b border-gray-200 flex items-center gap-6 text-sm font-semibold">
                   <button
@@ -1400,7 +1380,6 @@
 
                       return (
                         <div key={del.id || dIdx}>
-                          {/* Delivery Header Strip (matching image_7a4f8a.png bottom) */}
                           <div
                             onClick={() => setExpandedDeliveryIdx(isExpanded ? -1 : dIdx)}
                             className="px-4 py-3 bg-gray-50/70 hover:bg-gray-100/70 cursor-pointer flex flex-wrap items-center justify-between gap-4 text-xs"
@@ -1434,7 +1413,6 @@
                             </div>
                           </div>
 
-                          {/* Transitions Timeline Table (matching image_7a4fc5.png column-for-column) */}
                           {isExpanded && (
                             <div className="overflow-x-auto">
                               {transitions.length === 0 ? (
@@ -1596,7 +1574,6 @@
                 )}
               </div>
 
-              {/* Transition Metadata Box (when clicking 'i' on any timeline row) */}
               {selectedTransitionInfo && (
                 <div className="bg-gray-900 text-gray-100 rounded-lg p-4 text-xs space-y-2">
                   <div className="flex items-center justify-between">
@@ -1621,7 +1598,6 @@
               )}
             </div>
 
-            {/* Footer */}
             <div className="px-5 py-2.5 bg-white border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
               <span className="flex items-center gap-1.5">
                 <AlertCircleIcon size={14} className="text-amber-600" />
@@ -1706,7 +1682,6 @@
       const [rawJsonInput, setRawJsonInput] = useState('');
       const [copiedSnippet, setCopiedSnippet] = useState(null);
 
-      // إغلاق قائمة المدن والزونات عند الضغط خارجها
       useEffect(() => {
         const handleOutsideClick = (e) => {
           if (locationDropdownRef.current && !locationDropdownRef.current.contains(e.target)) {
@@ -1717,7 +1692,6 @@
         return () => document.removeEventListener('mousedown', handleOutsideClick);
       }, []);
 
-      // دمج كتالوج المدن والزونات مع البيانات الحية
       const mergedCitiesCatalog = useMemo(() => {
         const cityMap = new Map();
         citiesCatalog.forEach((c) => {
@@ -2126,49 +2100,22 @@
           else if (quickFilter === 'high_util') matchesQuick = d.isHighUtil;
           else if (quickFilter === 'returning') matchesQuick = d.isReturning;
           else if (quickFilter === 'not_reviewed') matchesQuick = !d.isReviewed;
+          else if (quickFilter === 'bc_riders') {
+            const cLower = String(d.courier || '').toLowerCase();
+            matchesQuick = cLower.includes('_bc') || cLower.includes('hybrid');
+          }
 
           const q = searchQuery.trim().toLowerCase();
           const matchesSearch =
             !q ||
             d.id.toLowerCase().includes(q) ||
-            d.orderCode.toLowerCase().includes(q) ||
-            d.vendor.toLowerCase().includes(q) ||
             String(d.vo).toLowerCase().includes(q) ||
+            d.vendor.toLowerCase().includes(q) ||
             d.courier.toLowerCase().includes(q) ||
-            String(d.courierId || '').includes(q) ||
             d.zone.toLowerCase().includes(q);
-
           return matchesTab && matchesLoc && matchesQuick && matchesSearch;
         });
       }, [deliveries, activeTab, matchesCityAndZoneFilter, quickFilter, searchQuery]);
-
-      const filteredIssues = useMemo(() => {
-        return issuesList.filter((iss) => {
-          const matchesStatus =
-            issueStatusFilter === 'all' ||
-            (issueStatusFilter === 'open' && !iss.picked_by) ||
-            (issueStatusFilter === 'picked' && Boolean(iss.picked_by));
-          const matchesType =
-            issueTypeFilter === 'all' ||
-            String(iss.type).toLowerCase().includes(issueTypeFilter.toLowerCase());
-          const q = searchQuery.trim().toLowerCase();
-          const matchesSearch =
-            !q ||
-            String(iss.order_code).toLowerCase().includes(q) ||
-            String(iss.courier_name).toLowerCase().includes(q) ||
-            String(iss.title).toLowerCase().includes(q) ||
-            String(iss.picked_by || '').toLowerCase().includes(q);
-          return matchesStatus && matchesType && matchesSearch;
-        });
-      }, [issuesList, issueStatusFilter, issueTypeFilter, searchQuery]);
-
-      const currentTabMetrics = useMemo(() => {
-        const total = filteredDeliveries.length;
-        const late = filteredDeliveries.filter((d) => d.isLate).length;
-        const cash = filteredDeliveries.filter((d) => d.isCash).length;
-        const returns = filteredDeliveries.filter((d) => d.isReturning).length;
-        return { total, late, cash, returns };
-      }, [filteredDeliveries]);
 
       const renderDashboardOverview = () => {
         const visibleCities = citySummary.filter((c) => {
@@ -2176,7 +2123,7 @@
           if (zoneFilterState.mode === 'city' || zoneFilterState.mode === 'multiple_cities') {
             return (zoneFilterState.cities || []).some((sc) => sc.toLowerCase() === c.city.toLowerCase());
           }
-          return filteredZones.some((z) => z.city.toLowerCase() === c.city.toLowerCase());
+          return true;
         });
 
         return (
@@ -2186,7 +2133,7 @@
                 <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
                   Region Performance &amp; Rider Shifts
                 </span>
-                <span className="text-xs text-gray-500">Live Read-Only Sync</span>
+                <span className="text-xs text-gray-500">Live Synchronized Overview</span>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs whitespace-nowrap">
@@ -2240,22 +2187,24 @@
             </div>
 
             <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
-                  Starting Points Breakdown ({filteredZones.length} Zones)
+                  Starting Points Breakdown ({filteredZones.length} Active Zones)
                 </span>
+                <span className="text-xs text-gray-500">Orders &amp; Shifts per Zone</span>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs whitespace-nowrap">
                   <thead>
                     <tr className="border-b border-gray-200 text-gray-500 font-semibold">
                       <th className="py-3 px-4">STARTING POINT</th>
-                      <th className="py-3 px-3">ZONE</th>
+                      <th className="py-3 px-3">AREA</th>
                       <th className="py-3 px-3">QUEUED</th>
                       <th className="py-3 px-3">DISP</th>
                       <th className="py-3 px-3">ACTIVE</th>
                       <th className="py-3 px-3">DELAY</th>
                       <th className="py-3 px-3">PU / DO</th>
+                      <th className="py-3 px-3">0/1/2/3+</th>
                       <th className="py-3 px-3">WORK</th>
                       <th className="py-3 px-3">END</th>
                       <th className="py-3 px-3">BREAK</th>
@@ -2273,8 +2222,11 @@
                           {sp.delay}
                         </td>
                         <td className="py-3 px-3 text-gray-600">{sp.puPercent}% / {sp.doPercent}%</td>
-                        <td className="py-3 px-3 font-medium text-gray-800">{sp.working}</td>
-                        <td className="py-3 px-3 text-gray-600">{sp.ending}</td>
+                        <td className="py-3 px-3 text-xs font-mono text-gray-600">
+                          {sp.zeroDel}/{sp.lowDel}/{sp.medDel}/{sp.highDel}
+                        </td>
+                        <td className="py-3 px-3 font-medium text-emerald-700">{sp.working}</td>
+                        <td className="py-3 px-3 text-amber-700">{sp.ending}</td>
                         <td className="py-3 px-3 text-gray-600">{sp.break}</td>
                       </tr>
                     ))}
@@ -2286,80 +2238,91 @@
         );
       };
 
-      const renderIssuesWatchlist = () => (
-        <div className="mt-6 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-50 p-3 rounded-lg border border-gray-200">
-            <div className="flex items-center gap-2 text-xs">
-              {['all', 'open', 'picked'].map((st) => (
-                <button
-                  key={st}
-                  type="button"
-                  onClick={() => setIssueStatusFilter(st)}
-                  className={`px-3 py-1.5 rounded-md font-semibold capitalize transition-colors ${
-                    issueStatusFilter === st
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
-                  }`}
+      const renderIssuesWatchlist = () => {
+        const filteredIssues = issuesList.filter((iss) => {
+          const matchesSt = issueStatusFilter === 'all' || String(iss.status).toLowerCase() === issueStatusFilter;
+          const matchesTp = issueTypeFilter === 'all' || String(iss.type).toLowerCase().includes(issueTypeFilter);
+          const q = searchQuery.trim().toLowerCase();
+          const matchesQ =
+            !q ||
+            String(iss.order_code).toLowerCase().includes(q) ||
+            String(iss.courier_name).toLowerCase().includes(q) ||
+            String(iss.title).toLowerCase().includes(q);
+          return matchesSt && matchesTp && matchesQ;
+        });
+
+        return (
+          <div className="mt-6 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-50 p-3 rounded-lg border border-gray-200">
+              <div className="flex items-center gap-2 flex-wrap text-xs font-medium">
+                {['all', 'open', 'picked'].map((st) => (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => setIssueStatusFilter(st)}
+                    className={`px-3 py-1.5 rounded-md capitalize transition-colors ${
+                      issueStatusFilter === st
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    {st === 'all' ? `All Statuses (${issuesList.length})` : st}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-gray-500 font-semibold">Category:</span>
+                <select
+                  value={issueTypeFilter}
+                  onChange={(e) => setIssueTypeFilter(e.target.value)}
+                  className="px-3 py-1.5 border border-gray-300 rounded bg-white text-gray-700"
                 >
-                  {st === 'all' ? `All Issues (${issuesList.length})` : st === 'open' ? 'Open Issues' : 'Picked Issues'}
-                </button>
-              ))}
+                  <option value="all">All Types</option>
+                  <option value="pickup">Pickup</option>
+                  <option value="drop">Drop-off</option>
+                  <option value="dispatch">Dispatch</option>
+                  <option value="courier">Courier</option>
+                </select>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-gray-500 font-medium">Type:</span>
-              {['all', 'pickup', 'dropoff', 'dispatch', 'courier'].map((tp) => (
-                <button
-                  key={tp}
-                  type="button"
-                  onClick={() => setIssueTypeFilter(tp)}
-                  className={`px-2.5 py-1 rounded-full font-medium capitalize ${
-                    issueTypeFilter === tp
-                      ? 'bg-gray-800 text-white'
-                      : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
-                  }`}
-                >
-                  {tp}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-            <div className="overflow-x-auto">
+            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead>
                   <tr className="border-b border-gray-200 text-gray-500 font-semibold text-xs bg-gray-50">
-                    <th className="py-3.5 px-4">TYPE</th>
-                    <th className="py-3.5 px-4">ISSUE</th>
-                    <th className="py-3.5 px-4">ORDER</th>
-                    <th className="py-3.5 px-4">COURIER</th>
-                    <th className="py-3.5 px-4">PICKED BY</th>
-                    <th className="py-3.5 px-4">DEADLINE</th>
+                    <th className="py-3 px-4">ISSUE / TYPE</th>
+                    <th className="py-3 px-4">ORDER</th>
+                    <th className="py-3 px-4">COURIER</th>
+                    <th className="py-3 px-4">STATUS</th>
+                    <th className="py-3 px-4">PICKED BY</th>
+                    <th className="py-3 px-4">CREATED</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filteredIssues.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="py-12 text-center text-gray-500">
-                        No active issues found in the watchlist.
+                        No active issues found in Issue Watchlist.
                       </td>
                     </tr>
                   ) : (
-                    filteredIssues.map((iss, idx) => (
-                      <tr key={iss.id || idx} className="hover:bg-gray-50">
+                    filteredIssues.map((iss) => (
+                      <tr key={iss.id} className="hover:bg-gray-50">
                         <td className="py-3.5 px-4">
-                          <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-xs font-semibold uppercase">
-                            {iss.type}
+                          <div className="font-semibold text-gray-900">{iss.title}</div>
+                          <div className="text-xs text-gray-500 uppercase mt-0.5">{iss.type}</div>
+                        </td>
+                        <td className="py-3.5 px-4 font-mono text-blue-600 font-medium">{iss.order_code}</td>
+                        <td className="py-3.5 px-4 text-gray-800">{iss.courier_name}</td>
+                        <td className="py-3.5 px-4">
+                          <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase ${
+                            iss.status === 'picked' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'
+                          }`}>
+                            {iss.status}
                           </span>
                         </td>
-                        <td className="py-3.5 px-4 font-medium text-gray-900">{iss.title}</td>
-                        <td className="py-3.5 px-4 font-mono text-blue-600">{iss.order_code}</td>
-                        <td className="py-3.5 px-4 text-gray-700">{iss.courier_name}</td>
-                        <td className="py-3.5 px-4 text-xs text-gray-600">{iss.picked_by || 'Unassigned'}</td>
-                        <td className="py-3.5 px-4 text-xs font-mono text-red-600">
-                          {iss.deadline ? formatRelativeDeadline(iss.deadline) : '-'}
-                        </td>
+                        <td className="py-3.5 px-4 text-xs text-gray-600">{iss.picked_by || '-'}</td>
+                        <td className="py-3.5 px-4 text-xs text-gray-500">{formatReadableTimestamp(iss.created_at)}</td>
                       </tr>
                     ))
                   )}
@@ -2367,8 +2330,8 @@
               </table>
             </div>
           </div>
-        </div>
-      );
+        );
+      };
 
       const renderDispatcherDashboard = () => (
         <div className="mt-6 bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
@@ -2400,254 +2363,115 @@
       );
 
       const renderActiveCouriersView = () => (
-        <div className="mt-6 w-full border-t border-gray-200">
-          {filteredZones.map((item) => {
-            const isHighDelay = parseFloat(item.delay) > 5;
-            const isExpanded = expandedZoneId === item.id;
+        <div className="mt-6 space-y-6">
+          <div className="w-full border-t border-gray-200 bg-white rounded-lg border shadow-sm overflow-hidden">
+            {filteredZones.map((item) => {
+              const isHighDelay = parseFloat(item.delay) > 5;
+              const isExpanded = expandedZoneId === item.id;
+              const zoneRiders = individualCouriers.filter(
+                (r) =>
+                  String(r.starting_point_id) === String(item.id) ||
+                  (r.starting_point_name && r.starting_point_name.toLowerCase() === item.zone.toLowerCase())
+              );
 
-            const zoneCouriersFromApi = individualCouriers.filter(
-              (c) =>
-                String(c.starting_point_id) === String(item.id) ||
-                (c.starting_point_name && c.starting_point_name.toLowerCase() === item.zone.toLowerCase())
-            );
-
-            const activeRidersInZone = [];
-            const seenRiderIds = new Set();
-            deliveries.forEach((d) => {
-              if (
-                d.courierId &&
-                !seenRiderIds.has(d.courierId) &&
-                (d.allZones || []).some((z) => z.toLowerCase() === item.zone.toLowerCase())
-              ) {
-                seenRiderIds.add(d.courierId);
-                activeRidersInZone.push({
-                  id: d.courierId,
-                  name: d.courier,
-                  orderId: d.id,
-                  status: d.status,
-                  deliveryRef: d
-                });
-              }
-            });
-
-            return (
-              <div key={item.id} className="border-b border-gray-200">
-                <div
-                  onClick={() => setExpandedZoneId(isExpanded ? null : item.id)}
-                  className="flex justify-between items-center py-4 cursor-pointer hover:bg-gray-50 px-3 transition-colors"
-                >
-                  <div className="text-[15px] text-gray-800">
-                    <span className="font-medium">{item.zone}</span>
-                    <span className="text-gray-600 ml-1.5">
-                      ({item.working} / {item.ending} / {item.break})
-                    </span>
-                    <span className={`ml-2 font-medium ${isHighDelay ? 'text-[#d32f2f]' : 'text-gray-600'}`}>
-                      {item.delay}
-                    </span>
-                  </div>
-                  {isExpanded ? (
-                    <ChevronUpIcon size={20} className="text-gray-500" />
-                  ) : (
-                    <ChevronDownIcon size={20} className="text-gray-400" />
-                  )}
-                </div>
-
-                {isExpanded && (
-                  <div className="bg-gray-50/80 px-4 py-4 border-t border-gray-100 space-y-4">
-                    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 text-xs">
-                      <div className="bg-white p-3 rounded border border-gray-200">
-                        <div className="text-gray-400 uppercase font-semibold">Starting</div>
-                        <div className="text-lg font-bold text-blue-600 mt-0.5">{item.starting}</div>
-                      </div>
-                      <div className="bg-white p-3 rounded border border-gray-200">
-                        <div className="text-gray-400 uppercase font-semibold">Working</div>
-                        <div className="text-lg font-bold text-emerald-600 mt-0.5">{item.working}</div>
-                      </div>
-                      <div className="bg-white p-3 rounded border border-gray-200">
-                        <div className="text-gray-400 uppercase font-semibold">Ending Shift</div>
-                        <div className="text-lg font-bold text-amber-600 mt-0.5">{item.ending}</div>
-                      </div>
-                      <div className="bg-white p-3 rounded border border-gray-200">
-                        <div className="text-gray-400 uppercase font-semibold">Break / Temp</div>
-                        <div className="text-lg font-bold text-gray-700 mt-0.5">
-                          {item.break} <span className="text-xs font-normal text-gray-400">/ {item.tempBreak}</span>
-                        </div>
-                      </div>
-                      <div className="bg-white p-3 rounded border border-gray-200">
-                        <div className="text-gray-400 uppercase font-semibold">Q / Disp / Act</div>
-                        <div className="text-base font-bold text-gray-800 mt-0.5">
-                          {item.queued} / {item.dispatched} / <span className="text-blue-600">{item.active}</span>
-                        </div>
-                      </div>
-                      <div className="bg-white p-3 rounded border border-gray-200">
-                        <div className="text-gray-400 uppercase font-semibold">Orders / Rider</div>
-                        <div className="text-xs font-semibold text-gray-700 mt-1.5 font-mono">
-                          0:{item.zeroDel} | 1:{item.lowDel} | 2:{item.medDel} | 3+:{item.highDel}
-                        </div>
-                      </div>
+              return (
+                <div key={item.id} className="border-b border-gray-200 last:border-b-0">
+                  <div
+                    onClick={() => setExpandedZoneId(isExpanded ? null : item.id)}
+                    className="flex justify-between items-center py-4 cursor-pointer hover:bg-gray-50 px-4 transition-colors"
+                  >
+                    <div className="text-[15px] text-gray-800">
+                      <span className="font-medium">{item.zone}</span>
+                      <span className="text-gray-600 ml-1.5">
+                        ({item.working} / {item.ending} / {item.break})
+                      </span>
+                      <span className={`ml-2 font-medium ${isHighDelay ? 'text-[#d32f2f]' : 'text-gray-600'}`}>
+                        {item.delay}
+                      </span>
                     </div>
+                    <div className="flex items-center gap-3">
+                      {zoneRiders.length > 0 && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-medium">
+                          {zoneRiders.length} Riders Loaded
+                        </span>
+                      )}
+                      {isExpanded ? (
+                        <ChevronUpIcon size={20} className="text-gray-500" />
+                      ) : (
+                        <ChevronDownIcon size={20} className="text-gray-400" />
+                      )}
+                    </div>
+                  </div>
 
-                    {zoneCouriersFromApi.length > 0 ? (
-                      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-                        <div className="px-3 py-2 bg-gray-100/70 border-b border-gray-200 text-xs font-bold text-gray-600">
-                          Couriers in {item.zone} ({zoneCouriersFromApi.length})
+                  {isExpanded && (
+                    <div className="bg-gray-50/80 px-4 py-4 border-t border-gray-100 space-y-4">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 text-xs">
+                        <div className="bg-white p-3 rounded border border-gray-200">
+                          <div className="text-gray-400 uppercase font-semibold">Starting</div>
+                          <div className="text-lg font-bold text-blue-600 mt-0.5">{item.starting}</div>
                         </div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left text-xs whitespace-nowrap">
+                        <div className="bg-white p-3 rounded border border-gray-200">
+                          <div className="text-gray-400 uppercase font-semibold">Working</div>
+                          <div className="text-lg font-bold text-emerald-600 mt-0.5">{item.working}</div>
+                        </div>
+                        <div className="bg-white p-3 rounded border border-gray-200">
+                          <div className="text-gray-400 uppercase font-semibold">Ending Shift</div>
+                          <div className="text-lg font-bold text-amber-600 mt-0.5">{item.ending}</div>
+                        </div>
+                        <div className="bg-white p-3 rounded border border-gray-200">
+                          <div className="text-gray-400 uppercase font-semibold">Break / Temp</div>
+                          <div className="text-lg font-bold text-gray-700 mt-0.5">
+                            {item.break} <span className="text-xs font-normal text-gray-400">/ {item.tempBreak}</span>
+                          </div>
+                        </div>
+                        <div className="bg-white p-3 rounded border border-gray-200">
+                          <div className="text-gray-400 uppercase font-semibold">Active Orders</div>
+                          <div className="text-lg font-bold text-blue-600 mt-0.5">{item.active}</div>
+                        </div>
+                        <div className="bg-white p-3 rounded border border-gray-200">
+                          <div className="text-gray-400 uppercase font-semibold">Orders / Rider</div>
+                          <div className="text-sm font-semibold text-gray-700 mt-1.5 font-mono">
+                            0:{item.zeroDel} | 1:{item.lowDel} | 2:{item.medDel}
+                          </div>
+                        </div>
+                      </div>
+
+                      {zoneRiders.length > 0 && (
+                        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                          <table className="w-full text-left text-xs">
                             <thead>
-                              <tr className="border-b border-gray-200 text-gray-500">
-                                <th className="py-2 px-3">ID</th>
+                              <tr className="bg-gray-50 border-b border-gray-200 text-gray-500 font-semibold">
                                 <th className="py-2 px-3">COURIER NAME</th>
-                                <th className="py-2 px-3">SHIFT STATUS</th>
+                                <th className="py-2 px-3">ID</th>
                                 <th className="py-2 px-3">VEHICLE</th>
+                                <th className="py-2 px-3">SHIFT STATUS</th>
                                 <th className="py-2 px-3">ACTIVE ORDERS</th>
-                                <th className="py-2 px-3">SHIFT WINDOW</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
-                              {zoneCouriersFromApi.map((c) => (
-                                <tr key={c.id} className="hover:bg-gray-50">
-                                  <td className="py-2 px-3 font-mono text-gray-500">{c.id}</td>
-                                  <td className="py-2 px-3 font-medium text-blue-600">{c.name}</td>
+                              {zoneRiders.map((r) => (
+                                <tr key={r.id} className="hover:bg-gray-50">
+                                  <td className="py-2 px-3 font-medium text-blue-600">{r.name}</td>
+                                  <td className="py-2 px-3 font-mono text-gray-500">#{r.id}</td>
+                                  <td className="py-2 px-3 capitalize text-gray-700">{r.vehicle}</td>
                                   <td className="py-2 px-3">
                                     <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold capitalize">
-                                      {c.status}
+                                      {r.status}
                                     </span>
                                   </td>
-                                  <td className="py-2 px-3 text-gray-600">{c.vehicle}</td>
-                                  <td className="py-2 px-3 font-bold text-gray-800">{c.active_deliveries}</td>
-                                  <td className="py-2 px-3 text-gray-500">
-                                    {c.shift_start ? formatReadableTimestamp(c.shift_start) : '-'} → {c.shift_end ? formatReadableTimestamp(c.shift_end) : '-'}
-                                  </td>
+                                  <td className="py-2 px-3 font-bold text-gray-800">{r.active_deliveries}</td>
                                 </tr>
                               ))}
                             </tbody>
                           </table>
                         </div>
-                      </div>
-                    ) : activeRidersInZone.length > 0 && (
-                      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-                        <div className="px-3 py-2 bg-gray-100/70 border-b border-gray-200 text-xs font-bold text-gray-600">
-                          Active Couriers Currently On Orders in {item.zone} ({activeRidersInZone.length})
-                        </div>
-                        <div className="divide-y divide-gray-100 text-xs">
-                          {activeRidersInZone.map((r) => (
-                            <div
-                              key={r.id}
-                              onClick={() => setSelectedOrder(r.deliveryRef)}
-                              className="px-3 py-2 flex items-center justify-between hover:bg-gray-50 cursor-pointer"
-                            >
-                              <div>
-                                <span className="font-mono text-gray-400 mr-2">#{r.id}</span>
-                                <span className="font-medium text-blue-600">{r.name}</span>
-                              </div>
-                              <div className="text-gray-500">
-                                Order <span className="font-mono font-semibold text-blue-600 underline">{r.orderId}</span> ({r.status})
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      );
-
-      const renderCompletedOrdersView = () => (
-        <div className="mt-6 w-full overflow-x-auto">
-          <table className="w-full text-left text-xs whitespace-nowrap">
-            <thead>
-              <tr className="border-b border-gray-200 text-gray-500 font-semibold tracking-wide bg-gray-50">
-                <th className="py-3 px-3">PLACED AT</th>
-                <th className="py-3 px-3">ORDER</th>
-                <th className="py-3 px-3">ZONES</th>
-                <th className="py-3 px-3">COURIER</th>
-                <th className="py-3 px-3">BUSINESS</th>
-                <th className="py-3 px-3">KM</th>
-                <th className="py-3 px-3">VALUE</th>
-                <th className="py-3 px-3">STATUS / COMPLETED</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 text-sm">
-              {filteredDeliveries.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="py-12 text-center text-gray-500">
-                    No completed orders synced yet for the selected zones.
-                  </td>
-                </tr>
-              ) : (
-                filteredDeliveries.map((item, idx) => (
-                  <tr
-                    key={item.uid || `${item.id}_${idx}`}
-                    onClick={() => setSelectedOrder(item)}
-                    className="hover:bg-gray-50 cursor-pointer"
-                  >
-                    <td className="py-3.5 px-3 text-xs text-gray-500">{item.placedAt}</td>
-                    <td className="py-3.5 px-3 font-medium text-blue-600">{item.id}</td>
-                    <td className="py-3.5 px-3 text-xs text-gray-600 max-w-[160px] truncate">{item.zone}</td>
-                    <td className="py-3.5 px-3 text-gray-800 max-w-[200px] truncate">{item.courier}</td>
-                    <td className="py-3.5 px-3 text-gray-700 max-w-[200px] truncate">{item.vendor}</td>
-                    <td className="py-3.5 px-3 text-gray-600">{item.distance}</td>
-                    <td className="py-3.5 px-3 font-medium text-gray-800">{item.orderValue}</td>
-                    <td className="py-3.5 px-3 text-xs text-emerald-700 font-semibold">
-                      {item.status} {item.completedAt !== '-' ? `(${item.completedAt})` : ''}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      );
-
-      const renderCancelledOrdersView = () => (
-        <div className="mt-6 w-full overflow-x-auto">
-          <table className="w-full text-left text-xs whitespace-nowrap">
-            <thead>
-              <tr className="border-b border-gray-200 text-gray-500 font-semibold tracking-wide bg-gray-50">
-                <th className="py-3 px-3">ORDER</th>
-                <th className="py-3 px-3">BUSINESS</th>
-                <th className="py-3 px-3">COURIER</th>
-                <th className="py-3 px-3">CANCELLATION REASON</th>
-                <th className="py-3 px-3">CANCELLED BY</th>
-                <th className="py-3 px-3">ZONE</th>
-                <th className="py-3 px-3">VALUE</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 text-sm">
-              {filteredDeliveries.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-12 text-center text-gray-500">
-                    No cancelled orders synced yet for the selected zones.
-                  </td>
-                </tr>
-              ) : (
-                filteredDeliveries.map((item, idx) => (
-                  <tr
-                    key={item.uid || `${item.id}_${idx}`}
-                    onClick={() => setSelectedOrder(item)}
-                    className="hover:bg-gray-50 cursor-pointer"
-                  >
-                    <td className="py-3.5 px-3 font-medium text-blue-600">{item.id}</td>
-                    <td className="py-3.5 px-3 text-gray-700 max-w-[200px] truncate">{item.vendor}</td>
-                    <td className="py-3.5 px-3 text-gray-700 max-w-[180px] truncate">{item.courier}</td>
-                    <td className="py-3.5 px-3">
-                      <span className="px-2 py-0.5 rounded bg-red-50 text-red-700 text-xs font-medium">
-                        {item.cancellationReason}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-3 text-xs text-gray-600">{item.cancelledBy}</td>
-                    <td className="py-3.5 px-3 text-xs text-gray-600 max-w-[160px] truncate">{item.zone}</td>
-                    <td className="py-3.5 px-3 font-medium text-gray-800">{item.orderValue}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       );
 
@@ -2656,83 +2480,112 @@
         if (activeTab === 'Issues') return renderIssuesWatchlist();
         if (activeTab === 'Dispatcher Dashboard') return renderDispatcherDashboard();
         if (activeTab === 'Active Couriers') return renderActiveCouriersView();
-        if (activeTab === 'Completed') return renderCompletedOrdersView();
-        if (activeTab === 'Cancelled') return renderCancelledOrdersView();
 
-        const tabItems = deliveries.filter((d) => d.tab === activeTab);
-        const filterChips = [
+        const tabItems = deliveries.filter((d) => {
+          if (d.tab !== activeTab) return false;
+          const zList = Array.isArray(d.allZones) && d.allZones.length > 0
+            ? d.allZones
+            : String(d.zone || '').split(',').map((s) => s.trim()).filter(Boolean);
+          return matchesCityAndZoneFilter(d.city, zList, []);
+        });
+        const lateCount = tabItems.filter((d) => d.isLate).length;
+        const cashCount = tabItems.filter((d) => d.isCash).length;
+        const cardCount = tabItems.filter((d) => d.isCard).length;
+        const restCount = tabItems.filter((d) => d.verticalType === 'restaurants' && !d.isDarkstore).length;
+        const darkstoreCount = tabItems.filter((d) => d.isDarkstore).length;
+        const supermarketCount = tabItems.filter((d) => d.verticalType === 'supermarket').length;
+
+        const filterPills = [
           { id: 'all', label: `All (${tabItems.length})` },
-          { id: 'late', label: `Delayed (${tabItems.filter((d) => d.isLate).length})` },
-          { id: 'cash', label: `Cash (${tabItems.filter((d) => d.isCash).length})` },
-          { id: 'card', label: `Card (${tabItems.filter((d) => d.isCard).length})` },
-          { id: 'restaurants', label: `Restaurants (${tabItems.filter((d) => d.verticalType === 'restaurants' && !d.isDarkstore).length})` },
-          { id: 'darkstores', label: `Darkstores - Talabat Mart (${tabItems.filter((d) => d.isDarkstore).length})` },
-          { id: 'supermarket', label: `Supermarkets (${tabItems.filter((d) => d.verticalType === 'supermarket').length})` },
+          { id: 'late', label: `Delayed (${lateCount})` },
+          { id: 'cash', label: `Cash (${cashCount})` },
+          { id: 'card', label: `Card (${cardCount})` },
+          { id: 'restaurants', label: `Restaurants (${restCount})` },
+          { id: 'darkstores', label: `Darkstores - Talabat Mart (${darkstoreCount})` },
+          { id: 'supermarket', label: `Supermarkets (${supermarketCount})` },
           { id: 'high_util', label: `High Util (${tabItems.filter((d) => d.isHighUtil).length})` },
           { id: 'returning', label: `Return Orders (${tabItems.filter((d) => d.isReturning).length})` },
-          { id: 'not_reviewed', label: `Not Reviewed (${tabItems.filter((d) => !d.isReviewed).length})` }
+          { id: 'not_reviewed', label: `Not Reviewed (${tabItems.filter((d) => !d.isReviewed).length})` },
+          {
+            id: 'bc_riders',
+            label: `BC / Hybrid Riders (${tabItems.filter((d) => String(d.courier || '').toLowerCase().includes('_bc') || String(d.courier || '').toLowerCase().includes('hybrid')).length})`
+          }
         ];
 
         return (
           <div className="mt-4 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-50 px-4 py-2.5 rounded-lg border border-gray-200">
-              <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                {filterChips.map((chip) => (
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-gray-50/90 p-2.5 rounded-lg border border-gray-200">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {filterPills.map((fp) => (
                   <button
-                    key={chip.id}
+                    key={fp.id}
                     type="button"
-                    onClick={() => setQuickFilter(chip.id)}
-                    className={`px-2.5 py-1 rounded-full font-medium transition-colors ${
-                      quickFilter === chip.id
+                    onClick={() => setQuickFilter(fp.id)}
+                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                      quickFilter === fp.id
                         ? 'bg-blue-600 text-white shadow-sm'
-                        : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
+                        : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-100'
                     }`}
                   >
-                    {chip.label}
+                    {fp.label}
                   </button>
                 ))}
               </div>
-
-              <div className="flex items-center gap-3 text-xs text-gray-500">
-                <span>Showing: <strong className="text-gray-800">{currentTabMetrics.total}</strong></span>
-                <span>Late: <strong className="text-[#e53935]">{currentTabMetrics.late}</strong></span>
-                <span>Cash: <strong className="text-emerald-700">{currentTabMetrics.cash}</strong></span>
+              <div className="text-xs text-gray-500 px-2 font-medium">
+                Showing: <strong className="text-gray-800">{filteredDeliveries.length}</strong> &nbsp;|&nbsp;
+                Late: <strong className="text-red-600">{lateCount}</strong> &nbsp;|&nbsp;
+                Cash: <strong className="text-emerald-700">{cashCount}</strong>
               </div>
             </div>
 
-            <div className="w-full overflow-x-auto">
+            <div className="w-full overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm">
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead>
-                  <tr className="border-b border-gray-200 text-gray-500 font-semibold tracking-wide text-xs">
-                    <th className="pb-3 px-2 w-1/4">ORDER</th>
-                    <th className="pb-3 px-2">DEADLINE</th>
-                    <th className="pb-3 px-2 w-1/4">COURIER</th>
-                    <th className="pb-3 px-2">STATUS</th>
-                    <th className="pb-3 px-2">ZONE / DISTANCE</th>
-                    <th className="pb-3 px-2">DELIVERY INSTRUCTION</th>
+                  <tr className="border-b border-gray-200 bg-gray-50 text-gray-500 font-semibold tracking-wide text-xs">
+                    <th className="py-3 px-3 w-1/4">ORDER</th>
+                    <th className="py-3 px-2">DEADLINE</th>
+                    <th className="py-3 px-2 w-1/4">COURIER</th>
+                    <th className="py-3 px-2">
+                      {activeTab === 'Cancelled' ? 'CANCELLATION REASON' : activeTab === 'Completed' ? 'TIMINGS / METRICS' : 'STATUS'}
+                    </th>
+                    <th className="py-3 px-2">ZONE / DISTANCE</th>
+                    <th className="py-3 px-3">DELIVERY INSTRUCTION</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredDeliveries.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="py-12 text-center text-gray-500">
-                        No deliveries found for <span className="font-semibold">{activeTab}</span> with current filters.
+                        No deliveries found for <span className="font-semibold">{activeTab}</span>.
                       </td>
                     </tr>
                   ) : (
                     filteredDeliveries.map((item, rowIndex) => {
                       const deadlineColor = item.isLate ? 'bg-[#e53935] text-white' : 'bg-gray-100 text-gray-800';
+                      const rawZones = Array.isArray(item.allZones) && item.allZones.length > 0 ? item.allZones : [item.zone];
+                      const matchedSelectedZones =
+                        zoneFilterState.mode === 'multiple_zones' && selectedZoneNamesSet.size > 0
+                          ? rawZones.filter((z) => selectedZoneNamesSet.has(String(z).toLowerCase().trim()))
+                          : [];
+                      const visibleZonesText =
+                        matchedSelectedZones.length > 0
+                          ? matchedSelectedZones.join(', ')
+                          : rawZones.slice(0, 3).join(', ');
+                      const remainingZonesCount =
+                        matchedSelectedZones.length > 0
+                          ? Math.max(0, rawZones.length - matchedSelectedZones.length)
+                          : Math.max(0, rawZones.length - 3);
 
                       return (
                         <tr
                           key={item.uid || `${item.id}_${rowIndex}`}
                           onClick={() => setSelectedOrder(item)}
-                          className="border-b border-gray-100 hover:bg-gray-50/80 transition-colors cursor-pointer"
+                          className="border-b border-gray-100 hover:bg-blue-50/30 transition-colors cursor-pointer"
                         >
-                          <td className="py-4 px-2 align-top">
+                          <td className="py-4 px-3 align-top">
                             <div className="flex flex-col gap-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-blue-600 hover:underline font-medium text-[15px]">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-blue-600 hover:underline font-semibold text-[15px]">
                                   {item.id}
                                 </span>
                                 <InfoIcon size={14} className="text-gray-400 hover:text-blue-600" />
@@ -2749,18 +2602,13 @@
                                   )}
                                 </button>
                                 {!item.isPrimary && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 font-semibold border border-amber-200">
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 font-semibold">
                                     Split
                                   </span>
                                 )}
                                 {!item.isReviewed && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-700 font-semibold border border-red-200">
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-600 border border-red-200 font-semibold">
                                     Not Reviewed
-                                  </span>
-                                )}
-                                {item.isHighUtil && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 font-semibold border border-purple-200">
-                                    High Util
                                   </span>
                                 )}
                               </div>
@@ -2784,20 +2632,47 @@
                             )}
                           </td>
                           <td className="py-4 px-2 align-top">
-                            <div className="font-semibold text-gray-800 text-[15px]">{item.status}</div>
-                            {item.time_in !== '-' && (
-                              <div className="text-xs text-gray-500 mt-0.5">In: {item.time_in}</div>
-                            )}
-                            {item.time_at !== '-' && (
-                              <div className="text-xs text-gray-500">At: {item.time_at}</div>
+                            {activeTab === 'Cancelled' ? (
+                              <div>
+                                <div className="font-semibold text-red-700 text-xs">{item.cancellationReason}</div>
+                                <div className="text-xs text-gray-500 mt-0.5">By: {item.cancelledBy}</div>
+                                <div className="text-xs text-gray-400">At: {item.cancelledAt}</div>
+                              </div>
+                            ) : activeTab === 'Completed' ? (
+                              <div>
+                                <div className="font-semibold text-emerald-700 text-xs">Completed</div>
+                                <div className="text-xs text-gray-500 mt-0.5">At: {item.completedAt}</div>
+                                {item.metrics?.delivery_duration && (
+                                  <div className="text-xs text-gray-500">Duration: {Math.round(item.metrics.delivery_duration / 60)}m</div>
+                                )}
+                              </div>
+                            ) : (
+                              <div>
+                                <div className="font-semibold text-gray-800 text-[15px]">{item.status}</div>
+                                {item.time_in !== '-' && (
+                                  <div className="text-xs text-gray-500 mt-0.5">In: {item.time_in}</div>
+                                )}
+                                {item.time_at !== '-' && (
+                                  <div className="text-xs text-gray-500">At: {item.time_at}</div>
+                                )}
+                              </div>
                             )}
                           </td>
-                          <td className="py-4 px-2 align-top text-gray-600 max-w-[210px]">
+                          <td
+                            className="py-4 px-2 align-top text-gray-600 max-w-[230px]"
+                            title={rawZones.join(', ')}
+                          >
                             <div className="flex items-center gap-1.5">
-                              <span className="truncate">{item.zone}</span>
-                              {item.allZones?.length > 3 && (
-                                <span className="text-[10px] px-1.5 py-0.2 rounded bg-gray-100 text-gray-600 font-semibold">
-                                  +{item.allZones.length - 3}
+                              <span
+                                className={`truncate ${
+                                  matchedSelectedZones.length > 0 ? 'font-semibold text-blue-700' : ''
+                                }`}
+                              >
+                                {visibleZonesText}
+                              </span>
+                              {remainingZonesCount > 0 && (
+                                <span className="text-[10px] px-1.5 py-0.2 rounded bg-gray-100 text-gray-600 font-semibold flex-shrink-0">
+                                  +{remainingZonesCount}
                                 </span>
                               )}
                             </div>
@@ -2805,7 +2680,7 @@
                               {item.distance} • {item.orderValue}
                             </div>
                           </td>
-                          <td className="py-4 px-2 align-top">
+                          <td className="py-4 px-3 align-top">
                             <div className="flex gap-1.5 flex-wrap">
                               {item.instructions.map((inst, i) => (
                                 <InstructionPill key={i} type={inst} />
@@ -2868,40 +2743,51 @@
 
           {/* Main Content Area */}
           <div className="flex-1 flex flex-col min-w-0 bg-white">
-            <header className="h-14 flex items-center justify-between px-6 border-b border-gray-200 bg-white gap-3">
+            {/* Top Header */}
+            <header className="h-14 flex items-center justify-between px-6 border-b border-gray-200 bg-white gap-4">
               <div className="flex items-center gap-3 text-xs text-gray-500">
                 <button
                   type="button"
                   onClick={() => setIsSyncModalOpen(true)}
                   className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold border transition-colors ${
-                    syncStatus === 'connected'
+                    syncMode === 'live' && syncStatus === 'connected'
                       ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : syncMode === 'live' && syncStatus === 'error'
+                      ? 'bg-red-50 text-red-700 border-red-200'
                       : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
                   }`}
                 >
                   <span
                     className={`w-2 h-2 rounded-full ${
-                      syncStatus === 'connected' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                      syncMode === 'live' && syncStatus === 'connected'
+                        ? 'bg-emerald-500 animate-pulse'
+                        : syncMode === 'live' && syncStatus === 'error'
+                        ? 'bg-red-500'
+                        : 'bg-amber-500'
                     }`}
                   />
-                  {syncStatus === 'connected'
-                    ? `LIVE (${countdown}s)`
-                    : `READY (${countdown}s)`}
+                  {syncMode === 'live'
+                    ? syncStatus === 'connected'
+                      ? `LIVE (${countdown}s)`
+                      : `READY (${countdown}s)`
+                    : 'Snapshot Mode'}
                 </button>
 
-                <span className="hidden xl:inline">Last Sync: {lastRefreshed}</span>
+                <span className="hidden sm:inline">Last Sync: {lastRefreshed}</span>
 
-                <button
-                  type="button"
-                  onClick={() => setIsAutoRefresh((prev) => !prev)}
-                  className="p-1 rounded hover:bg-gray-100 text-gray-600"
-                  title={isAutoRefresh ? 'Pause Auto-Refresh' : 'Resume Auto-Refresh'}
-                >
-                  {isAutoRefresh ? <PauseIcon size={13} /> : <PlayIcon size={13} />}
-                </button>
+                {syncMode === 'live' && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAutoRefresh((prev) => !prev)}
+                    className="p-1 rounded hover:bg-gray-100 text-gray-600"
+                    title={isAutoRefresh ? 'Pause Auto-Refresh' : 'Resume Auto-Refresh'}
+                  >
+                    {isAutoRefresh ? <PauseIcon size={13} /> : <PlayIcon size={13} />}
+                  </button>
+                )}
               </div>
 
-              <div className="flex items-center gap-2.5 text-gray-600">
+              <div className="flex items-center gap-3 text-gray-600">
                 <button
                   type="button"
                   onClick={() => setIsSyncModalOpen(true)}
@@ -2911,28 +2797,28 @@
                   <span>Live Sync</span>
                 </button>
 
-                <div className="hidden md:block bg-gray-100 text-gray-500 text-xs px-2 py-1 rounded border border-gray-200 font-mono">
+                <div className="bg-gray-100 text-gray-500 text-xs px-2 py-1 rounded border border-gray-200 font-mono">
                   0.31.0
                 </div>
 
                 <div className="relative flex items-center">
-                  <SearchIcon size={15} className="absolute left-3 text-gray-400" />
+                  <SearchIcon size={16} className="absolute left-3 text-gray-400 pointer-events-none" />
                   <input
                     type="search"
-                    name="hurrier-global-search"
+                    name="hurrier_order_courier_filter"
                     autoComplete="off"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search Order, VO, Vendor, Courier..."
-                    className="pl-8 pr-7 py-1.5 border border-gray-300 rounded text-xs w-56 lg:w-64 focus:outline-none focus:border-blue-500 placeholder-gray-400"
+                    placeholder="Search Order ID, VO, Vendor, Courier"
+                    className="pl-9 pr-7 py-1.5 border border-gray-300 rounded text-sm w-64 focus:outline-none focus:border-blue-500 placeholder-gray-400"
                   />
                   {searchQuery && (
                     <button
                       type="button"
                       onClick={() => setSearchQuery('')}
-                      className="absolute right-2 text-gray-400 hover:text-gray-600"
+                      className="absolute right-2.5 text-gray-400 hover:text-gray-600"
                     >
-                      <XIcon size={13} />
+                      <XIcon size={14} />
                     </button>
                   )}
                 </div>
@@ -2941,130 +2827,134 @@
                   type="button"
                   onClick={() => setActiveTab('Active Couriers')}
                   title="Active Couriers"
-                  className={`p-1.5 rounded transition-colors ${activeTab === 'Active Couriers' ? 'text-blue-600 bg-blue-50' : 'text-gray-500 hover:bg-gray-100'}`}
+                  className="p-1.5 text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
                 >
-                  <UserIcon size={17} />
+                  <UserIcon size={18} />
                 </button>
                 <button
                   type="button"
                   onClick={() => setActiveTab('Dashboard')}
                   title="Region Shift Overview"
-                  className={`p-1.5 rounded transition-colors ${activeTab === 'Dashboard' ? 'text-blue-600 bg-blue-50' : 'text-gray-500 hover:bg-gray-100'}`}
+                  className="p-1.5 hover:bg-gray-100 rounded transition-colors text-gray-500"
                 >
-                  <CoffeeIcon size={17} />
+                  <CoffeeIcon size={18} />
                 </button>
 
-                {/* Hurrier Exact Cities / Multiple Cities / Multiple Zones Dropdown */}
-                <div className="relative border-l border-gray-200 pl-2.5" ref={locationDropdownRef}>
+                {/* HURRIER CITIES & MULTIPLE ZONES SELECTOR */}
+                <div className="relative border-l border-gray-200 pl-3" ref={locationDropdownRef}>
                   <button
                     type="button"
                     onClick={() => setIsLocationMenuOpen((prev) => !prev)}
-                    className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded text-xs font-medium transition-colors ${
+                    className={`inline-flex items-center gap-2 text-sm font-medium px-2.5 py-1.5 rounded transition-colors ${
                       zoneFilterState.mode !== 'all'
-                        ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                        ? 'text-blue-700 bg-blue-50 border border-blue-200'
                         : 'text-gray-700 hover:bg-gray-100'
                     }`}
                   >
-                    <span className="max-w-[150px] truncate">{locationDropdownLabel}</span>
-                    {isLocationMenuOpen ? <ChevronUpIcon size={14} /> : <ChevronDownIcon size={14} />}
+                    <span className="max-w-[165px] truncate">{locationDropdownLabel}</span>
+                    {isLocationMenuOpen ? <ChevronUpIcon size={15} /> : <ChevronDownIcon size={15} />}
                   </button>
 
                   {isLocationMenuOpen && (
-                    <div className="absolute right-0 mt-1.5 w-56 bg-white rounded-md shadow-xl border border-gray-200 py-1 z-50 text-sm text-gray-800">
-                      <div className="max-h-64 overflow-y-auto divide-y divide-gray-50">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            applyAndSaveZoneFilter({ mode: 'all', cities: [], zoneIds: [] }, true);
-                            setIsLocationMenuOpen(false);
-                          }}
-                          className={`w-full text-left px-4 py-2.5 hover:bg-gray-100 transition-colors ${
-                            zoneFilterState.mode === 'all' ? 'font-bold text-blue-600 bg-blue-50/40' : ''
-                          }`}
-                        >
-                          All Cities
-                        </button>
-                        {mergedCitiesCatalog.map((cityObj) => {
-                          const isSelected =
-                            zoneFilterState.mode === 'city' &&
-                            zoneFilterState.cities?.[0]?.toLowerCase() === cityObj.name.toLowerCase();
-                          return (
-                            <button
-                              key={cityObj.id || cityObj.name}
-                              type="button"
-                              onClick={() => {
-                                applyAndSaveZoneFilter({ mode: 'city', cities: [cityObj.name], zoneIds: [] }, false);
-                                setIsLocationMenuOpen(false);
-                              }}
-                              className={`w-full text-left px-4 py-2.5 hover:bg-gray-100 transition-colors ${
-                                isSelected ? 'font-bold text-blue-600 bg-blue-50/40' : ''
-                              }`}
-                            >
-                              {cityObj.name}
-                            </button>
-                          );
-                        })}
-                      </div>
+                    <div className="absolute right-0 mt-1.5 w-60 bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-[420px] overflow-y-auto py-1.5 text-sm">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          applyAndSaveZoneFilter({ mode: 'all', cities: [], zoneIds: [] }, true);
+                          setIsLocationMenuOpen(false);
+                        }}
+                        className={`w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center justify-between ${
+                          zoneFilterState.mode === 'all' ? 'font-bold text-blue-600 bg-blue-50/50' : 'text-gray-800'
+                        }`}
+                      >
+                        <span>All Cities</span>
+                        {zoneFilterState.mode === 'all' && <CheckIcon size={14} />}
+                      </button>
 
-                      <div className="border-t border-gray-200 pt-1 mt-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDraftCities(zoneFilterState.cities || []);
-                            setIsLocationMenuOpen(false);
-                            setIsCitiesDialogOpen(true);
-                          }}
-                          className={`w-full text-left px-4 py-2.5 hover:bg-gray-100 transition-colors flex items-center justify-between ${
-                            zoneFilterState.mode === 'multiple_cities' ? 'font-bold text-blue-600 bg-blue-50/40' : ''
-                          }`}
-                        >
-                          <span>Multiple Cities</span>
-                          {zoneFilterState.mode === 'multiple_cities' && (
-                            <span className="text-[11px] bg-blue-100 text-blue-700 px-1.5 rounded-full">
-                              {zoneFilterState.cities.length}
-                            </span>
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDraftZoneIds(zoneFilterState.zoneIds || []);
-                            setZoneDialogSearch('');
-                            setIsLocationMenuOpen(false);
-                            setIsZonesDialogOpen(true);
-                          }}
-                          className={`w-full text-left px-4 py-2.5 hover:bg-gray-100 transition-colors flex items-center justify-between ${
-                            zoneFilterState.mode === 'multiple_zones' ? 'font-bold text-blue-600 bg-blue-50/40' : ''
-                          }`}
-                        >
-                          <span>Multiple Zones</span>
-                          {zoneFilterState.mode === 'multiple_zones' && (
-                            <span className="text-[11px] bg-blue-100 text-blue-700 px-1.5 rounded-full">
-                              {zoneFilterState.zoneIds.length}
-                            </span>
-                          )}
-                        </button>
-                      </div>
+                      <div className="my-1 border-t border-gray-100" />
+
+                      {mergedCitiesCatalog.map((c) => {
+                        const isSelectedCity =
+                          zoneFilterState.mode === 'city' &&
+                          zoneFilterState.cities?.length === 1 &&
+                          zoneFilterState.cities[0] === c.name;
+                        return (
+                          <button
+                            key={c.id || c.name}
+                            type="button"
+                            onClick={() => {
+                              applyAndSaveZoneFilter({ mode: 'city', cities: [c.name], zoneIds: [] }, false);
+                              setIsLocationMenuOpen(false);
+                            }}
+                            className={`w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center justify-between ${
+                              isSelectedCity ? 'font-bold text-blue-600 bg-blue-50/50' : 'text-gray-700'
+                            }`}
+                          >
+                            <span>{c.name}</span>
+                            {isSelectedCity && <CheckIcon size={14} />}
+                          </button>
+                        );
+                      })}
+
+                      <div className="my-1 border-t border-gray-200" />
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDraftCities(zoneFilterState.cities || []);
+                          setIsLocationMenuOpen(false);
+                          setIsCitiesDialogOpen(true);
+                        }}
+                        className={`w-full text-left px-4 py-2.5 hover:bg-blue-50 flex items-center justify-between font-medium ${
+                          zoneFilterState.mode === 'multiple_cities' ? 'text-blue-600 font-bold bg-blue-50/50' : 'text-gray-800'
+                        }`}
+                      >
+                        <span>Multiple Cities</span>
+                        {zoneFilterState.mode === 'multiple_cities' && (
+                          <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">
+                            {zoneFilterState.cities?.length || 0}
+                          </span>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDraftZoneIds(zoneFilterState.zoneIds || []);
+                          setZoneDialogSearch('');
+                          setIsLocationMenuOpen(false);
+                          setIsZonesDialogOpen(true);
+                        }}
+                        className={`w-full text-left px-4 py-2.5 hover:bg-blue-50 flex items-center justify-between font-medium ${
+                          zoneFilterState.mode === 'multiple_zones' ? 'text-blue-600 font-bold bg-blue-50/50' : 'text-gray-800'
+                        }`}
+                      >
+                        <span>Multiple Zones</span>
+                        {zoneFilterState.mode === 'multiple_zones' && (
+                          <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">
+                            {zoneFilterState.zoneIds?.length || 0}
+                          </span>
+                        )}
+                      </button>
                     </div>
                   )}
                 </div>
 
                 <div className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center ml-1">
-                  <UserIcon size={14} />
+                  <UserIcon size={15} />
                 </div>
               </div>
             </header>
 
+            {/* Dynamic View Container */}
             <main className="flex-1 overflow-auto p-6 lg:p-8">
-              <div className="max-w-[1500px] mx-auto">
+              <div className="max-w-[1440px] mx-auto">
                 <div className="flex items-center justify-between mb-2">
                   <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
                     {activeTab === 'Active Couriers'
                       ? 'Active Couriers'
-                      : activeTab === 'Issues'
-                      ? `Issue Watchlist (${filteredIssues.length})`
-                      : activeTab === 'Dashboard' || activeTab === 'Dispatcher Dashboard'
-                      ? activeTab
+                      : activeTab === 'Dashboard' || activeTab === 'Dispatcher Dashboard' || activeTab === 'Issues'
+                      ? activeTab === 'Issues' ? `Issue Watchlist (${issuesList.length})` : activeTab
                       : `${activeTab} Deliveries ${
                           sidebarItemsWithCounts.find((i) => i.id === activeTab)?.count !== undefined
                             ? `(${sidebarItemsWithCounts.find((i) => i.id === activeTab)?.count})`
@@ -3086,7 +2976,7 @@
             </main>
           </div>
 
-          {/* Full Hurrier Order Inspection Modal */}
+          {/* FULL HURRIER ORDER INSPECTION MODAL */}
           {selectedOrder && (
             <OrderFullInspectionModal
               baseOrder={selectedOrder}
@@ -3095,14 +2985,14 @@
             />
           )}
 
-          {/* Hurrier Multiple Zones Selection Dialog */}
+          {/* SELECT MULTIPLE ZONES MODAL */}
           {isZonesDialogOpen && (
             <div
-              className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+              className="fixed inset-0 bg-black/45 z-50 flex items-center justify-center p-4"
               onClick={() => setIsZonesDialogOpen(false)}
             >
               <div
-                className="bg-white rounded-lg max-w-2xl w-full shadow-2xl border border-gray-200 flex flex-col max-h-[85vh] overflow-hidden"
+                className="bg-white rounded-xl max-w-3xl w-full max-h-[85vh] shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
@@ -3115,15 +3005,22 @@
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
-                      onClick={() => setDraftZoneIds([])}
-                      className="text-xs font-bold uppercase tracking-wider text-blue-600 hover:text-blue-800"
+                      onClick={() => {
+                        if (draftZoneIds.length > 0) {
+                          setDraftZoneIds([]);
+                        } else {
+                          const allIds = mergedCitiesCatalog.flatMap((c) => c.zones.map((z) => String(z.id)));
+                          setDraftZoneIds(allIds);
+                        }
+                      }}
+                      className="text-xs font-bold text-blue-600 hover:text-blue-800 uppercase tracking-wide"
                     >
-                      UNSELECT ALL
+                      {draftZoneIds.length > 0 ? 'UNSELECT ALL' : 'SELECT ALL'}
                     </button>
                     <button
                       type="button"
                       onClick={() => setIsZonesDialogOpen(false)}
-                      className="p-1 text-gray-400 hover:text-gray-700 rounded"
+                      className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100"
                     >
                       <XIcon size={18} />
                     </button>
@@ -3131,16 +3028,26 @@
                 </div>
 
                 <div className="px-6 py-3 bg-gray-50 border-b border-gray-200 space-y-2.5">
-                  <div className="relative">
-                    <SearchIcon size={15} className="absolute left-3 top-2.5 text-gray-400" />
+                  <div className="relative flex items-center">
+                    <SearchIcon size={16} className="absolute left-3 text-gray-400" />
                     <input
                       type="text"
                       value={zoneDialogSearch}
                       onChange={(e) => setZoneDialogSearch(e.target.value)}
-                      placeholder="Search zones by name, ID, or city (e.g. Haram, Manial, Tahrir, Nasr city)..."
-                      className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md text-xs focus:outline-none focus:border-blue-500 bg-white"
+                      placeholder="Search zones by name, ID, or city (e.g. Hybrid, Haram, Manial, Tahrir)..."
+                      className="w-full pl-9 pr-8 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:border-blue-500"
                     />
+                    {zoneDialogSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setZoneDialogSearch('')}
+                        className="absolute right-2.5 text-gray-400 hover:text-gray-600"
+                      >
+                        <XIcon size={14} />
+                      </button>
+                    )}
                   </div>
+
                   <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer select-none">
                     <input
                       type="checkbox"
@@ -3152,7 +3059,7 @@
                   </label>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-6 space-y-5">
+                <div className="flex-1 overflow-y-auto p-6 space-y-6">
                   {mergedCitiesCatalog.map((cityObj) => {
                     const q = zoneDialogSearch.trim().toLowerCase();
                     const matchingZones = (cityObj.zones || []).filter(
@@ -3164,12 +3071,8 @@
                     );
                     if (matchingZones.length === 0) return null;
 
-                    const allCitySelected = matchingZones.every((z) =>
-                      draftZoneIds.some((id) => String(id) === String(z.id))
-                    );
-
                     return (
-                      <div key={cityObj.name} className="space-y-2">
+                      <div key={cityObj.id || cityObj.name} className="space-y-2.5">
                         <div className="flex items-center justify-between border-b border-gray-100 pb-1.5">
                           <span className="text-xs font-bold uppercase tracking-wider text-gray-500">
                             {cityObj.name} ({matchingZones.length})
@@ -3177,53 +3080,49 @@
                           <button
                             type="button"
                             onClick={() => {
-                              const idsInCity = matchingZones.map((z) => z.id);
-                              if (allCitySelected) {
-                                setDraftZoneIds((prev) =>
-                                  prev.filter((id) => !idsInCity.some((cid) => String(cid) === String(id)))
-                                );
+                              const cityZoneIds = matchingZones.map((z) => String(z.id));
+                              const allChecked = cityZoneIds.every((id) => draftZoneIds.includes(id));
+                              if (allChecked) {
+                                setDraftZoneIds((prev) => prev.filter((id) => !cityZoneIds.includes(id)));
                               } else {
-                                setDraftZoneIds((prev) => {
-                                  const next = new Set(prev.map(String));
-                                  idsInCity.forEach((cid) => next.add(String(cid)));
-                                  return Array.from(next).map(Number);
-                                });
+                                setDraftZoneIds((prev) => Array.from(new Set([...prev, ...cityZoneIds])));
                               }
                             }}
                             className="text-[11px] font-semibold text-blue-600 hover:underline"
                           >
-                            {allCitySelected ? 'Unselect City' : 'Select All in City'}
+                            Toggle {cityObj.name}
                           </button>
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           {matchingZones.map((z) => {
-                            const checked = draftZoneIds.some((id) => String(id) === String(z.id));
+                            const zIdStr = String(z.id);
+                            const isChecked = draftZoneIds.includes(zIdStr);
                             return (
                               <label
-                                key={z.id}
-                                className={`flex items-center justify-between px-3 py-2 rounded border text-xs cursor-pointer transition-colors ${
-                                  checked
-                                    ? 'bg-blue-50/70 border-blue-300 text-blue-900 font-medium'
-                                    : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                                key={zIdStr}
+                                className={`flex items-center justify-between p-2.5 rounded-lg border cursor-pointer transition-colors text-sm ${
+                                  isChecked
+                                    ? 'border-blue-400 bg-blue-50/60 text-blue-900 font-medium'
+                                    : 'border-gray-200 hover:bg-gray-50 text-gray-800'
                                 }`}
                               >
-                                <div className="flex items-center gap-2 truncate">
+                                <div className="flex items-center gap-2.5 min-w-0">
                                   <input
                                     type="checkbox"
-                                    checked={checked}
+                                    checked={isChecked}
                                     onChange={() => {
                                       setDraftZoneIds((prev) =>
-                                        checked
-                                          ? prev.filter((id) => String(id) !== String(z.id))
-                                          : [...prev, z.id]
+                                        prev.includes(zIdStr)
+                                          ? prev.filter((id) => id !== zIdStr)
+                                          : [...prev, zIdStr]
                                       );
                                     }}
-                                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                    className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                                   />
                                   <span className="truncate">{z.name}</span>
                                 </div>
-                                <span className="text-[10px] font-mono text-gray-400 ml-2">{z.id}</span>
+                                <span className="text-[11px] font-mono text-gray-400 ml-2">{z.id}</span>
                               </label>
                             );
                           })}
@@ -3237,7 +3136,7 @@
                   <button
                     type="button"
                     onClick={() => setIsZonesDialogOpen(false)}
-                    className="px-4 py-1.5 border border-gray-300 rounded text-xs font-semibold text-gray-700 bg-white hover:bg-gray-100"
+                    className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-100"
                   >
                     Cancel
                   </button>
@@ -3253,11 +3152,8 @@
                         );
                       }
                       setIsZonesDialogOpen(false);
-                      if (syncZonesToHurrier) {
-                        setTimeout(() => fetchLiveFeed(true), 1200);
-                      }
                     }}
-                    className="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold shadow-sm"
+                    className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold shadow-sm"
                   >
                     Select
                   </button>
@@ -3266,53 +3162,65 @@
             </div>
           )}
 
-          {/* Hurrier Multiple Cities Selection Dialog */}
+          {/* SELECT MULTIPLE CITIES MODAL */}
           {isCitiesDialogOpen && (
             <div
-              className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+              className="fixed inset-0 bg-black/45 z-50 flex items-center justify-center p-4"
               onClick={() => setIsCitiesDialogOpen(false)}
             >
               <div
-                className="bg-white rounded-lg max-w-md w-full shadow-2xl border border-gray-200 flex flex-col max-h-[80vh] overflow-hidden"
+                className="bg-white rounded-xl max-w-lg w-full max-h-[80vh] shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
                   <h2 className="text-lg font-bold text-gray-900">Select multiple cities</h2>
-                  <button
-                    type="button"
-                    onClick={() => setDraftCities([])}
-                    className="text-xs font-bold uppercase text-blue-600 hover:text-blue-800"
-                  >
-                    UNSELECT ALL
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraftCities((prev) =>
+                          prev.length > 0 ? [] : mergedCitiesCatalog.map((c) => c.name)
+                        )
+                      }
+                      className="text-xs font-bold text-blue-600 hover:text-blue-800 uppercase"
+                    >
+                      {draftCities.length > 0 ? 'UNSELECT ALL' : 'SELECT ALL'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsCitiesDialogOpen(false)}
+                      className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700"
+                    >
+                      <XIcon size={18} />
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-6 space-y-2">
+                <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   {mergedCitiesCatalog.map((c) => {
                     const checked = draftCities.includes(c.name);
                     return (
                       <label
-                        key={c.name}
-                        className={`flex items-center justify-between px-3.5 py-2.5 rounded border text-sm cursor-pointer ${
+                        key={c.id || c.name}
+                        className={`flex items-center gap-2.5 p-2.5 rounded-lg border cursor-pointer text-sm ${
                           checked
-                            ? 'bg-blue-50/70 border-blue-300 text-blue-900 font-semibold'
-                            : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                            ? 'border-blue-400 bg-blue-50/60 text-blue-900 font-medium'
+                            : 'border-gray-200 hover:bg-gray-50 text-gray-800'
                         }`}
                       >
-                        <div className="flex items-center gap-2.5">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => {
-                              setDraftCities((prev) =>
-                                checked ? prev.filter((name) => name !== c.name) : [...prev, c.name]
-                              );
-                            }}
-                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                          />
-                          <span>{c.name}</span>
-                        </div>
-                        <span className="text-xs text-gray-400">{c.zones.length} zones</span>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() =>
+                            setDraftCities((prev) =>
+                              prev.includes(c.name)
+                                ? prev.filter((item) => item !== c.name)
+                                : [...prev, c.name]
+                            )
+                          }
+                          className="w-4 h-4 rounded border-gray-300 text-blue-600"
+                        />
+                        <span>{c.name}</span>
                       </label>
                     );
                   })}
@@ -3322,7 +3230,7 @@
                   <button
                     type="button"
                     onClick={() => setIsCitiesDialogOpen(false)}
-                    className="px-4 py-1.5 border border-gray-300 rounded text-xs font-semibold text-gray-700 bg-white hover:bg-gray-100"
+                    className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-100"
                   >
                     Cancel
                   </button>
@@ -3336,7 +3244,7 @@
                       }
                       setIsCitiesDialogOpen(false);
                     }}
-                    className="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold shadow-sm"
+                    className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold"
                   >
                     Select
                   </button>
@@ -3360,10 +3268,10 @@
                     <ShieldCheckIcon size={20} className="text-emerald-600" />
                     <div>
                       <h2 className="text-base font-bold text-gray-900">
-                        البث اللحظي الشامل عبر Firebase (تحديث كل ثانيتين)
+                        البث الشامل اللحظي (Firebase Realtime — كل 2 ثانية)
                       </h2>
                       <p className="text-xs text-gray-500">
-                        ينقل جميع أقسام Hurrier وسجل الطيارين للموظفين للقراءة فقط
+                        يشمل جميع تبويبات Hurrier وتفاصيل الأوردرات وسجل الطيارين
                       </p>
                     </div>
                   </div>
@@ -3386,7 +3294,7 @@
                         : 'border-transparent text-gray-500 hover:text-gray-800'
                     }`}
                   >
-                    1. حالة الربط اللحظي (Firebase)
+                    1. حالة الاتصال اللحظي (Firebase)
                   </button>
                   <button
                     type="button"
@@ -3405,7 +3313,7 @@
                   {modalTab === 'firebase' && (
                     <div className="space-y-4">
                       <div className="p-3.5 rounded-lg bg-emerald-50/70 border border-emerald-200 text-xs text-emerald-900 leading-relaxed">
-                        <strong>متصل بالبث اللحظي الشامل (2s):</strong> الداشبورد تفحص التغييرات كل <strong>ثانيتين</strong>، وعند فتح أي أوردر يتم جلب سجل الطيارين (`Accepted` / `Dispatched`) والجدول الزمني الكامل فوراً.
+                        <strong>متصل ومفعّل تلقائياً:</strong> يحدّث كافة الأقسام (Dashboard, Issues, Active Couriers, Actionable, Pre-order, Assembly, Queued, Dispatched, Active, Upcoming, Cancelled, Completed) بالإضافة لتفاصيل الأوردرات وسجل الطيارين.
                       </div>
 
                       <div>
@@ -3426,7 +3334,7 @@
                       <div className="p-3 rounded-lg bg-blue-50/60 border border-blue-200 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
-                            <Link2Icon size={14} /> رابط الموظفين (عرض فقط - تحديث كل ثانيتين)
+                            <Link2Icon size={14} /> رابط الموظفين (عرض فقط — جاهز للمشاركة مباشرة)
                           </span>
                           <button
                             type="button"
@@ -3442,17 +3350,35 @@
                         </div>
                       </div>
 
-                      <div className="flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            fetchLiveFeed(true);
-                            setIsSyncModalOpen(false);
-                          }}
-                          className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors flex items-center gap-2"
-                        >
-                          <WifiIcon size={16} /> تحديث البيانات الآن
-                        </button>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                            معدل الفحص اللحظي
+                          </label>
+                          <select
+                            value={refreshIntervalSec}
+                            onChange={(e) => setRefreshIntervalSec(Number(e.target.value))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+                          >
+                            <option value={2}>كل ثانيتين (2s - أقصى سرعة)</option>
+                            <option value={3}>كل 3 ثواني</option>
+                            <option value={5}>كل 5 ثواني</option>
+                          </select>
+                        </div>
+                        <div className="flex items-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSyncMode('live');
+                              setIsAutoRefresh(true);
+                              fetchLiveFeed(true);
+                              setIsSyncModalOpen(false);
+                            }}
+                            className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                          >
+                            <WifiIcon size={16} /> تحديث فوري الآن
+                          </button>
+                        </div>
                       </div>
 
                       {syncError && (
@@ -3478,11 +3404,7 @@
                           <option value="Queued">Queued Deliveries</option>
                           <option value="Dispatched">Dispatched Deliveries</option>
                           <option value="Actionable">Actionable Deliveries</option>
-                          <option value="Waiting for Assembly">Waiting for Assembly</option>
                           <option value="Pre-order">Pre-order Deliveries</option>
-                          <option value="Upcoming">Upcoming Orders</option>
-                          <option value="Cancelled">Cancelled Orders</option>
-                          <option value="Completed">Completed Orders</option>
                         </select>
                       </div>
 
@@ -3490,11 +3412,11 @@
                         rows={6}
                         value={rawJsonInput}
                         onChange={(e) => setRawJsonInput(e.target.value)}
-                        placeholder='الصق هنا الـ JSON Response القادم من أي API في Hurrier ...'
+                        placeholder="الصق هنا الـ JSON Response..."
                         className="w-full p-3 border border-gray-300 rounded-lg font-mono text-xs focus:outline-none focus:border-blue-500"
                       />
 
-                      <div className="flex justify-end">
+                      <div className="flex justify-end gap-2">
                         <button
                           type="button"
                           onClick={handleApplyPastedJson}
