@@ -1842,13 +1842,138 @@
           return { ...item, count: filteredCount };
         });
       }, [tabCounts, zoneFilterState.mode, deliveries, matchesCityAndZoneFilter]);
+
+      const applyHurrierBundle = useCallback((bundle) => {
+        if (!bundle || typeof bundle !== 'object') return;
+
+        const tabBuckets = [
+          { key: 'active', tab: 'Active' },
+          { key: 'queued', tab: 'Queued' },
+          { key: 'dispatched', tab: 'Dispatched' },
+          { key: 'actionable', tab: 'Actionable' },
+          { key: 'waiting_for_assembly', tab: 'Waiting for Assembly' },
+          { key: 'preorder', tab: 'Pre-order' },
+          { key: 'upcoming', tab: 'Upcoming' },
+          { key: 'cancelled', tab: 'Cancelled' },
+          { key: 'completed', tab: 'Completed' }
+        ];
+
+        let hasAnyDelivery = false;
+        const updatedMap = new Map();
+        const nextCounts = {};
+
+        tabBuckets.forEach(({ key, tab }) => {
+          const payload = bundle[key];
+          if (payload && Array.isArray(payload.records)) {
+            hasAnyDelivery = true;
+            const mapped = payload.records.map((r, idx) => mapHurrierRecordToDelivery(r, tab, idx));
+            updatedMap.set(tab, mapped);
+            nextCounts[tab] = payload.metadata?.total_count ?? mapped.length;
+          }
+        });
+
+        if (hasAnyDelivery) {
+          setDeliveries((prev) => {
+            const preserved = prev.filter((d) => !updatedMap.has(d.tab));
+            const incoming = Array.from(updatedMap.values()).flat();
+            return [...incoming, ...preserved];
+          });
+          setTabCounts((prev) => ({ ...prev, ...nextCounts }));
+        }
+
+        if (bundle.stats && Array.isArray(bundle.stats.cities)) {
+          const newSummaries = [];
+          const newZoneRows = [];
+
+          bundle.stats.cities.forEach((c) => {
+            const s = c.stat || {};
+            newSummaries.push({
+              city: c.city_name,
+              queued: s.queued_count ?? 0,
+              queuedPct: s.queued_percent ?? 0,
+              dispatched: s.dispatched_count ?? 0,
+              dispatchedPct: s.dispatched_percent ?? 0,
+              active: s.active_count ?? 0,
+              activePct: s.active_percent ?? 0,
+              delay: `${Number(s.delay || 0).toFixed(1)}m`,
+              puPct: s.picked_up_percent ?? 0,
+              doPct: s.drop_off_percent ?? 0,
+              zeroDel: s.zero_deliveries ?? 0,
+              lowDel: s.low_deliveries ?? 0,
+              medDel: s.medium_deliveries ?? 0,
+              highDel: s.high_deliveries ?? 0,
+              starting: s.couriers_in_starting ?? 0,
+              working: s.couriers_in_working ?? 0,
+              ending: s.couriers_in_ending ?? 0,
+              tempBreak: s.couriers_in_temp_break ?? 0,
+              break: s.couriers_in_break ?? 0
+            });
+
+            (c.zones || []).forEach((z) => {
+              const zDelay = `${Number(z.stat?.delay || 0).toFixed(1)}m`;
+              (z.starting_points || []).forEach((sp) => {
+                const st = sp.stat || {};
+                newZoneRows.push({
+                  id: sp.id,
+                  zone: sp.name,
+                  parentZone: z.zone_name || '',
+                  city: c.city_name,
+                  starting: st.couriers_in_starting ?? 0,
+                  working: st.couriers_in_working ?? 0,
+                  ending: st.couriers_in_ending ?? 0,
+                  break: st.couriers_in_break ?? 0,
+                  tempBreak: st.couriers_in_temp_break ?? 0,
+                  delay: st.delay ? `${Number(st.delay).toFixed(1)}m` : zDelay,
+                  queued: st.queued_count ?? 0,
+                  dispatched: st.dispatched_count ?? 0,
+                  active: st.active_count ?? 0,
+                  puPercent: st.picked_up_percent ?? 0,
+                  doPercent: st.drop_off_percent ?? 0,
+                  zeroDel: st.zero_deliveries ?? 0,
+                  lowDel: st.low_deliveries ?? 0,
+                  medDel: st.medium_deliveries ?? 0,
+                  highDel: st.high_deliveries ?? 0
+                });
+              });
+            });
+          });
+
+          if (newSummaries.length > 0) setCitySummary(newSummaries);
+          if (newZoneRows.length > 0) setZonesList(newZoneRows);
+        }
+
+        if (Array.isArray(bundle.couriers)) {
+          setIndividualCouriers(bundle.couriers);
+        }
+
+        if (Array.isArray(bundle.issues)) {
+          setIssuesList(bundle.issues);
+          setTabCounts((prev) => ({ ...prev, Issues: bundle.issues.length }));
+        }
+
+        if (Array.isArray(bundle.dispatchers)) {
+          setDispatcherStats(
+            bundle.dispatchers.map((d) => ({
+              picked_by: d.picked_by,
+              picked: d.picked ?? 0,
+              processing: d.processing ?? 0,
+              max_picked_for: d.min_picked_at ? formatRelativeDeadline(d.min_picked_at).replace('-', '') : '-'
+            }))
+          );
+        }
+
+        const displayTime = bundle.syncedAt ? new Date(bundle.syncedAt) : new Date();
+        setLastRefreshed(
+          displayTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        );
+      }, []);
+
       const fetchLiveFeed = useCallback(async (forceFull = false) => {
         setSyncError('');
         try {
           const cleanBaseUrl = firebaseUrl.trim().replace(/\/+$/, '');
           if (!cleanBaseUrl) throw new Error('أدخل رابط Firebase Realtime Database أولاً');
 
-          // جلب كتالوج المدن والزونات الكامل عند التحديث الكامل
           if (forceFull) {
             fetch(`${cleanBaseUrl}/hurrier_live/cities_catalog.json`, { cache: 'no-store' })
               .then((r) => (r.ok ? r.json() : null))
@@ -2003,8 +2128,6 @@
           return matchesTab && matchesLoc && matchesQuick && matchesSearch;
         });
       }, [deliveries, activeTab, matchesCityAndZoneFilter, quickFilter, searchQuery]);
-        });
-      }, [deliveries, activeTab, selectedCity, selectedZoneFilter, quickFilter, searchQuery]);
 
       const filteredIssues = useMemo(() => {
         return issuesList.filter((iss) => {
@@ -2042,6 +2165,255 @@
           }
           return filteredZones.some((z) => z.city.toLowerCase() === c.city.toLowerCase());
         });
+
+        return (
+          <div className="mt-6 space-y-6">
+            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
+                  Region Performance &amp; Rider Shifts
+                </span>
+                <span className="text-xs text-gray-500">Live Read-Only Sync</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-gray-500 font-semibold bg-white">
+                      <th className="py-3 px-4">REGION</th>
+                      <th className="py-3 px-3">QUEUED</th>
+                      <th className="py-3 px-3">DISP</th>
+                      <th className="py-3 px-3">ACTIVE</th>
+                      <th className="py-3 px-3">DELAY</th>
+                      <th className="py-3 px-3">PU / DO</th>
+                      <th className="py-3 px-3">0 / 1 / 2 / 3+ DEL</th>
+                      <th className="py-3 px-3">START</th>
+                      <th className="py-3 px-3">WORK</th>
+                      <th className="py-3 px-3">END</th>
+                      <th className="py-3 px-3">TEMP</th>
+                      <th className="py-3 px-3">BREAK</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 text-sm">
+                    {visibleCities.map((row) => (
+                      <tr key={row.city} className="hover:bg-gray-50">
+                        <td className="py-3.5 px-4 font-semibold text-gray-900">{row.city}</td>
+                        <td className="py-3.5 px-3">
+                          <span className="font-semibold text-gray-800">{row.queued}</span>{' '}
+                          <span className="text-xs text-gray-400">({row.queuedPct}%)</span>
+                        </td>
+                        <td className="py-3.5 px-3">
+                          <span className="font-semibold text-gray-800">{row.dispatched}</span>{' '}
+                          <span className="text-xs text-gray-400">({row.dispatchedPct}%)</span>
+                        </td>
+                        <td className="py-3.5 px-3">
+                          <span className="font-semibold text-blue-600">{row.active}</span>{' '}
+                          <span className="text-xs text-gray-400">({row.activePct}%)</span>
+                        </td>
+                        <td className="py-3.5 px-3 font-semibold text-[#d32f2f]">{row.delay}</td>
+                        <td className="py-3.5 px-3 text-gray-700">{row.puPct}% / {row.doPct}%</td>
+                        <td className="py-3.5 px-3 text-xs text-gray-600 font-mono">
+                          {row.zeroDel} / {row.lowDel} / {row.medDel} / {row.highDel}
+                        </td>
+                        <td className="py-3.5 px-3 text-gray-700">{row.starting}</td>
+                        <td className="py-3.5 px-3 font-semibold text-emerald-700">{row.working}</td>
+                        <td className="py-3.5 px-3 text-amber-700">{row.ending}</td>
+                        <td className="py-3.5 px-3 text-gray-600">{row.tempBreak}</td>
+                        <td className="py-3.5 px-3 text-gray-600">{row.break}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
+                  Starting Points Breakdown ({filteredZones.length} Zones)
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-gray-500 font-semibold">
+                      <th className="py-3 px-4">STARTING POINT</th>
+                      <th className="py-3 px-3">ZONE</th>
+                      <th className="py-3 px-3">QUEUED</th>
+                      <th className="py-3 px-3">DISP</th>
+                      <th className="py-3 px-3">ACTIVE</th>
+                      <th className="py-3 px-3">DELAY</th>
+                      <th className="py-3 px-3">PU / DO</th>
+                      <th className="py-3 px-3">WORK</th>
+                      <th className="py-3 px-3">END</th>
+                      <th className="py-3 px-3">BREAK</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 text-sm">
+                    {filteredZones.map((sp) => (
+                      <tr key={sp.id} className="hover:bg-gray-50">
+                        <td className="py-3 px-4 font-medium text-gray-900">{sp.zone}</td>
+                        <td className="py-3 px-3 text-xs text-gray-500">{sp.parentZone || sp.city}</td>
+                        <td className="py-3 px-3">{sp.queued}</td>
+                        <td className="py-3 px-3">{sp.dispatched}</td>
+                        <td className="py-3 px-3 font-medium text-blue-600">{sp.active}</td>
+                        <td className={`py-3 px-3 font-medium ${parseFloat(sp.delay) > 5 ? 'text-[#d32f2f]' : 'text-gray-600'}`}>
+                          {sp.delay}
+                        </td>
+                        <td className="py-3 px-3 text-gray-600">{sp.puPercent}% / {sp.doPercent}%</td>
+                        <td className="py-3 px-3 font-medium text-gray-800">{sp.working}</td>
+                        <td className="py-3 px-3 text-gray-600">{sp.ending}</td>
+                        <td className="py-3 px-3 text-gray-600">{sp.break}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      const renderIssuesWatchlist = () => (
+        <div className="mt-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-50 p-3 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2 text-xs">
+              {['all', 'open', 'picked'].map((st) => (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() => setIssueStatusFilter(st)}
+                  className={`px-3 py-1.5 rounded-md font-semibold capitalize transition-colors ${
+                    issueStatusFilter === st
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
+                  }`}
+                >
+                  {st === 'all' ? `All Issues (${issuesList.length})` : st === 'open' ? 'Open Issues' : 'Picked Issues'}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-gray-500 font-medium">Type:</span>
+              {['all', 'pickup', 'dropoff', 'dispatch', 'courier'].map((tp) => (
+                <button
+                  key={tp}
+                  type="button"
+                  onClick={() => setIssueTypeFilter(tp)}
+                  className={`px-2.5 py-1 rounded-full font-medium capitalize ${
+                    issueTypeFilter === tp
+                      ? 'bg-gray-800 text-white'
+                      : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
+                  }`}
+                >
+                  {tp}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead>
+                  <tr className="border-b border-gray-200 text-gray-500 font-semibold text-xs bg-gray-50">
+                    <th className="py-3.5 px-4">TYPE</th>
+                    <th className="py-3.5 px-4">ISSUE</th>
+                    <th className="py-3.5 px-4">ORDER</th>
+                    <th className="py-3.5 px-4">COURIER</th>
+                    <th className="py-3.5 px-4">PICKED BY</th>
+                    <th className="py-3.5 px-4">DEADLINE</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredIssues.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-12 text-center text-gray-500">
+                        No active issues found in the watchlist.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredIssues.map((iss, idx) => (
+                      <tr key={iss.id || idx} className="hover:bg-gray-50">
+                        <td className="py-3.5 px-4">
+                          <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-xs font-semibold uppercase">
+                            {iss.type}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 font-medium text-gray-900">{iss.title}</td>
+                        <td className="py-3.5 px-4 font-mono text-blue-600">{iss.order_code}</td>
+                        <td className="py-3.5 px-4 text-gray-700">{iss.courier_name}</td>
+                        <td className="py-3.5 px-4 text-xs text-gray-600">{iss.picked_by || 'Unassigned'}</td>
+                        <td className="py-3.5 px-4 text-xs font-mono text-red-600">
+                          {iss.deadline ? formatRelativeDeadline(iss.deadline) : '-'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+
+      const renderDispatcherDashboard = () => (
+        <div className="mt-6 bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+          <table className="w-full text-left text-sm whitespace-nowrap">
+            <thead>
+              <tr className="border-b border-gray-200 text-gray-500 font-semibold text-xs bg-gray-50">
+                <th className="py-3.5 px-4">EMAIL</th>
+                <th className="py-3.5 px-4">ISSUES PICKED</th>
+                <th className="py-3.5 px-4">PROCESSING</th>
+                <th className="py-3.5 px-4">MAX PICKED FOR</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {dispatcherStats.map((disp, idx) => (
+                <tr key={idx} className="hover:bg-gray-50">
+                  <td className="py-3.5 px-4 font-medium text-gray-800">{disp.picked_by}</td>
+                  <td className="py-3.5 px-4">
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
+                      {disp.picked}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-4 text-gray-600">{disp.processing}</td>
+                  <td className="py-3.5 px-4 text-gray-600 font-mono text-xs">{disp.max_picked_for}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+
+      const renderActiveCouriersView = () => (
+        <div className="mt-6 w-full border-t border-gray-200">
+          {filteredZones.map((item) => {
+            const isHighDelay = parseFloat(item.delay) > 5;
+            const isExpanded = expandedZoneId === item.id;
+
+            const zoneCouriersFromApi = individualCouriers.filter(
+              (c) =>
+                String(c.starting_point_id) === String(item.id) ||
+                (c.starting_point_name && c.starting_point_name.toLowerCase() === item.zone.toLowerCase())
+            );
+
+            const activeRidersInZone = [];
+            const seenRiderIds = new Set();
+            deliveries.forEach((d) => {
+              if (
+                d.courierId &&
+                !seenRiderIds.has(d.courierId) &&
+                (d.allZones || []).some((z) => z.toLowerCase() === item.zone.toLowerCase())
+              ) {
+                seenRiderIds.add(d.courierId);
+                activeRidersInZone.push({
+                  id: d.courierId,
+                  name: d.courier,
+                  orderId: d.id,
+                  status: d.status,
+                  deliveryRef: d
+                });
               }
             });
 
