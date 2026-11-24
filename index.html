@@ -43,6 +43,7 @@
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
+    const PAGE_SIZE = 100;
 
     const ALL_ZONES_CATALOG = [
       { id: 10231, name: "Hybrid fleet mokattam easy sports", city: "Cairo" },
@@ -309,537 +310,334 @@
       });
     }
 
+    function formatShortEstTime(val) {
+      if (!val) return "-";
+      const d = typeof val === "number" ? new Date(val > 1e12 ? val : val * 1000) : new Date(val);
+      if (Number.isNaN(d.getTime())) return String(val);
+      return d.toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true
+      });
+    }
+
+    function formatSinceTimestamp(isoDate) {
+      if (!isoDate) return "";
+      const d = new Date(isoDate);
+      if (Number.isNaN(d.getTime())) return "";
+      const dayPart = d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+      const timePart = d
+        .toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true })
+        .toLowerCase();
+      return `Since ${dayPart} ${timePart}`;
+    }
+
     function formatDurationMinutes(minutes) {
-      if (minutes === null || minutes === undefined || Number.isNaN(Number(minutes))) return "-";
-      const m = Math.round(Number(minutes));
-      if (Math.abs(m) >= 60) {
-        const h = Math.floor(Math.abs(m) / 60);
-        const rem = Math.abs(m) % 60;
-        return `${m < 0 ? "-" : ""}${h}h ${rem}m`;
+      if (minutes === null || minutes === undefined || minutes === "") return "-";
+      const n = Number(minutes);
+      if (Number.isNaN(n)) return String(minutes);
+      const abs = Math.abs(Math.round(n));
+      if (abs >= 60) {
+        const h = Math.floor(abs / 60);
+        const m = abs % 60;
+        return `${n < 0 ? "-" : ""}${h}h ${m}m`;
       }
-      return `${m}m`;
+      return `${Math.round(n)}m`;
     }
 
-    function formatMoney(amount, currency = "EGP") {
-      if (amount === null || amount === undefined || amount === "") return "-";
-      const num = Number(amount);
-      if (Number.isNaN(num)) return String(amount);
-      const val = Math.abs(num) > 5000 && Number.isInteger(num) ? num / 100 : num;
-      return `${val.toFixed(2)} ${currency}`;
+    function formatMoney(val, currency = "EGP") {
+      if (val === null || val === undefined || val === "") return "-";
+      if (typeof val === "string" && /[A-Z]{3}|\$/.test(val)) return val;
+      const num = Number(val);
+      if (Number.isNaN(num)) return String(val);
+      return `${num.toFixed(2)} ${currency}`;
     }
 
-    function isValidPhoneCandidate(str) {
-      const s = normalizeText(str);
-      if (!s) return false;
-      const digitsOnly = s.replace(/[^\d+]/g, "");
-      if (digitsOnly.length < 8 || digitsOnly.length > 16) return false;
-      if (/^(010|011|012|015|\+2010|\+2011|\+2012|\+2015|2010|2011|2012|2015)\d{7,8}$/.test(digitsOnly)) {
-        return true;
-      }
-      return /^\+?\d{9,15}$/.test(digitsOnly);
-    }
+    function extractCustomerInfoFromOrder(orderObj, doc) {
+      const o = orderObj || {};
+      const d = doc || {};
+      const cExtra1 = d.customerExtra || {};
+      const cExtra2 = d.customerExtra2 || {};
+      const detail = d.detail || {};
 
-    function extractPhoneFromAnyText(text) {
-      const s = String(text || "");
-      if (!s) return "";
-      const telMatch = s.match(/tel:\s*([+\d][\d\s\-().]{7,18})/i);
-      if (telMatch && isValidPhoneCandidate(telMatch[1])) {
-        return normalizeText(telMatch[1]);
-      }
-      const egMobileMatch = s.match(/(?:\+?20)?0?1[0125]\d{8}/);
-      if (egMobileMatch) {
-        const raw = egMobileMatch[0];
-        if (raw.startsWith("+")) return raw;
-        if (raw.startsWith("201")) return `+${raw}`;
-        return raw.startsWith("0") ? raw : `0${raw}`;
-      }
-      return "";
-    }
+      const cust =
+        o.customer ||
+        o.customer_details ||
+        o.recipient ||
+        cExtra1.customer ||
+        cExtra1.customer_details ||
+        cExtra1.recipient ||
+        cExtra1 ||
+        cExtra2.customer ||
+        cExtra2 ||
+        detail.customer ||
+        {};
 
-    function extractCustomerInfoFromOrder(orderObj, detailRawObj) {
-      const sources = [
-        detailRawObj?.customerExtra,
-        detailRawObj?.customerExtra2,
-        detailRawObj?.detail?.customer,
-        detailRawObj?.detail?.customer_details,
-        detailRawObj?.detail?.recipient,
-        detailRawObj?.detail?.order?.customer,
-        detailRawObj?.detail?.order?.customer_details,
-        detailRawObj?.detail?.order?.recipient,
-        detailRawObj?.detailFull?.customer,
-        detailRawObj?.detailFull?.order?.customer,
-        detailRawObj?.detailShort?.customer,
-        detailRawObj?.detailShort?.order?.customer,
-        orderObj?.customer,
-        orderObj?.customer_details,
-        orderObj?.recipient,
-        orderObj
-      ].filter((x) => x && typeof x === "object");
+      const addr =
+        o.dropoff_address ||
+        o.delivery_address ||
+        cust.address ||
+        cExtra1.dropoff_address ||
+        cExtra1.delivery_address ||
+        cExtra2.dropoff_address ||
+        detail.dropoff_address ||
+        {};
 
-      const addrSources = [
-        orderObj?.dropoff_address,
-        orderObj?.delivery_address,
-        orderObj?.customer_address,
-        detailRawObj?.detail?.dropoff_address,
-        detailRawObj?.detail?.delivery_address,
-        detailRawObj?.detail?.order?.dropoff_address,
-        detailRawObj?.detail?.order?.delivery_address,
-        detailRawObj?.detailFull?.dropoff_address,
-        detailRawObj?.detailFull?.order?.dropoff_address,
-        detailRawObj?.customerExtra?.dropoff_address,
-        detailRawObj?.customerExtra?.delivery_address,
-        detailRawObj?.customerExtra?.address,
-        ...sources.map((s) => s.address || s.default_address || s.delivery_address || s.dropoff_address)
-      ].filter((x) => x && typeof x === "object");
+      const fullName = normalizeText(
+        cust.full_name ||
+          [cust.first_name, cust.last_name].filter(Boolean).join(" ") ||
+          cust.name ||
+          addr.recipient_name ||
+          addr.name ||
+          o.customer_name ||
+          o.recipient_name
+      );
 
-      let name = "";
-      for (const src of sources) {
-        const first = normalizeText(src.first_name || src.firstName);
-        const last = normalizeText(src.last_name || src.lastName);
-        const full = normalizeText(
-          src.customer_name ||
-            src.customerName ||
-            src.full_name ||
-            src.fullName ||
-            src.recipient_name ||
-            src.contact_name ||
-            src.name ||
-            (first || last ? `${first} ${last}` : "")
-        );
-        if (full && !/^customer\s*#?\d*$/i.test(full)) {
-          name = full;
-          break;
-        }
-      }
+      const tagCustId = Array.isArray(o.tags)
+        ? o.tags.find((t) => String(t).startsWith("external_address_id:"))
+        : "";
+      const fallbackName = tagCustId
+        ? String(tagCustId).replace("external_address_id:", "Customer #")
+        : "Customer";
 
-      if (!name) {
-        for (const aSrc of addrSources) {
-          const rName = normalizeText(aSrc.recipient_name || aSrc.contact_name || aSrc.name);
-          if (rName && !/^customer\s*#?\d*$/i.test(rName)) {
-            name = rName;
-            break;
-          }
-        }
-      }
+      const phone = normalizeText(
+        cust.phone ||
+          cust.phone_number ||
+          cust.mobile ||
+          cust.mobile_number ||
+          addr.phone ||
+          addr.phone_number ||
+          o.customer_phone ||
+          cExtra1.phone ||
+          cExtra1.phone_number
+      );
 
-      if (!name) {
-        const tagCust =
-          (Array.isArray(orderObj.tags) ? orderObj.tags : [])
-            .map((t) => String(t || ""))
-            .find((t) => /customer|address_id|external/i.test(t)) || "";
-        const numMatch = tagCust.match(/\d{5,}/);
-        name = numMatch ? `Customer #${numMatch[0]}` : "Customer";
-      }
-
-      let phone = "";
-      const phoneKeys = [
-        "phone",
-        "mobile",
-        "mobile_number",
-        "phone_number",
-        "customer_phone",
-        "recipient_phone",
-        "contact_phone",
-        "contact_number",
-        "tel"
-      ];
-
-      for (const src of [...sources, ...addrSources]) {
-        for (const k of phoneKeys) {
-          const val = src[k];
-          if (!val) continue;
-          if (typeof val === "object") {
-            const nestedPhone = normalizeText(
-              val.number || val.phone || val.mobile || val.raw || val.formatted || ""
-            );
-            if (isValidPhoneCandidate(nestedPhone)) {
-              phone = nestedPhone;
-              break;
-            }
-            const extractedNested = extractPhoneFromAnyText(JSON.stringify(val));
-            if (extractedNested) {
-              phone = extractedNested;
-              break;
-            }
-          } else {
-            const candidate = normalizeText(val);
-            if (isValidPhoneCandidate(candidate)) {
-              phone = candidate;
-              break;
-            }
-            const extracted = extractPhoneFromAnyText(candidate);
-            if (extracted) {
-              phone = extracted;
-              break;
-            }
-          }
-        }
-        if (phone) break;
-      }
-
-      if (!phone && detailRawObj) {
-        try {
-          const serialized = JSON.stringify(detailRawObj);
-          const foundInJson = extractPhoneFromAnyText(serialized);
-          if (foundInJson) phone = foundInJson;
-        } catch {
-          // تجاهل
-        }
-      }
-
-      const pickField = (keys) => {
-        for (const src of [...addrSources, ...sources]) {
-          for (const k of keys) {
-            const v = src[k];
-            if (v !== undefined && v !== null && normalizeText(v) !== "") {
-              return normalizeText(v);
-            }
-          }
-        }
-        return "NA";
-      };
-
-      const apartment = pickField(["apartment", "apartment_number", "apt", "flat", "unit"]);
-      const building = pickField(["building", "building_number", "building_name", "house_number"]);
-      const floor = pickField(["floor", "floor_number", "level"]);
-      const zipcode = pickField(["zipcode", "zip_code", "postal_code"]);
-      const intercom = pickField(["intercom", "buzzer"]);
-      const entrance = pickField(["entrance", "door", "gate"]);
-      const deliveryNote = pickField(["instructions", "delivery_instructions", "delivery_note", "note", "comment", "address_line_2"]);
-
-      let streetAddress = "";
-      for (const aSrc of addrSources) {
-        const s = normalizeText(
-          aSrc.street_address ||
-            aSrc.formatted_address ||
-            aSrc.full_address ||
-            aSrc.address_line_1 ||
-            aSrc.street ||
-            aSrc.address
-        );
-        if (s) {
-          streetAddress = s;
-          break;
-        }
-      }
-
-      return { name, phone, apartment, building, floor, zipcode, intercom, entrance, deliveryNote, streetAddress };
-    }
-
-    function mapHurrierRecordToDelivery(rec, tabName) {
-      const order = rec.order || rec;
-      const instructions = [];
-      if (order.is_cash_collection || rec.is_cash_collection) instructions.push("Cash");
-      if (order.is_card_on_delivery) instructions.push("Card");
-
-      const vRaw = String(order.vertical_type || order.vertical || rec.vertical_type || "").toLowerCase();
-      if (isTalabatMartVendor(order.vendor_name || rec.vendor_name)) {
-        instructions.push("Darkstores");
-      } else if (vRaw.includes("darkstore")) {
-        instructions.push("Darkstores");
-      } else if (vRaw.includes("supermarket") || vRaw.includes("grocery")) {
-        instructions.push("Supermarket");
-      } else if (vRaw.includes("restaurant")) {
-        instructions.push("Restaurants");
-      } else if (vRaw) {
-        instructions.push(vRaw.replace(/_/g, " "));
-      } else {
-        instructions.push("Restaurants");
-      }
-
-      const statusRaw = rec.status || order.status || (tabName === "Queued" ? "queued" : "active");
-      const statusLabel = String(statusRaw)
-        .split("_")
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(" ");
-
-      const scheduledDropoff = order.scheduled_dropoff_at || rec.scheduled_dropoff_at || order.promised_delivery_at;
-      const deadlineStr = formatRelativeDeadline(scheduledDropoff, tabName === "Pre-order");
-      const distKm = typeof rec.distance === "number" ? `${(rec.distance / 1000).toFixed(2)} km` : "-";
-      const rawOrderVal = order.order_value ?? order.total_amount ?? rec.order_value;
-      const valEgp = rawOrderVal !== undefined ? formatMoney(rawOrderVal, "EGP") : "-";
-
-      const rawZones = Array.isArray(rec.starting_points)
-        ? rec.starting_points.map((sp) => (typeof sp === "object" ? sp?.name || sp?.id : sp)).filter(Boolean)
-        : Array.isArray(order.starting_points)
-        ? order.starting_points.map((sp) => (typeof sp === "object" ? sp?.name || sp?.id : sp)).filter(Boolean)
-        : ["Cairo"];
-
-      const rawZoneObjects = Array.isArray(rec.starting_points)
-        ? rec.starting_points
-            .filter((sp) => sp && typeof sp === "object" && (sp.id || sp.starting_point_id) && (sp.name || sp.starting_point_name))
-            .map((sp) => ({
-              id: Number(sp.id || sp.starting_point_id),
-              name: normalizeText(sp.name || sp.starting_point_name),
-              city: rec.city_name || order.city_name || "Cairo"
-            }))
-        : [];
-
-      const orderIdNum = String(rec.display_id || order.code || rec.order_id || rec.id || "");
-      const courierName = rec.courier_name || order.courier_name || (tabName === "Queued" ? "Assigning..." : "-");
-      const isSplit = Boolean(
-        orderIdNum.includes("-") ||
-          rec.is_split ||
-          order.is_split ||
-          (Array.isArray(order.deliveries) && order.deliveries.length > 1)
+      const streetAddress = normalizeText(
+        addr.street_address ||
+          addr.formatted_address ||
+          [addr.street, addr.area, addr.city].filter(Boolean).join(", ") ||
+          addr.address_line_1 ||
+          addr.address
       );
 
       return {
-        uid: `${tabName}-${orderIdNum}-${rec.id || courierName}-${Math.random().toString(36).slice(2, 6)}`,
-        id: orderIdNum,
-        orderCode: order.order_code || `HF_EG${orderIdNum.split("-")[0]}`,
-        vendor: order.vendor_name || rec.vendor_name || "Unknown Vendor",
-        vo: order.vendor_order_number || order.vo || "-",
+        name: fullName || fallbackName,
+        phone: phone || "",
+        apartment: normalizeText(addr.apartment || addr.flat || addr.unit || cust.apartment) || "NA",
+        building: normalizeText(addr.building || addr.building_number || addr.house_number || cust.building) || "NA",
+        floor: normalizeText(addr.floor || addr.floor_number || cust.floor) || "NA",
+        zipcode: normalizeText(addr.zipcode || addr.postal_code) || "NA",
+        intercom: normalizeText(addr.intercom || addr.intercom_code) || "NA",
+        entrance: normalizeText(addr.entrance || addr.gate) || "NA",
+        streetAddress,
+        deliveryNote: normalizeText(addr.delivery_instructions || addr.instructions || addr.note || o.delivery_note) || "NA"
+      };
+    }
+
+    function mapHurrierRecordToDelivery(rec, tabName) {
+      const order = rec?.order || {};
+      const verticalMap = {
+        restaurants: "Restaurants",
+        darkstores: "Darkstores",
+        dairy_products: "Dairy Products",
+        convenience: "Convenience",
+        courier_business: "Courier Business"
+      };
+
+      const instructions = [];
+      if (order.is_cash_collection || rec?.is_cash_collection) instructions.push("Cash");
+      if (order.payment_method === "card" || order.is_online_payment) instructions.push("Card");
+      const vLabel = verticalMap[order.vertical_type] || (order.vertical_type ? String(order.vertical_type) : "Restaurants");
+      instructions.push(vLabel);
+
+      const statusLabel = String(rec?.status || "queued")
+        .split("_")
+        .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : ""))
+        .join(" ");
+
+      const targetIso = order.scheduled_dropoff_at || rec?.scheduled_dropoff_at;
+      const deadlineStr = formatRelativeDeadline(targetIso, tabName === "Pre-order");
+      const distKm = typeof rec?.distance === "number" ? `${(rec.distance / 1000).toFixed(2)} km` : "-";
+      const valEgp =
+        typeof order.order_value === "number"
+          ? `${(order.order_value > 5000 ? order.order_value / 100 : order.order_value).toFixed(2)} EGP`
+          : "-";
+
+      const rawSps = Array.isArray(rec?.starting_points)
+        ? rec.starting_points
+        : Array.isArray(order.starting_points)
+        ? order.starting_points
+        : [];
+      const zoneObjects = [];
+      const zonesList = [];
+      rawSps.forEach((sp) => {
+        if (sp && typeof sp === "object") {
+          const nm = normalizeText(sp.name || sp.starting_point_name);
+          const id = Number(sp.id || sp.starting_point_id);
+          if (nm) zonesList.push(nm);
+          if (nm || id) zoneObjects.push({ id, name: nm });
+        } else if (sp) {
+          const nm = normalizeText(sp);
+          if (nm) zonesList.push(nm);
+        }
+      });
+
+      const codeStr = String(order.code || rec?.display_id || rec?.id || "");
+      const isSplit =
+        Boolean(order.is_split || rec?.is_split) || (codeStr.includes("-") && codeStr.length > 14);
+
+      return {
+        uid: `${tabName}-${rec?.id || codeStr}-${Math.random().toString(36).slice(2, 7)}`,
+        id: codeStr,
+        orderCode: order.order_code || `HF_EG${codeStr}`,
+        vendor: order.vendor_name || "Unknown Vendor",
+        vo: order.vendor_order_number || "-",
         deadline: deadlineStr,
-        courier: courierName,
-        courierId: rec.courier_id || order.courier_id || null,
+        courier: rec?.courier_name || (tabName === "Queued" ? "Assigning..." : "-"),
+        courierId: rec?.courier_id || null,
         status: statusLabel,
         time_in: deadlineStr.startsWith("-") ? deadlineStr : "-",
-        time_at: formatReadableTimestamp(scheduledDropoff),
-        zone: rawZones.join(", "),
-        zonesList: rawZones,
-        zoneObjects: rawZoneObjects,
-        city: rec.city_name || order.city_name || "Cairo",
+        time_at: formatReadableTimestamp(targetIso),
+        zone: zonesList.join(", ") || "Cairo",
+        zonesList,
+        zoneObjects,
+        city: rec?.city_name || order.city_name || "Cairo",
         instructions,
+        isSplit,
         tab: tabName,
         distance: distKm,
         orderValue: valEgp,
-        isSplit,
         rawRecord: rec
       };
     }
 
-    function getOrCreateEmployeeSessionId() {
+    function readSessionStorageJson(key, fallback) {
       try {
-        const key = "hurrier_emp_session_id";
-        let existing = sessionStorage.getItem(key);
-        if (!existing) {
-          existing = `emp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-          sessionStorage.setItem(key, existing);
-        }
-        return existing;
+        const raw = window.sessionStorage.getItem(key);
+        return raw ? JSON.parse(raw) : fallback;
       } catch {
-        return `emp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+        return fallback;
+      }
+    }
+
+    function writeSessionStorageJson(key, val) {
+      try {
+        window.sessionStorage.setItem(key, JSON.stringify(val));
+      } catch {
+        // تجاهل
       }
     }
 
     function App() {
-      const [sessionId] = useState(() => getOrCreateEmployeeSessionId());
-      const [employeeName, setEmployeeName] = useState(() => {
-        try {
-          return localStorage.getItem("hurrier_emp_name") || "";
-        } catch {
-          return "";
-        }
-      });
+      const sessionId = useMemo(() => {
+        const existing = readSessionStorageJson("hurrier_emp_session_id", "");
+        if (existing) return existing;
+        const fresh = `emp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+        writeSessionStorageJson("hurrier_emp_session_id", fresh);
+        return fresh;
+      }, []);
 
-      const [selectedZoneIds, setSelectedZoneIds] = useState(() => {
-        try {
-          const raw = sessionStorage.getItem("hurrier_emp_zone_ids");
-          if (!raw) return [];
-          const parsed = JSON.parse(raw);
-          return Array.isArray(parsed)
-            ? Array.from(new Set(parsed.map(Number).filter(isRealHurrierZoneId)))
-            : [];
-        } catch {
-          return [];
-        }
-      });
-
+      const [employeeName, setEmployeeName] = useState(() =>
+        readSessionStorageJson("hurrier_emp_name", "")
+      );
+      const [selectedZoneIds, setSelectedZoneIds] = useState(() =>
+        readSessionStorageJson("hurrier_emp_zone_ids", [])
+      );
       const [isZoneSetupConfirmed, setIsZoneSetupConfirmed] = useState(() => {
-        try {
-          const confirmed = sessionStorage.getItem("hurrier_emp_zone_confirmed") === "true";
-          const raw = sessionStorage.getItem("hurrier_emp_zone_ids");
-          const parsed = raw ? JSON.parse(raw) : [];
-          return confirmed && Array.isArray(parsed) && parsed.filter(isRealHurrierZoneId).length > 0;
-        } catch {
-          return false;
-        }
+        const savedConfirmed = readSessionStorageJson("hurrier_emp_zone_confirmed", false);
+        const savedIds = readSessionStorageJson("hurrier_emp_zone_ids", []);
+        return Boolean(savedConfirmed && Array.isArray(savedIds) && savedIds.length > 0);
       });
 
-      const [activeTab, setActiveTab] = useState(() => {
-        try {
-          return sessionStorage.getItem("hurrier_emp_active_tab") || "Active";
-        } catch {
-          return "Active";
-        }
-      });
-      const [searchQuery, setSearchQuery] = useState("");
+      const [activeTab, setActiveTab] = useState(() =>
+        readSessionStorageJson("hurrier_emp_active_tab", "Active")
+      );
       const [selectedCity, setSelectedCity] = useState("Cairo");
-      const [zoneSearchQuery, setZoneSearchQuery] = useState("");
-
+      const [searchQuery, setSearchQuery] = useState("");
       const [activeQuickFilter, setActiveQuickFilter] = useState("All");
       const [selectedMartBranch, setSelectedMartBranch] = useState("ALL");
       const [orderSortMode, setOrderSortMode] = useState("hurrier_order");
-      const PAGE_SIZE = 100;
       const [currentPage, setCurrentPage] = useState(1);
       const [jumpPageInput, setJumpPageInput] = useState("");
+      const [zoneSearchQuery, setZoneSearchQuery] = useState("");
+      const [expandedZoneId, setExpandedZoneId] = useState(null);
+
+      const [selectedOrder, setSelectedOrder] = useState(null);
+      const selectedOrderRef = useRef(null);
+      selectedOrderRef.current = selectedOrder;
+      const [liveOrderDetailDoc, setLiveOrderDetailDoc] = useState(null);
+      const [detailModalTab, setDetailModalTab] = useState("Deliveries");
+      const [copiedText, setCopiedText] = useState(null);
 
       const [deliveries, setDeliveries] = useState([]);
+      const [tabCounts, setTabCounts] = useState({
+        Actionable: 0,
+        "Pre-order": 0,
+        "Waiting for Assembly": 0,
+        Queued: 0,
+        Dispatched: 0,
+        Active: 0
+      });
       const [couriers, setCouriers] = useState([]);
       const [citySummary, setCitySummary] = useState([]);
       const [dispatcherStats, setDispatcherStats] = useState([]);
       const [issuesList, setIssuesList] = useState([]);
       const [discoveredZonesFromBundle, setDiscoveredZonesFromBundle] = useState([]);
-      const [tabCounts, setTabCounts] = useState({});
-
-      const [expandedZoneId, setExpandedZoneId] = useState(null);
-      const [selectedOrder, setSelectedOrder] = useState(null);
-      const [liveOrderDetailDoc, setLiveOrderDetailDoc] = useState(null);
-      const [detailModalTab, setDetailModalTab] = useState("Deliveries");
-      const [copiedText, setCopiedText] = useState("");
       const [lastSyncTime, setLastSyncTime] = useState("-");
       const [connectionStatus, setConnectionStatus] = useState("connecting");
 
-      const selectedOrderRef = useRef(null);
-      selectedOrderRef.current = selectedOrder;
-      const mainContainerRef = useRef(null);
-      const isZoneSetupConfirmedRef = useRef(false);
-      isZoneSetupConfirmedRef.current = isZoneSetupConfirmed;
-      const prewarmedOrderIdsRef = useRef(new Set());
       const hoverTimerRef = useRef(null);
+      const prewarmedOrderIdsRef = useRef(new Set());
+      const mainContainerRef = useRef(null);
 
-      const copyToClipboard = useCallback((label, text) => {
-        if (!text) return;
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(String(text)).catch(() => {});
-        }
-        setCopiedText(label);
-        setTimeout(() => setCopiedText(""), 1500);
-      }, []);
-
-      const registerSessionInFirebase = useCallback(
-        async (zoneIds, empLabel) => {
-          const cleanIds = Array.from(new Set((zoneIds || []).map(Number).filter(isRealHurrierZoneId)));
-          const idSet = new Set(cleanIds);
-          const zoneNames = ALL_ZONES_CATALOG.filter((z) => idSet.has(Number(z.id))).map((z) => z.name);
-          const resolvedName = normalizeText(empLabel) || `Employee (${sessionId.slice(-4)})`;
-
-          try {
-            await fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}.json`, {
-              method: "PUT",
-              body: JSON.stringify({
-                session_id: sessionId,
-                employee_name: resolvedName,
-                zone_ids: cleanIds,
-                zone_names: zoneNames,
-                heartbeat_at: Date.now(),
-                updated_at: new Date().toISOString()
-              })
-            });
-          } catch {
-            // تجاهل
-          }
-        },
-        [sessionId]
-      );
-
-      const unregisterSessionFromFirebase = useCallback(
-        (useKeepalive = false) => {
-          try {
-            fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}.json`, {
-              method: "DELETE",
-              keepalive: useKeepalive
-            }).catch(() => {});
-            fetch(`${FIREBASE_DB_URL}/session_bundles/${sessionId}.json`, {
-              method: "DELETE",
-              keepalive: useKeepalive
-            }).catch(() => {});
-          } catch {
-            // تجاهل
-          }
-        },
-        [sessionId]
-      );
-
-      const handleConfirmZoneSelection = useCallback(
-        async (explicitZoneIds) => {
-          const sourceIds = Array.isArray(explicitZoneIds) ? explicitZoneIds : selectedZoneIds;
-          const cleanIds = Array.from(new Set(sourceIds.map(Number).filter(isRealHurrierZoneId)));
-          if (cleanIds.length === 0) return;
-
-          const trimmedName = normalizeText(employeeName);
-          try {
-            if (trimmedName) localStorage.setItem("hurrier_emp_name", trimmedName);
-            sessionStorage.setItem("hurrier_emp_zone_ids", JSON.stringify(cleanIds));
-            sessionStorage.setItem("hurrier_emp_zone_confirmed", "true");
-          } catch {}
-
-          setSelectedZoneIds(cleanIds);
-          setDeliveries([]);
-          setTabCounts({});
-          setCurrentPage(1);
-          setActiveQuickFilter("All");
-          setSelectedMartBranch("ALL");
-          setIsZoneSetupConfirmed(true);
-          setConnectionStatus("connecting");
-
-          await registerSessionInFirebase(cleanIds, trimmedName);
-        },
-        [selectedZoneIds, employeeName, registerSessionInFirebase]
-      );
-
-      const handleResetToZoneSelection = useCallback(async () => {
-        try {
-          sessionStorage.removeItem("hurrier_emp_zone_ids");
-          sessionStorage.removeItem("hurrier_emp_zone_confirmed");
-          sessionStorage.removeItem("hurrier_emp_active_tab");
-        } catch {}
-
-        setIsZoneSetupConfirmed(false);
-        setSelectedZoneIds([]);
-        setDeliveries([]);
-        setTabCounts({});
-        setCurrentPage(1);
-        setActiveQuickFilter("All");
-        setSelectedMartBranch("ALL");
-        setSelectedOrder(null);
-        unregisterSessionFromFirebase(false);
-      }, [unregisterSessionFromFirebase]);
-
-      // Persist active tab across refreshes
+      // Persist employee session preferences across Refresh (F5)
       useEffect(() => {
-        try {
-          sessionStorage.setItem("hurrier_emp_active_tab", activeTab);
-        } catch {}
+        writeSessionStorageJson("hurrier_emp_name", employeeName);
+      }, [employeeName]);
+
+      useEffect(() => {
+        writeSessionStorageJson("hurrier_emp_zone_ids", selectedZoneIds);
+      }, [selectedZoneIds]);
+
+      useEffect(() => {
+        writeSessionStorageJson("hurrier_emp_zone_confirmed", isZoneSetupConfirmed);
+      }, [isZoneSetupConfirmed]);
+
+      useEffect(() => {
+        writeSessionStorageJson("hurrier_emp_active_tab", activeTab);
       }, [activeTab]);
 
-      // Register session immediately on mount/refresh & send heartbeat every 15s while monitoring
-      useEffect(() => {
-        if (!isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
+      const copyToClipboard = useCallback((key, text) => {
+        const str = String(text || "");
+        if (!str) return;
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = str;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+        } catch {
+          // تجاهل
+        }
+        setCopiedText(key);
+        setTimeout(() => setCopiedText(null), 1500);
+      }, []);
 
-        registerSessionInFirebase(selectedZoneIds, employeeName);
-
-        const hbTimer = setInterval(() => {
-          fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}/heartbeat_at.json`, {
-            method: "PUT",
-            body: JSON.stringify(Date.now())
-          }).catch(() => {});
-        }, 15000);
-
-        const handleUnload = () => {
-          if (isZoneSetupConfirmedRef.current) {
-            unregisterSessionFromFirebase(true);
-          }
-        };
-
-        window.addEventListener("beforeunload", handleUnload);
-        return () => {
-          clearInterval(hbTimer);
-          window.removeEventListener("beforeunload", handleUnload);
-        };
-      }, [isZoneSetupConfirmed, selectedZoneIds, sessionId, employeeName, registerSessionInFirebase, unregisterSessionFromFirebase]);
-
-      const requestOrderDetailsFromHurrier = useCallback(async (orderId) => {
+      const requestOrderDetailsFromHurrier = useCallback(async (orderId, deliveryId = "") => {
         if (!orderId) return;
         const cleanId = String(orderId).replace(/^HF_[A-Z]{2}/i, "").trim();
         if (!cleanId) return;
+        const cleanDelId = String(deliveryId || "").trim();
+        const requestToken = cleanDelId && cleanDelId !== cleanId ? `${cleanId}|${cleanDelId}` : cleanId;
         try {
           const curRes = await fetch(`${FIREBASE_DB_URL}/config/requested_order_details.json`, { cache: "no-store" });
           const curList = curRes.ok ? await curRes.json() : [];
           const nextList = Array.from(
-            new Set([cleanId, ...(Array.isArray(curList) ? curList.map(String) : [])])
-          ).slice(0, 10);
+            new Set([requestToken, ...(Array.isArray(curList) ? curList.map(String) : [])])
+          ).slice(0, 12);
           await fetch(`${FIREBASE_DB_URL}/config/requested_order_details.json`, {
             method: "PUT",
             body: JSON.stringify(nextList)
@@ -850,15 +648,17 @@
       }, []);
 
       const handleOrderRowHover = useCallback(
-        (orderId) => {
+        (item) => {
+          const orderId = item?.id;
+          const delId = item?.rawRecord?.id || item?.rawRecord?.delivery_id || "";
           if (!orderId) return;
           const cleanId = String(orderId).replace(/^HF_[A-Z]{2}/i, "").trim();
           if (!cleanId || prewarmedOrderIdsRef.current.has(cleanId)) return;
           if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
           hoverTimerRef.current = setTimeout(() => {
             prewarmedOrderIdsRef.current.add(cleanId);
-            requestOrderDetailsFromHurrier(cleanId);
-          }, 220);
+            requestOrderDetailsFromHurrier(cleanId, delId);
+          }, 200);
         },
         [requestOrderDetailsFromHurrier]
       );
@@ -885,10 +685,11 @@
           setLiveOrderDetailDoc(null);
           return;
         }
+        const delId = selectedOrder.rawRecord?.id || selectedOrder.rawRecord?.delivery_id || "";
         setDetailModalTab("Deliveries");
         setLiveOrderDetailDoc(null);
         fetchSingleOrderDetailDoc(selectedOrder.id);
-        requestOrderDetailsFromHurrier(selectedOrder.id);
+        requestOrderDetailsFromHurrier(selectedOrder.id, delId);
 
         const pollTimer = setInterval(() => {
           if (selectedOrderRef.current?.id) {
@@ -898,6 +699,87 @@
 
         return () => clearInterval(pollTimer);
       }, [selectedOrder, fetchSingleOrderDetailDoc, requestOrderDetailsFromHurrier]);
+
+      const availableZones = useMemo(() => {
+        const map = new Map();
+        ALL_ZONES_CATALOG.forEach((z) => {
+          const numId = Number(z.id);
+          if (!isRealHurrierZoneId(numId)) return;
+          const key = normalizeText(z.name).toLowerCase();
+          map.set(key, { ...z, id: numId });
+        });
+        discoveredZonesFromBundle.forEach((z) => {
+          const numId = Number(z?.id);
+          if (z && z.name && isRealHurrierZoneId(numId)) {
+            const key = normalizeText(z.name).toLowerCase();
+            const existing = map.get(key);
+            map.set(key, {
+              id: existing ? existing.id : numId,
+              name: normalizeText(z.name),
+              city: z.city || existing?.city || "Cairo"
+            });
+          }
+        });
+        return Array.from(map.values())
+          .filter((z) => selectedCity === "All Cities" || z.city === selectedCity)
+          .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      }, [discoveredZonesFromBundle, selectedCity]);
+
+      const selectedZoneNames = useMemo(() => {
+        if (!Array.isArray(selectedZoneIds) || selectedZoneIds.length === 0) return [];
+        const idSet = new Set(selectedZoneIds.map(Number));
+        return ALL_ZONES_CATALOG.filter((z) => idSet.has(Number(z.id)))
+          .map((z) => normalizeText(z.name).toLowerCase())
+          .filter(Boolean);
+      }, [selectedZoneIds]);
+
+      // Register & Heartbeat independent employee session in Firebase
+      const registerOrHeartbeatSession = useCallback(async () => {
+        if (!isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
+        try {
+          await fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}.json`, {
+            method: "PUT",
+            body: JSON.stringify({
+              session_id: sessionId,
+              employee_name: normalizeText(employeeName) || `Employee (${sessionId.slice(-5)})`,
+              zone_ids: selectedZoneIds.map(Number).filter(isRealHurrierZoneId),
+              zone_names: selectedZoneNames,
+              heartbeat_at: Date.now()
+            })
+          });
+        } catch {
+          // تجاهل
+        }
+      }, [isZoneSetupConfirmed, selectedZoneIds, sessionId, employeeName, selectedZoneNames]);
+
+      useEffect(() => {
+        if (!isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
+        registerOrHeartbeatSession();
+        const hbTimer = setInterval(registerOrHeartbeatSession, 15000);
+        return () => clearInterval(hbTimer);
+      }, [isZoneSetupConfirmed, selectedZoneIds, registerOrHeartbeatSession]);
+
+      const handleConfirmZoneSelection = useCallback(() => {
+        if (selectedZoneIds.length === 0) return;
+        setConnectionStatus("waiting");
+        setCurrentPage(1);
+        setIsZoneSetupConfirmed(true);
+      }, [selectedZoneIds]);
+
+      const handleChangeZones = useCallback(async () => {
+        setIsZoneSetupConfirmed(false);
+        setDeliveries([]);
+        setSelectedOrder(null);
+        setCurrentPage(1);
+        try {
+          await Promise.all([
+            fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}.json`, { method: "DELETE" }),
+            fetch(`${FIREBASE_DB_URL}/session_bundles/${sessionId}.json`, { method: "DELETE" })
+          ]);
+        } catch {
+          // تجاهل
+        }
+      }, [sessionId]);
 
       const applySessionBundle = useCallback((bundle) => {
         if (!bundle || typeof bundle !== "object") return;
@@ -1044,40 +926,6 @@
         return () => clearInterval(interval);
       }, [fetchMySessionBundleFromFirebase, isZoneSetupConfirmed]);
 
-      const availableZones = useMemo(() => {
-        const map = new Map();
-        ALL_ZONES_CATALOG.forEach((z) => {
-          const numId = Number(z.id);
-          if (!isRealHurrierZoneId(numId)) return;
-          const key = normalizeText(z.name).toLowerCase();
-          map.set(key, { ...z, id: numId });
-        });
-        discoveredZonesFromBundle.forEach((z) => {
-          const numId = Number(z?.id);
-          if (z && z.name && isRealHurrierZoneId(numId)) {
-            const key = normalizeText(z.name).toLowerCase();
-            const existing = map.get(key);
-            map.set(key, {
-              id: existing ? existing.id : numId,
-              name: normalizeText(z.name),
-              city: z.city || existing?.city || "Cairo"
-            });
-          }
-        });
-        return Array.from(map.values())
-          .filter((z) => selectedCity === "All Cities" || z.city === selectedCity)
-          .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-      }, [discoveredZonesFromBundle, selectedCity]);
-
-      const selectedZoneNames = useMemo(() => {
-        if (!Array.isArray(selectedZoneIds) || selectedZoneIds.length === 0) return [];
-        const idSet = new Set(selectedZoneIds.map(Number));
-        return availableZones
-          .filter((z) => idSet.has(Number(z.id)))
-          .map((z) => normalizeText(z.name).toLowerCase())
-          .filter(Boolean);
-      }, [availableZones, selectedZoneIds]);
-
       const matchesZoneFilter = useCallback(
         (delivery) => {
           if (selectedZoneIds.length === 0) return false;
@@ -1215,12 +1063,15 @@
           "EGP"
         );
 
+        const rawDist = orderObj.manhattan_distance ?? rec.distance ?? orderObj.distance;
         const distanceStr =
-          typeof (rec.distance ?? orderObj.distance) === "number"
-            ? `${((rec.distance ?? orderObj.distance) / 1000).toFixed(2)} km`
+          typeof rawDist === "number"
+            ? `${(rawDist > 50 ? rawDist / 1000 : rawDist).toFixed(2)} KM`
             : selectedOrder.distance;
 
-        const prepDurationStr = formatDurationMinutes(orderObj.prep_duration ?? orderObj.preparation_time ?? 5);
+        const prepDurationStr = formatDurationMinutes(
+          orderObj.prep_duration ?? orderObj.tes ?? orderObj.preparation_time ?? 5
+        );
         const courierDelayStr = formatDurationMinutes(orderObj.courier_delay ?? rec.courier_delay ?? 0);
 
         const pickupAddrObj =
@@ -1242,6 +1093,15 @@
               orderObj.pickup_address_text
           ) || "-";
 
+        const pickupAreaBanner = normalizeText(
+          [
+            pickupAddrObj.city ? `City: ${pickupAddrObj.city}` : selectedOrder.city ? `City: ${selectedOrder.city}` : "",
+            pickupAddrObj.area || pickupAddrObj.district ? `Area: ${pickupAddrObj.area || pickupAddrObj.district}` : ""
+          ]
+            .filter(Boolean)
+            .join(" ")
+        );
+
         const dropoffAddressStr =
           customerInfo.streetAddress ||
           normalizeText(
@@ -1253,17 +1113,42 @@
           ) ||
           "-";
 
+        const customerUpdatedStr = formatReadableTimestamp(
+          orderObj.customer_details_updated_at || dropoffAddrObj.updated_at || orderObj.updated_at
+        );
+
+        const orderBadges = [...selectedOrder.instructions];
+        if (
+          orderObj.proof_of_pickup ||
+          rec.proof_of_pickup ||
+          (Array.isArray(orderObj.tags) && orderObj.tags.some((t) => /proof_of_pickup/i.test(String(t))))
+        ) {
+          if (!orderBadges.includes("Proof of pickup")) orderBadges.push("Proof of pickup");
+        }
+
         const rawDeliveries = Array.isArray(doc.deliveries) && doc.deliveries.length > 0 ? doc.deliveries : [rec];
         const allEvents = [];
         const riderMap = new Map();
         const transitionTimeByState = new Map();
+        const structuredDeliveries = [];
 
         rawDeliveries.forEach((del, dIdx) => {
-          const delCourier = del.courier_name || selectedOrder.courier || "-";
+          const delId = del.id || del.delivery_id || selectedOrder.id;
+          const delStatusRaw = del.status || selectedOrder.status || "Active";
+          const delStatusLabel = String(delStatusRaw)
+            .split("_")
+            .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+            .join(" ");
+          const delZones = Array.isArray(del.starting_points)
+            ? del.starting_points.map((sp) => (typeof sp === "object" ? sp?.name || sp?.id : sp)).filter(Boolean).join(", ")
+            : selectedOrder.zone;
+          const delCourier = del.courier_name || del.courier?.name || selectedOrder.courier || "-";
+          const delUtilization = del.utilization ?? del.courier_utilization ?? "-";
           const transitions = Array.isArray(del.transitions) ? del.transitions : [];
+          const delEvents = [];
 
           transitions.forEach((tr, tIdx) => {
-            const stateRaw = String(tr.to_state || tr.state || tr.event || tr.status || "").toLowerCase();
+            const stateRaw = String(tr.to_state || tr.state || tr.event || tr.event_name || tr.status || "").toLowerCase();
             const eventLabel =
               tr.event_label ||
               stateRaw
@@ -1285,7 +1170,50 @@
             }
 
             const timeSec = formatExactTimeSeconds(rawTimeVal);
-            const courierName = tr.courier_name || delCourier || "-";
+            const courierName =
+              tr.courier_name ||
+              tr.courier?.name ||
+              tr.rider_name ||
+              tr.metadata?.courier_name ||
+              (stateRaw === "queued" && tIdx === 0 ? "-" : delCourier) ||
+              "-";
+
+            const subReasonRaw =
+              tr.reason ||
+              tr.sub_reason ||
+              tr.trigger ||
+              tr.triggered_by ||
+              tr.source ||
+              tr.actor ||
+              tr.metadata?.reason ||
+              tr.metadata?.source ||
+              "";
+            const subLabel = String(subReasonRaw)
+              .split("_")
+              .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : ""))
+              .join(" ")
+              .trim();
+
+            const estObj = tr.estimates || tr.estimated_times || tr.metadata || tr;
+            const estAcceptTime = formatShortEstTime(
+              estObj.est_accept_time || estObj.estimated_accept_at || estObj.accept_eta
+            );
+            const estPickupArrival = formatShortEstTime(
+              estObj.est_pickup_arrival || estObj.estimated_pickup_arrival_at || estObj.pickup_arrival_eta
+            );
+            const estPickupDeparture = formatShortEstTime(
+              estObj.est_pickup_departure || estObj.estimated_pickup_departure_at || estObj.pickup_departure_eta
+            );
+            const estDropoffArrival = formatShortEstTime(
+              estObj.est_dropoff_arrival || estObj.estimated_dropoff_arrival_at || estObj.dropoff_arrival_eta
+            );
+            const rawDropDep =
+              estObj.est_dropoff_departure ||
+              estObj.estimated_dropoff_departure_at ||
+              estObj.dropoff_departure_eta ||
+              estObj.promised_delivery_at;
+            const estDropoffDeparture = formatShortEstTime(rawDropDep);
+            const estDropoffDelta = rawDropDep ? formatRelativeDeadline(rawDropDep, false) : "";
 
             if (courierName && courierName !== "-" && courierName !== "Assigning...") {
               const entry = riderMap.get(courierName) || {
@@ -1318,17 +1246,35 @@
               riderMap.set(courierName, entry);
             }
 
-            allEvents.push({
+            const evObj = {
               key: `${dIdx}-${tIdx}`,
-              deliveryId: del.id || selectedOrder.id,
+              deliveryId: delId,
               timeSec,
               eventLabel,
-              subLabel: tr.reason || tr.triggered_by || tr.source || "",
+              subLabel,
               courierName,
+              estAcceptTime,
+              estPickupArrival,
+              estPickupDeparture,
+              estDropoffArrival,
+              estDropoffDeparture,
+              estDropoffDelta,
               isAccepted: stateRaw.includes("accept"),
               isRemoved:
                 stateRaw.includes("undispatch") || stateRaw.includes("cancel") || stateRaw.includes("unassign")
-            });
+            };
+
+            delEvents.push(evObj);
+            allEvents.push(evObj);
+          });
+
+          structuredDeliveries.push({
+            id: delId,
+            status: delStatusLabel,
+            zones: delZones,
+            courier: delCourier,
+            utilization: delUtilization,
+            events: delEvents
           });
         });
 
@@ -1352,6 +1298,7 @@
           orderObj.scheduled_pickup_at;
         const foodReadyRaw =
           orderObj.food_ready_at ||
+          orderObj.food_is_ready_at ||
           orderObj.prepared_at ||
           orderObj.ready_for_pickup_at;
         const pickedUpRaw =
@@ -1371,14 +1318,24 @@
           { label: "Restaurant confirmed at", value: formatReadableTimestamp(restConfirmedRaw) },
           { label: "Pickup - Committed", value: formatReadableTimestamp(pickupCommittedRaw) },
           { label: "Food is ready at", value: formatReadableTimestamp(foodReadyRaw) },
-          { label: "Picked up at", value: formatReadableTimestamp(pickedUpRaw) },
+          { label: "Picked up at", value: pickedUpRaw ? formatExactTimeSeconds(pickedUpRaw) : "-" },
           { label: "Promised delivery time", value: formatReadableTimestamp(promisedDeliveryRaw) }
         ];
 
-        const ridersHistory = Array.from(riderMap.values());
-        const acceptedRiders = ridersHistory.filter((r) => r.accepted);
+        const statusSinceStr = formatSinceTimestamp(
+          orderObj.status_updated_at || rec.updated_at || pickedUpRaw || orderedAtRaw
+        );
 
-        const notes = Array.isArray(doc.dispatcher_notes) ? doc.dispatcher_notes : [];
+        const ridersHistory = Array.from(riderMap.values());
+        const notes = Array.isArray(doc.dispatcher_notes)
+          ? doc.dispatcher_notes.map((n, idx) => ({
+              id: n.id || idx,
+              author: n.created_by || n.author || n.user_email || n.email || n.user?.email || "Dispatcher",
+              createdAt: formatReadableTimestamp(n.created_at || n.timestamp || n.updated_at),
+              text: n.note || n.body || n.text || n.content || n.comment || n.message || ""
+            }))
+          : [];
+        const orderIssues = Array.isArray(doc.order_issues) ? doc.order_issues : [];
         const items =
           Array.isArray(orderObj.items) && orderObj.items.length > 0
             ? orderObj.items
@@ -1386,6 +1343,9 @@
 
         return {
           ...selectedOrder,
+          orderBadges,
+          statusSinceStr,
+          customerUpdatedStr,
           customerName: customerInfo.name,
           customerPhone: customerInfo.phone,
           apartment: customerInfo.apartment,
@@ -1407,13 +1367,15 @@
           prepDurationStr,
           courierDelayStr,
           pickupAddress: pickupAddressStr,
+          pickupAreaBanner,
           dropoffAddress: dropoffAddressStr,
           timeChecks,
           deliveriesList: rawDeliveries,
+          structuredDeliveries,
           allEvents,
           ridersHistory,
-          acceptedRiders,
           notes,
+          orderIssues,
           items,
           isLoadedFromApi: Boolean(liveOrderDetailDoc)
         };
@@ -1896,7 +1858,7 @@
                       return (
                         <tr
                           key={item.uid}
-                          onMouseEnter={() => handleOrderRowHover(item.id)}
+                          onMouseEnter={() => handleOrderRowHover(item)}
                           onClick={() => setSelectedOrder(item)}
                           className="hover:bg-blue-50/30 transition-colors cursor-pointer"
                         >
@@ -2246,27 +2208,23 @@
                 })}
               </div>
 
-              {/* Gate Footer Action Bar */}
+              {/* Gate Footer */}
               <div className="px-6 py-4 bg-white border-t border-gray-200 flex flex-wrap items-center justify-between gap-3">
                 <div className="text-xs text-gray-600">
-                  الزونات المختارة لجلستك:{" "}
-                  <strong className="text-blue-600 text-sm">{selectedZoneIds.length}</strong>{" "}
-                  {selectedZoneIds.length === 0 && (
-                    <span className="text-amber-700 mr-1">(اختر زون واحدة على الأقل للبدء)</span>
-                  )}
+                  الزونات المختارة حالياً:{" "}
+                  <strong className="text-blue-700 text-sm">{selectedZoneIds.length}</strong> زون
                 </div>
-
                 <button
                   type="button"
                   disabled={selectedZoneIds.length === 0}
-                  onClick={() => handleConfirmZoneSelection(selectedZoneIds)}
-                  className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm ${
+                  onClick={handleConfirmZoneSelection}
+                  className={`px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-sm ${
                     selectedZoneIds.length === 0
                       ? "bg-gray-200 text-gray-400 cursor-not-allowed"
                       : "bg-blue-600 hover:bg-blue-700 text-white"
                   }`}
                 >
-                  بدء المتابعة وسحب الداتا ({selectedZoneIds.length} زون) ←
+                  بدء المتابعة لهذه الزونات (Start Monitoring) ←
                 </button>
               </div>
             </div>
@@ -2274,30 +2232,35 @@
         );
       }
 
-      // --- 2) ACTIVE INDEPENDENT EMPLOYEE DASHBOARD VIEW ---
+      // --- 2) MAIN EMPLOYEE LIVE DASHBOARD ---
       return (
         <div className="flex h-screen w-full bg-white overflow-hidden text-gray-800">
           {/* Left Navigation Sidebar */}
-          <aside className="w-[235px] flex-shrink-0 border-r border-gray-200 flex flex-col h-full bg-white z-10">
+          <aside className="w-[240px] flex-shrink-0 border-r border-gray-200 flex flex-col h-full bg-white z-10">
             <div className="h-14 flex items-center justify-between px-4 border-b border-gray-200">
               <div className="flex items-center gap-2 font-bold text-lg tracking-tight text-gray-900">
                 <span className="text-xl">🚴‍♂️</span>
                 <span>Hurrier</span>
               </div>
-              <div className="flex flex-col items-end gap-0.5">
-                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
-                  View Only
-                </span>
-                <span className="text-[9px] font-bold text-emerald-700">
-                  التجربة الناجحة رقم 1
-                </span>
+              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                View Only
+              </span>
+            </div>
+
+            <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-amber-700">★ التجربة الناجحة رقم 1</span>
+                <span className="font-mono text-gray-400">#{sessionId.slice(-5)}</span>
               </div>
+              {employeeName && (
+                <div className="text-gray-700 font-semibold truncate">👤 {employeeName}</div>
+              )}
             </div>
 
             <nav className="flex-1 overflow-y-auto py-3 flex flex-col">
               {SIDEBAR_ITEMS.map((item) => {
                 const isActive = activeTab === item.id;
-                const badgeCount = effectiveTabCounts[item.id];
+                const countVal = effectiveTabCounts[item.id];
                 return (
                   <button
                     key={item.id}
@@ -2308,35 +2271,26 @@
                     }}
                     className={`flex items-center justify-between px-5 py-2.5 text-sm font-medium w-full text-left transition-colors ${
                       isActive
-                        ? "border-l-4 border-blue-600 text-blue-600 bg-blue-50/60 font-semibold"
+                        ? "border-l-4 border-blue-600 text-blue-600 bg-blue-50/50 font-semibold"
                         : "border-l-4 border-transparent text-gray-700 hover:bg-gray-50"
                     } ${item.className || ""}`}
                   >
                     <span>
-                      {item.label} {badgeCount !== undefined && `(${badgeCount})`}
+                      {item.label} {countVal !== undefined && `(${countVal})`}
                     </span>
                   </button>
                 );
               })}
             </nav>
-
-            <div className="p-3 border-t border-gray-200 bg-gray-50 text-xs space-y-1">
-              <div className="font-bold text-gray-800 truncate">
-                👤 {normalizeText(employeeName) || `Session ${sessionId.slice(-5)}`}
-              </div>
-              <div className="text-[11px] text-gray-500">
-                Active Zones: <strong className="text-blue-600">{selectedZoneIds.length}</strong>
-              </div>
-            </div>
           </aside>
 
           {/* Main Content Area */}
           <div className="flex-1 flex flex-col min-w-0 bg-white">
             {/* Top Header */}
-            <header className="h-14 flex items-center justify-between px-6 border-b border-gray-200 bg-white gap-3">
-              <div className="flex items-center gap-3 text-xs">
+            <header className="min-h-[56px] py-2 flex flex-wrap items-center justify-between px-6 border-b border-gray-200 bg-white gap-3">
+              <div className="flex flex-wrap items-center gap-2.5 text-xs">
                 <span
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold border ${
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-bold border ${
                     connectionStatus === "live"
                       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                       : connectionStatus === "error"
@@ -2356,23 +2310,23 @@
                   {connectionStatus === "live"
                     ? "LIVE (2s)"
                     : connectionStatus === "error"
-                    ? "Sync Error"
-                    : "Syncing Zones..."}
+                    ? "Retry..."
+                    : "Syncing..."}
                 </span>
 
-                <span className="text-gray-500 hidden md:inline">Last Sync: {lastSyncTime}</span>
+                <span className="text-gray-500">Last Sync: {lastSyncTime}</span>
 
                 <button
                   type="button"
-                  onClick={handleResetToZoneSelection}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-sm transition-colors"
-                  title="العودة لاختيار زونات جديدة"
+                  onClick={handleChangeZones}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-bold transition-colors"
+                  title="العودة لشاشة اختيار الزونات لتعديل الزونات المتابعة"
                 >
-                  <span>🔄 تغيير الزونات ({selectedZoneIds.length})</span>
+                  🔄 تغيير الزونات ({selectedZoneIds.length})
                 </button>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2.5">
                 <div className="relative flex items-center">
                   <input
                     type="text"
@@ -2381,37 +2335,39 @@
                       setSearchQuery(e.target.value);
                       setCurrentPage(1);
                     }}
-                    placeholder="Search Order ID, Courier, Vendor..."
-                    className="pl-3.5 pr-8 py-1.5 border border-gray-300 rounded-lg text-sm w-56 sm:w-64 focus:outline-none focus:border-blue-500"
+                    placeholder="Search Order ID, VO, Courier, Zone..."
+                    className="pl-3.5 pr-7 py-1.5 border border-gray-300 rounded-lg text-xs sm:text-sm w-56 sm:w-64 focus:outline-none focus:border-blue-500"
                   />
                   {searchQuery && (
                     <button
                       type="button"
                       onClick={() => setSearchQuery("")}
-                      className="absolute right-2.5 text-gray-400 hover:text-gray-700 text-xs"
+                      className="absolute right-2 text-gray-400 hover:text-gray-700 text-xs"
                     >
                       ✕
                     </button>
                   )}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={fetchMySessionBundleFromFirebase}
-                  className="px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                <select
+                  value={selectedCity}
+                  onChange={(e) => setSelectedCity(e.target.value)}
+                  className="px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 bg-white focus:outline-none"
                 >
-                  ↻ Refresh
-                </button>
+                  <option value="Cairo">Cairo</option>
+                  <option value="All Cities">All Cities</option>
+                  <option value="Alexandria">Alexandria</option>
+                </select>
               </div>
             </header>
 
-            {/* Selected Zones Pill Strip */}
+            {/* Selected Zones Strip */}
             <div className="px-6 py-2 bg-slate-50 border-b border-gray-200 flex items-center gap-2 overflow-x-auto text-xs">
               <span className="font-bold text-gray-600 flex-shrink-0">الزونات النشطة:</span>
               {selectedZonesDisplayList.map((z) => (
                 <span
                   key={z.id}
-                  className="px-2.5 py-0.5 rounded-full bg-white border border-blue-200 text-blue-800 font-semibold flex-shrink-0"
+                  className="px-2.5 py-0.5 rounded-full bg-white border border-blue-200 text-blue-800 font-medium flex-shrink-0"
                 >
                   {z.name} <span className="text-gray-400 font-mono">({z.id})</span>
                 </span>
@@ -2419,16 +2375,24 @@
             </div>
 
             {/* Dynamic Main View */}
-            <main ref={mainContainerRef} className="flex-1 overflow-auto p-6">
+            <main ref={mainContainerRef} className="flex-1 overflow-auto p-5 sm:p-7">
               <div className="max-w-[1440px] mx-auto">
-                <div className="flex items-center justify-between">
-                  <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                  <h1 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
                     {activeTab === "Active Couriers"
                       ? "Active Couriers"
                       : activeTab === "Dashboard" || activeTab === "Dispatcher Dashboard" || activeTab === "Issues"
                       ? activeTab
                       : `${activeTab} Deliveries ${activeHeaderCount !== undefined ? `(${activeHeaderCount})` : ""}`}
                   </h1>
+
+                  <button
+                    type="button"
+                    onClick={fetchMySessionBundleFromFirebase}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 rounded-lg text-xs sm:text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    ↻ Refresh
+                  </button>
                 </div>
 
                 {activeTab === "Dashboard"
@@ -2444,36 +2408,53 @@
             </main>
           </div>
 
-          {/* Read-Only Full Order & Customer Details Modal */}
+          {/* Read-Only Full Order & Customer Details Modal (Exact Hurrier 3-Column Layout) */}
           {selectedOrderFullView && (
             <div
-              className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-3 sm:p-6"
+              className="fixed inset-0 bg-black/45 z-50 flex items-center justify-center p-2 sm:p-4"
               onClick={() => setSelectedOrder(null)}
             >
               <div
-                className="bg-white rounded-2xl w-full max-w-4xl max-h-[92vh] shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
+                className="bg-[#f5f6f8] rounded-xl w-full max-w-[1400px] max-h-[94vh] shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
-                {/* Modal Top Header */}
-                <div className="px-6 py-4 bg-white border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <span className="text-xl font-bold text-gray-900">{selectedOrderFullView.orderCode}</span>
+                {/* Top White Header Bar (Matches Hurrier Order Header) */}
+                <div className="px-6 py-3.5 bg-white border-b border-gray-200 flex flex-wrap items-center justify-between gap-3 shadow-sm">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-2xl font-bold text-gray-900 tracking-tight">
+                      {selectedOrderFullView.id}
+                    </span>
                     <button
                       type="button"
-                      onClick={() => copyToClipboard("orderCode", selectedOrderFullView.orderCode)}
-                      className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
+                      onClick={() => copyToClipboard("orderCode", selectedOrderFullView.id)}
+                      className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-100 font-medium"
                     >
-                      {copiedText === "orderCode" ? "✓ Copied" : "⧉ Copy"}
+                      {copiedText === "orderCode" ? "✓ Copied" : "⧉ Copy ID"}
                     </button>
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                      {selectedOrderFullView.status}
+                    <span className="text-xs font-semibold text-blue-600">
+                      {selectedOrderFullView.orderCode}
                     </span>
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-50 text-red-700 border border-red-200">
-                      Deadline: {selectedOrderFullView.deadline}
-                    </span>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {selectedOrderFullView.orderBadges.map((b, idx) => (
+                        <span
+                          key={idx}
+                          className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                            b === "Cash"
+                              ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              : b === "Proof of pickup"
+                              ? "bg-purple-50 text-purple-700 border border-purple-200"
+                              : "bg-amber-50 text-amber-800 border border-amber-200"
+                          }`}
+                        >
+                          {b === "Cash" ? "💵 Cash Order" : b === "Proof of pickup" ? "📷 Proof of pickup" : b}
+                        </span>
+                      ))}
+                    </div>
+
                     {!selectedOrderFullView.isLoadedFromApi && (
                       <span className="text-xs font-semibold text-blue-600 animate-pulse">
-                        ⚡ جاري تحديث البيانات الحية...
+                        ⚡ جاري جلب كل الأحداث والتفاصيل من Hurrier...
                       </span>
                     )}
                   </div>
@@ -2481,83 +2462,389 @@
                   <button
                     type="button"
                     onClick={() => setSelectedOrder(null)}
-                    className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 text-lg font-bold"
+                    className="p-1.5 rounded-lg text-gray-500 hover:text-gray-800 hover:bg-gray-100 text-lg font-bold"
                   >
                     ✕
                   </button>
                 </div>
 
-                {/* Modal Sub-Tabs */}
-                <div className="px-6 border-b border-gray-200 flex items-center gap-6 text-sm font-semibold bg-white">
-                  {["Deliveries", "Customer & Address", "Order Items"].map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setDetailModalTab(t)}
-                      className={`py-3 border-b-2 transition-colors ${
-                        detailModalTab === t
-                          ? "border-blue-600 text-blue-600"
-                          : "border-transparent text-gray-500 hover:text-gray-800"
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
+                {/* 3-Column Scrollable Body */}
+                <div className="flex-1 overflow-y-auto p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 text-sm">
+                  {/* LEFT COLUMN: Important Details */}
+                  <div className="lg:col-span-3 space-y-4">
+                    <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
+                      <h3 className="text-base font-bold text-gray-900 pb-3 border-b border-gray-100">
+                        Important Details
+                      </h3>
+                      <div className="divide-y divide-gray-100 text-xs">
+                        <div className="py-2.5 flex items-start justify-between gap-2">
+                          <span className="text-gray-600 font-medium">Status</span>
+                          <div className="text-right">
+                            <div className="font-semibold text-gray-900">{selectedOrderFullView.status}</div>
+                            {selectedOrderFullView.statusSinceStr && (
+                              <div className="text-[11px] text-gray-400">({selectedOrderFullView.statusSinceStr})</div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="py-2.5 flex items-center justify-between gap-2">
+                          <span className="text-gray-600 font-medium">Platform</span>
+                          <span className="font-bold text-[#ff5a00] text-sm">{selectedOrderFullView.platformName}</span>
+                        </div>
+                        <div className="py-2.5 flex items-center justify-between gap-2">
+                          <span className="text-gray-600 font-medium">Global Entity ID</span>
+                          <span className="font-mono text-gray-700">{selectedOrderFullView.globalEntityId}</span>
+                        </div>
+                        <div className="py-2.5 flex items-center justify-between gap-2">
+                          <span className="text-gray-600 font-medium">Vendor code</span>
+                          <span className="font-mono text-gray-700">{selectedOrderFullView.vendorCode}</span>
+                        </div>
+                        <div className="py-2.5 flex items-center justify-between gap-2">
+                          <span className="text-gray-600 font-medium">Vendor Order no.</span>
+                          <span className="font-mono text-gray-700">{selectedOrderFullView.vendorOrderNo}</span>
+                        </div>
+                        <div className="py-2.5 flex items-center justify-between gap-2">
+                          <span className="text-gray-600 font-medium">Order Value</span>
+                          <span className="font-semibold text-gray-900">{selectedOrderFullView.orderValue}</span>
+                        </div>
+                        <div className="py-2.5 flex items-center justify-between gap-2">
+                          <span className="text-gray-600 font-medium">Manhattan distance</span>
+                          <span className="font-semibold text-gray-800">{selectedOrderFullView.distance}</span>
+                        </div>
+                        <div className="py-2.5 flex items-center justify-between gap-2">
+                          <span className="text-gray-600 font-medium">Prep duration (TES)</span>
+                          <span className="font-semibold text-gray-800">{selectedOrderFullView.prepDurationStr}</span>
+                        </div>
+                        <div className="py-2.5 flex items-center justify-between gap-2">
+                          <span className="text-gray-600 font-medium">Courier delay</span>
+                          <span className="font-semibold text-gray-800">{selectedOrderFullView.courierDelayStr}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
 
-                {/* Modal Scrollable Body */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-white text-sm">
-                  {detailModalTab === "Deliveries" && (
-                    <div className="space-y-5">
-                      {/* Accepted & Assigned Couriers Summary */}
-                      <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/70 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold uppercase tracking-wider text-gray-700">
-                            سجل الطيارين على الأوردر (Riders Assignment &amp; Acceptance)
-                          </span>
-                          <span className="text-xs text-gray-500">
-                            الطيار الحالي: <strong className="text-blue-700">{selectedOrderFullView.courier}</strong>
-                          </span>
+                  {/* CENTER COLUMN: Pick up and Drop off + Deliveries / Issues / Routes / Order Items */}
+                  <div className="lg:col-span-6 space-y-4">
+                    {/* Pick up and Drop off Card */}
+                    <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5">
+                          <h3 className="text-base font-bold text-gray-900">Pick up and Drop off</h3>
+                          {selectedOrderFullView.customerUpdatedStr &&
+                            selectedOrderFullView.customerUpdatedStr !== "-" && (
+                              <span className="inline-flex items-center gap-1.5 text-[11px] text-gray-600">
+                                <span className="w-2 h-2 rounded-full bg-red-500" />
+                                Customer details updated: {selectedOrderFullView.customerUpdatedStr}
+                              </span>
+                            )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {/* Vendor Address Card */}
+                        <div className="p-3.5 rounded-lg border border-gray-200 bg-white space-y-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-gray-900 text-sm">Vendor Address</span>
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard("vendorAddr", selectedOrderFullView.pickupAddress)}
+                              className="text-blue-600 hover:text-blue-800 text-xs font-semibold"
+                              title="Copy Vendor Address"
+                            >
+                              {copiedText === "vendorAddr" ? "✓" : "⧉"}
+                            </button>
+                          </div>
+                          <div className="text-blue-600 font-semibold truncate" title={selectedOrderFullView.vendorName}>
+                            🏪 {selectedOrderFullView.vendorName}
+                          </div>
+                          <div className="text-gray-700 leading-relaxed">
+                            📍 {selectedOrderFullView.pickupAddress}
+                          </div>
+                          {selectedOrderFullView.pickupAreaBanner && (
+                            <div className="px-2.5 py-1.5 rounded bg-blue-50 text-blue-900 font-medium text-[11px]">
+                              📋 {selectedOrderFullView.pickupAreaBanner}
+                            </div>
+                          )}
                         </div>
 
-                        {selectedOrderFullView.ridersHistory.length === 0 ? (
-                          <div className="text-xs text-gray-500">
-                            {selectedOrderFullView.isLoadedFromApi
-                              ? "لا يوجد سجل تبديل طيارين إضافي لهذا الأوردر."
-                              : "⏳ جاري تحميل سجل الطيارين وحركات التوصيل..."}
+                        {/* Customer Address Card */}
+                        <div className="p-3.5 rounded-lg border border-gray-200 bg-white space-y-2 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-gray-900 text-sm">Customer Address</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                copyToClipboard(
+                                  "custAddr",
+                                  `${selectedOrderFullView.customerName} | ${selectedOrderFullView.customerPhone} | ${selectedOrderFullView.dropoffAddress}`
+                                )
+                              }
+                              className="text-blue-600 hover:text-blue-800 text-xs font-semibold"
+                              title="Copy Customer Info"
+                            >
+                              {copiedText === "custAddr" ? "✓" : "⧉"}
+                            </button>
                           </div>
-                        ) : (
-                          <div className="overflow-x-auto bg-white rounded-lg border border-gray-200">
+
+                          <div className="flex flex-wrap items-center justify-between gap-1.5">
+                            <span className="font-bold text-gray-900">
+                              🏠 {selectedOrderFullView.customerName}
+                            </span>
+                            {selectedOrderFullView.customerPhone ? (
+                              <span className="inline-flex items-center gap-1 font-mono font-bold text-gray-900">
+                                📞 {selectedOrderFullView.customerPhone}
+                                <button
+                                  type="button"
+                                  onClick={() => copyToClipboard("phone", selectedOrderFullView.customerPhone)}
+                                  className="text-blue-600 hover:text-blue-800 px-1"
+                                  title="Copy Phone"
+                                >
+                                  {copiedText === "phone" ? "✓" : "⧉"}
+                                </button>
+                              </span>
+                            ) : !selectedOrderFullView.isLoadedFromApi ? (
+                              <span className="text-emerald-700 font-semibold animate-pulse">⏳ جاري الجلب...</span>
+                            ) : (
+                              <span className="text-gray-400">بدون هاتف</span>
+                            )}
+                          </div>
+
+                          <div className="text-gray-700 leading-relaxed">
+                            📍 {selectedOrderFullView.dropoffAddress}
+                          </div>
+
+                          <div className="pt-1.5 border-t border-gray-100 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-gray-600">
+                            <span>
+                              العمارة: <strong className="text-gray-900">{selectedOrderFullView.building}</strong>
+                            </span>
+                            <span>
+                              الدور: <strong className="text-gray-900">{selectedOrderFullView.floor}</strong>
+                            </span>
+                            <span>
+                              الشقة: <strong className="text-gray-900">{selectedOrderFullView.apartment}</strong>
+                            </span>
+                            <span>
+                              Intercom/المدخل:{" "}
+                              <strong className="text-gray-900">
+                                {selectedOrderFullView.intercom}/{selectedOrderFullView.entrance}
+                              </strong>
+                            </span>
+                          </div>
+
+                          {selectedOrderFullView.deliveryNote && selectedOrderFullView.deliveryNote !== "NA" && (
+                            <div className="px-2 py-1 rounded bg-amber-50 text-amber-900 text-[11px]">
+                              📝 {selectedOrderFullView.deliveryNote}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Hurrier Deadline Progress Bar */}
+                      <div className="flex items-center gap-2 pt-1">
+                        <span className="w-7 h-7 rounded bg-gray-100 border border-gray-200 flex items-center justify-center text-xs">
+                          🏪
+                        </span>
+                        <div className="flex-1 h-7 rounded-full bg-[#d32f2f] text-white text-xs font-bold flex items-center justify-end px-4 shadow-inner">
+                          Deadline {selectedOrderFullView.deadline} •
+                        </div>
+                        <span className="w-7 h-7 rounded bg-gray-100 border border-gray-200 flex items-center justify-center text-xs">
+                          🏠
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Deliveries | Issues | Routes | Order Items Section */}
+                    <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+                      <div className="px-4 border-b border-gray-200 flex items-center gap-6 text-sm font-semibold bg-white">
+                        {[
+                          { id: "Deliveries", label: `Deliveries ${selectedOrderFullView.structuredDeliveries.length}` },
+                          { id: "Issues", label: `Issues ${selectedOrderFullView.orderIssues.length || ""}`.trim() },
+                          { id: "Routes", label: "Routes" },
+                          { id: "Order Items", label: `Order Items ${selectedOrderFullView.items.length}` }
+                        ].map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => setDetailModalTab(t.id)}
+                            className={`py-3 border-b-2 transition-colors ${
+                              detailModalTab === t.id
+                                ? "border-blue-600 text-blue-600"
+                                : "border-transparent text-gray-600 hover:text-gray-900"
+                            }`}
+                          >
+                            {t.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="p-4 space-y-4">
+                        {detailModalTab === "Deliveries" && (
+                          <div className="space-y-4">
+                            {selectedOrderFullView.structuredDeliveries.map((del) => (
+                              <div key={del.id} className="border border-gray-200 rounded-lg overflow-hidden">
+                                {/* Delivery Metadata Strip */}
+                                <div className="px-4 py-2.5 bg-[#eef3fc] border-b border-blue-100 grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+                                  <div>
+                                    <div className="text-gray-500 text-[11px]">ID</div>
+                                    <div className="font-mono font-bold text-gray-900 truncate" title={String(del.id)}>
+                                      {del.id}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div className="text-gray-500 text-[11px]">Status</div>
+                                    <div className="font-bold text-gray-900">{del.status}</div>
+                                  </div>
+                                  <div>
+                                    <div className="text-gray-500 text-[11px]">Zones</div>
+                                    <div className="font-semibold text-gray-800 truncate" title={del.zones}>
+                                      {del.zones}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div className="text-gray-500 text-[11px]">Courier</div>
+                                    <div className="font-semibold text-blue-600 truncate" title={del.courier}>
+                                      {del.courier}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div className="text-gray-500 text-[11px]">Utilization</div>
+                                    <div className="font-bold text-gray-900">{del.utilization}</div>
+                                  </div>
+                                </div>
+
+                                {/* Exact Hurrier Transitions Table */}
+                                {del.events.length === 0 ? (
+                                  <div className="p-6 text-center text-xs text-gray-500">
+                                    {selectedOrderFullView.isLoadedFromApi
+                                      ? "لا توجد أحداث مسجلة لهذه التوصيلة."
+                                      : "⏳ جاري سحب كافة أحداث التوصيلة (Queued, Dispatched, Accepted, Near Pickup...) من Hurrier..."}
+                                  </div>
+                                ) : (
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-left text-xs whitespace-nowrap">
+                                      <thead>
+                                        <tr className="border-b border-gray-200 text-gray-600 font-bold text-[10px] uppercase bg-white">
+                                          <th className="py-2.5 px-3">TIME</th>
+                                          <th className="py-2.5 px-3">EVENT</th>
+                                          <th className="py-2.5 px-3">COURIER</th>
+                                          <th className="py-2.5 px-2.5">EST.ACCEPT TIME</th>
+                                          <th className="py-2.5 px-2.5">EST.PICKUP ARRIVAL</th>
+                                          <th className="py-2.5 px-2.5">EST.PICKUP DEPARTURE</th>
+                                          <th className="py-2.5 px-2.5">EST.DROPOFF ARRIVAL</th>
+                                          <th className="py-2.5 px-2.5">EST.DROPOFF DEPARTURE</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-gray-100">
+                                        {del.events.map((ev) => (
+                                          <tr key={ev.key} className="hover:bg-gray-50/80">
+                                            <td className="py-2.5 px-3 font-mono text-gray-800">{ev.timeSec}</td>
+                                            <td className="py-2.5 px-3">
+                                              <div className="flex items-center gap-2">
+                                                <span
+                                                  className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                                                    ev.isRemoved
+                                                      ? "bg-red-500"
+                                                      : ev.isAccepted
+                                                      ? "bg-emerald-500"
+                                                      : "bg-blue-600"
+                                                  }`}
+                                                />
+                                                <div>
+                                                  <div
+                                                    className={`font-bold ${
+                                                      ev.isRemoved ? "text-red-600" : "text-blue-600"
+                                                    }`}
+                                                  >
+                                                    {ev.eventLabel}
+                                                  </div>
+                                                  {ev.subLabel && (
+                                                    <div className="text-[11px] text-gray-500">{ev.subLabel}</div>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            </td>
+                                            <td className="py-2.5 px-3 text-blue-600 font-medium max-w-[150px] truncate" title={ev.courierName}>
+                                              {ev.courierName}
+                                            </td>
+                                            <td className="py-2.5 px-2.5 font-mono text-gray-700">{ev.estAcceptTime}</td>
+                                            <td className="py-2.5 px-2.5 font-mono text-gray-700">{ev.estPickupArrival}</td>
+                                            <td className="py-2.5 px-2.5 font-mono text-gray-700">{ev.estPickupDeparture}</td>
+                                            <td className="py-2.5 px-2.5 font-mono text-gray-700">{ev.estDropoffArrival}</td>
+                                            <td className="py-2.5 px-2.5 font-mono text-gray-700">
+                                              <div>{ev.estDropoffDeparture}</div>
+                                              {ev.estDropoffDelta && ev.estDropoffDeparture !== "-" && (
+                                                <div className="text-[10px] text-gray-500">({ev.estDropoffDelta})</div>
+                                              )}
+                                            </td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {detailModalTab === "Issues" && (
+                          <div className="space-y-2 text-xs">
+                            {selectedOrderFullView.orderIssues.length === 0 ? (
+                              <div className="py-6 text-center text-gray-500">
+                                لا توجد Issues مسجلة على هذا الأوردر.
+                              </div>
+                            ) : (
+                              selectedOrderFullView.orderIssues.map((iss, i) => (
+                                <div key={iss.id || i} className="p-3 rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-between">
+                                  <div>
+                                    <div className="font-bold text-gray-900">{iss.reason || iss.type || iss.title || "Issue"}</div>
+                                    <div className="text-gray-500 mt-0.5">{formatReadableTimestamp(iss.created_at)}</div>
+                                  </div>
+                                  <span className="px-2.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 font-semibold">
+                                    {iss.status || "Open"}
+                                  </span>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        )}
+
+                        {detailModalTab === "Routes" && (
+                          <div className="space-y-3 text-xs">
+                            <div className="p-3.5 rounded-lg border border-gray-200 bg-gray-50 space-y-2">
+                              <div className="flex items-start gap-2">
+                                <span className="font-bold text-blue-700">1. Pickup:</span>
+                                <span className="text-gray-800">{selectedOrderFullView.pickupAddress}</span>
+                              </div>
+                              <div className="flex items-start gap-2">
+                                <span className="font-bold text-emerald-700">2. Dropoff:</span>
+                                <span className="text-gray-800">{selectedOrderFullView.dropoffAddress}</span>
+                              </div>
+                              <div className="pt-2 border-t border-gray-200 flex items-center gap-4 text-gray-600">
+                                <span>Distance: <strong>{selectedOrderFullView.distance}</strong></span>
+                                <span>Zones: <strong>{selectedOrderFullView.zone}</strong></span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {detailModalTab === "Order Items" && (
+                          <div className="border border-gray-200 rounded-lg overflow-hidden">
                             <table className="w-full text-left text-xs">
                               <thead>
-                                <tr className="border-b border-gray-200 text-gray-500 bg-gray-50">
-                                  <th className="py-2 px-3">COURIER</th>
-                                  <th className="py-2 px-3">STATUS</th>
-                                  <th className="py-2 px-3">DISPATCHED</th>
-                                  <th className="py-2 px-3">ACCEPTED</th>
-                                  <th className="py-2 px-3">PICKED UP</th>
-                                  <th className="py-2 px-3">REMOVED</th>
+                                <tr className="bg-gray-50 border-b border-gray-200 text-gray-500 font-semibold">
+                                  <th className="py-2.5 px-4">QTY</th>
+                                  <th className="py-2.5 px-4">ITEM</th>
+                                  <th className="py-2.5 px-4 text-right">PRICE</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-100">
-                                {selectedOrderFullView.ridersHistory.map((r, i) => (
-                                  <tr key={i}>
-                                    <td className="py-2 px-3 font-semibold text-gray-800">{r.courierName}</td>
-                                    <td className="py-2 px-3">
-                                      {r.accepted ? (
-                                        <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
-                                          Accepted
-                                        </span>
-                                      ) : (
-                                        <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200 font-semibold">
-                                          Assigned Only
-                                        </span>
-                                      )}
+                                {selectedOrderFullView.items.map((it, idx) => (
+                                  <tr key={idx}>
+                                    <td className="py-3 px-4 font-bold text-gray-800">{it.quantity || it.qty || 1}x</td>
+                                    <td className="py-3 px-4 text-gray-800">{it.name || it.title || "Item"}</td>
+                                    <td className="py-3 px-4 text-right font-semibold text-gray-900">
+                                      {typeof it.price === "number" ? formatMoney(it.price, "EGP") : it.price || "-"}
                                     </td>
-                                    <td className="py-2 px-3 font-mono">{r.dispatchedAt}</td>
-                                    <td className="py-2 px-3 font-mono text-emerald-700 font-semibold">{r.acceptedAt}</td>
-                                    <td className="py-2 px-3 font-mono">{r.pickedUpAt}</td>
-                                    <td className="py-2 px-3 font-mono text-red-600">{r.removedAt}</td>
                                   </tr>
                                 ))}
                               </tbody>
@@ -2565,185 +2852,65 @@
                           </div>
                         )}
                       </div>
-
-                      {/* Chronological Transitions Timeline */}
-                      <div className="p-4 rounded-xl border border-gray-200 bg-white space-y-3">
-                        <div className="text-xs font-bold uppercase tracking-wider text-gray-700">
-                          حركات التوصيل بالثواني (Delivery Transitions Timeline)
-                        </div>
-                        {selectedOrderFullView.allEvents.length === 0 ? (
-                          <div className="text-xs text-gray-500 py-4 text-center">
-                            {selectedOrderFullView.isLoadedFromApi
-                              ? "لا توجد حركات مسجلة لهذا الأوردر."
-                              : "⏳ جاري سحب الحركات من Hurrier..."}
-                          </div>
-                        ) : (
-                          <div className="space-y-2.5">
-                            {selectedOrderFullView.allEvents.map((ev) => (
-                              <div key={ev.key} className="timeline-row flex items-start gap-3">
-                                <div className="timeline-line pt-1">
-                                  <span
-                                    className={`block w-3 h-3 rounded-full ${
-                                      ev.isAccepted
-                                        ? "bg-emerald-500"
-                                        : ev.isRemoved
-                                        ? "bg-red-500"
-                                        : "bg-blue-500"
-                                    }`}
-                                  />
-                                </div>
-                                <div className="flex-1 flex flex-wrap items-center justify-between gap-2 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200 text-xs">
-                                  <div>
-                                    <span className="font-bold text-gray-900">{ev.eventLabel}</span>
-                                    {ev.courierName && ev.courierName !== "-" && (
-                                      <span className="ml-2 text-blue-700 font-medium">({ev.courierName})</span>
-                                    )}
-                                    {ev.subLabel && <span className="ml-2 text-gray-500">• {ev.subLabel}</span>}
-                                  </div>
-                                  <span className="font-mono font-semibold text-gray-700">{ev.timeSec}</span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
                     </div>
-                  )}
+                  </div>
 
-                  {detailModalTab === "Customer & Address" && (
-                    <div className="space-y-5">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {/* Customer Card */}
-                        <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/20 space-y-2.5">
-                          <div className="text-xs font-bold text-blue-700">
-                            بيانات العميل (CUSTOMER DETAILS)
-                          </div>
-                          <div className="grid grid-cols-2 gap-2 text-xs">
-                            <div>
-                              <span className="text-gray-500">الاسم: </span>
-                              <strong className="text-gray-900">{selectedOrderFullView.customerName}</strong>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-gray-500">الهاتف: </span>
-                              {selectedOrderFullView.customerPhone ? (
-                                <>
-                                  <strong className="text-emerald-700 font-mono">
-                                    {selectedOrderFullView.customerPhone}
-                                  </strong>
-                                  <button
-                                    type="button"
-                                    onClick={() => copyToClipboard("phone", selectedOrderFullView.customerPhone)}
-                                    className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[11px] font-bold hover:bg-emerald-200"
-                                  >
-                                    {copiedText === "phone" ? "✓" : "نسخ"}
-                                  </button>
-                                </>
-                              ) : !selectedOrderFullView.isLoadedFromApi ? (
-                                <span className="text-emerald-700 font-semibold animate-pulse">
-                                  ⏳ جاري الجلب...
-                                </span>
-                              ) : (
-                                <span className="text-gray-500 font-medium">غير متاح من Hurrier</span>
-                              )}
-                            </div>
-                            <div>
-                              <span className="text-gray-500">العمارة: </span>
-                              <strong className="text-gray-900">{selectedOrderFullView.building}</strong>
-                            </div>
-                            <div>
-                              <span className="text-gray-500">الدور: </span>
-                              <strong className="text-gray-900">{selectedOrderFullView.floor}</strong>
-                            </div>
-                            <div>
-                              <span className="text-gray-500">الشقة: </span>
-                              <strong className="text-gray-900">{selectedOrderFullView.apartment}</strong>
-                            </div>
-                            <div>
-                              <span className="text-gray-500">Intercom / المدخل: </span>
-                              <strong className="text-gray-900">
-                                {selectedOrderFullView.intercom} / {selectedOrderFullView.entrance}
-                              </strong>
-                            </div>
-                          </div>
-                          <div className="pt-2 border-t border-blue-100 text-xs space-y-1">
-                            <div>
-                              <span className="text-gray-500">العنوان: </span>
-                              <strong className="text-gray-900">{selectedOrderFullView.dropoffAddress}</strong>
-                            </div>
-                            {selectedOrderFullView.deliveryNote && selectedOrderFullView.deliveryNote !== "NA" && (
-                              <div>
-                                <span className="text-gray-500">ملاحظات العنوان: </span>
-                                <span className="text-amber-800 font-medium">{selectedOrderFullView.deliveryNote}</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Vendor & Value Card */}
-                        <div className="p-4 rounded-xl border border-gray-200 bg-white space-y-2.5 text-xs">
-                          <div className="text-xs font-bold text-gray-800">
-                            بيانات المطعم / الفرع (VENDOR &amp; VALUE)
-                          </div>
-                          <div>
-                            <span className="text-gray-500">الفرع: </span>
-                            <strong className="text-gray-900">
-                              {selectedOrderFullView.vendorName} (VO #{selectedOrderFullView.vendorOrderNo})
-                            </strong>
-                          </div>
-                          <div>
-                            <span className="text-gray-500">قيمة الأوردر: </span>
-                            <strong className="text-gray-900">{selectedOrderFullView.orderValue}</strong>
-                            <span className="mx-2 text-gray-300">•</span>
-                            <span className="text-gray-500">المسافة: </span>
-                            <strong className="text-gray-900">{selectedOrderFullView.distance}</strong>
-                          </div>
-                          <div>
-                            <span className="text-gray-500">عنوان الاستلام: </span>
-                            <span className="text-gray-800 font-medium">{selectedOrderFullView.pickupAddress}</span>
-                          </div>
-                        </div>
+                  {/* RIGHT COLUMN: Time Checks + Yellow Notes Card */}
+                  <div className="lg:col-span-3 space-y-4">
+                    {/* Time Checks Card */}
+                    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
+                      <div className="px-4 py-3 bg-gray-50/70 border-b border-gray-200 flex items-center gap-2">
+                        <span className="text-amber-500">🕒</span>
+                        <h3 className="text-sm font-bold text-gray-900">Time Checks</h3>
                       </div>
-
-                      {/* 7 Timestamps Grid */}
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="px-4 divide-y divide-gray-100 text-xs">
                         {selectedOrderFullView.timeChecks.map((tc) => (
-                          <div key={tc.label} className="p-3 rounded-xl border border-gray-200 bg-gray-50/60">
-                            <div className="text-xs text-gray-500">{tc.label}</div>
-                            <div className="text-xs font-bold text-gray-900 mt-1">{tc.value}</div>
+                          <div key={tc.label} className="py-2.5 flex items-center justify-between gap-2">
+                            <span className="text-gray-700 font-medium">{tc.label}</span>
+                            <span className="text-gray-500 font-semibold text-right">{tc.value}</span>
                           </div>
                         ))}
                       </div>
                     </div>
-                  )}
 
-                  {detailModalTab === "Order Items" && (
-                    <div className="border border-gray-200 rounded-xl overflow-hidden">
-                      <table className="w-full text-left text-xs">
-                        <thead>
-                          <tr className="bg-gray-50 border-b border-gray-200 text-gray-500 font-semibold">
-                            <th className="py-2.5 px-4">QTY</th>
-                            <th className="py-2.5 px-4">ITEM</th>
-                            <th className="py-2.5 px-4 text-right">PRICE</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                          {selectedOrderFullView.items.map((it, idx) => (
-                            <tr key={idx}>
-                              <td className="py-3 px-4 font-bold text-gray-800">{it.quantity || it.qty || 1}x</td>
-                              <td className="py-3 px-4 text-gray-800">{it.name || it.title || "Item"}</td>
-                              <td className="py-3 px-4 text-right font-semibold text-gray-900">
-                                {typeof it.price === "number" ? formatMoney(it.price, "EGP") : it.price || "-"}
-                              </td>
-                            </tr>
+                    {/* Yellow Notes Card (Read-Only) */}
+                    <div className="bg-[#fef9e7] rounded-lg border border-[#f9e79f] p-4 shadow-sm space-y-3">
+                      <div className="flex items-center justify-between border-b border-[#f7dc6f] pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-amber-600">💬</span>
+                          <h3 className="text-base font-bold text-gray-900">Notes</h3>
+                        </div>
+                        <span className="text-[11px] font-semibold text-amber-800">
+                          {selectedOrderFullView.notes.length} note(s)
+                        </span>
+                      </div>
+
+                      {selectedOrderFullView.notes.length === 0 ? (
+                        <div className="text-xs text-gray-500 py-2">
+                          {selectedOrderFullView.isLoadedFromApi
+                            ? "لا توجد ملاحظات مسجلة على هذا الأوردر."
+                            : "⏳ جاري جلب ملاحظات الديسباتشر..."}
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {selectedOrderFullView.notes.map((note) => (
+                            <div
+                              key={note.id}
+                              className="pb-3 border-b border-[#f7dc6f] last:border-b-0 last:pb-0 space-y-1 text-xs"
+                            >
+                              <div className="font-bold text-gray-900 break-all">{note.author}</div>
+                              <div className="text-[11px] font-semibold text-gray-600">{note.createdAt}</div>
+                              <p className="text-gray-800 leading-relaxed whitespace-pre-wrap pt-1">{note.text}</p>
+                            </div>
                           ))}
-                        </tbody>
-                      </table>
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </div>
 
                 {/* Modal Footer */}
-                <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
+                <div className="px-6 py-3 bg-white border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
                   <span>View-Only Mode (No actions permitted)</span>
                   <button
                     type="button"
