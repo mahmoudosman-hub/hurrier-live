@@ -21,9 +21,8 @@
   <script type="text/babel">
     const { useState, useMemo, useEffect, useCallback, useRef } = React;
 
-    // --- PRE-CONFIGURED PUBLIC GIST ID (READ-ONLY VIEW FOR EMPLOYEES) ---
-    const DEFAULT_GIST_OWNER = "mahmoudosman-hub";
-    const DEFAULT_GIST_ID = "cccb6283d24d991ae2656411758acb72";
+    // --- PRE-CONFIGURED FIREBASE REALTIME DATABASE (READ-ONLY VIEW FOR EMPLOYEES) ---
+    const DEFAULT_FIREBASE_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
 
     // --- CRISP INLINE SVG ICONS ---
     const IconSvg = ({ children, size = 16, className = "" }) => (
@@ -264,61 +263,6 @@
       { label: 'Dispatcher Dashboard', id: 'Dispatcher Dashboard', className: 'mt-6' },
     ];
 
-    function buildGitHubGistCollectorScript(gistId, gistToken) {
-      const safeGistId = (gistId || DEFAULT_GIST_ID).trim();
-      const safeToken = (gistToken || 'YOUR_GITHUB_GIST_TOKEN').trim();
-      return `// شغّل الكود ده في Console تاب Hurrier المفتوح عندك (يرفع التحديثات لـ GitHub Gist بأمان)
-(function startHurrierGitHubRelay() {
-  const GIST_ID = "${safeGistId}";
-  const GITHUB_TOKEN = "${safeToken}";
-  const ZONES = "starting_point_id[]=10022&starting_point_id[]=10163&starting_point_id[]=10162&starting_point_id[]=10004&starting_point_id[]=10181&starting_point_id[]=10125&starting_point_id[]=10182&starting_point_id[]=10183&starting_point_id[]=10018&starting_point_id[]=10139&starting_point_id[]=10074";
-  const BASE = "https://eg.me.logisticsbackoffice.com/api";
-
-  async function syncToGitHub() {
-    try {
-      const opts = { credentials: "include", headers: { "Accept": "application/json" } };
-      const [stats, active, queued, dispatched, actionable, preorder, dispatchers] = await Promise.all([
-        fetch(\`\${BASE}/dispatcher-dashboard/stats?\${ZONES}\`, opts).then(r => r.json()),
-        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/active?\${ZONES}&page=1&per_page=100\`, opts).then(r => r.json()),
-        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/queued?\${ZONES}&page=1&per_page=100\`, opts).then(r => r.json()),
-        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/dispatched?\${ZONES}&page=1&per_page=100\`, opts).then(r => r.json()),
-        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/actionable?\${ZONES}&page=1&per_page=100\`, opts).then(r => r.json()),
-        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/preorder?\${ZONES}&page=1&per_page=100\`, opts).then(r => r.json()),
-        fetch(\`\${BASE}/issue-service/dispatcher_dashboard\`, opts).then(r => r.json()).catch(() => [])
-      ]);
-
-      const payload = JSON.stringify({
-        stats, active, queued, dispatched, actionable, preorder, dispatchers,
-        syncedAt: new Date().toISOString()
-      });
-
-      const ghRes = await fetch(\`https://api.github.com/gists/\${GIST_ID}\`, {
-        method: "PATCH",
-        headers: {
-          "Accept": "application/vnd.github+json",
-          "Authorization": \`Bearer \${GITHUB_TOKEN}\`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          files: {
-            "hurrier-live.json": { content: payload }
-          }
-        })
-      });
-
-      if (!ghRes.ok) throw new Error("GitHub API " + ghRes.status);
-      console.log("[Hurrier -> GitHub] Synced at", new Date().toLocaleTimeString());
-    } catch (err) {
-      console.warn("[Hurrier -> GitHub] Sync error:", err.message);
-    }
-  }
-
-  syncToGitHub();
-  window.__hurrierGitHubTimer && clearInterval(window.__hurrierGitHubTimer);
-  window.__hurrierGitHubTimer = setInterval(syncToGitHub, 4000);
-})();`;
-    }
-
     function formatRelativeDeadline(isoDate, isPreorder = false) {
       if (!isoDate) return '-';
       const target = new Date(isoDate);
@@ -415,9 +359,9 @@
     };
 
     function App() {
-      const initialGistId = useMemo(() => {
+      const initialFirebaseUrl = useMemo(() => {
         const params = new URLSearchParams(window.location.search);
-        return params.get('gist') || DEFAULT_GIST_ID;
+        return (params.get('db') || DEFAULT_FIREBASE_URL).replace(/\/+$/, '');
       }, []);
 
       const [activeTab, setActiveTab] = useState('Active');
@@ -441,20 +385,16 @@
         Active: 458
       });
 
-      const [gistId, setGistId] = useState(initialGistId);
-      const [gistToken, setGistToken] = useState(() => {
-        try { return localStorage.getItem('hurrier_gh_reader_token') || ''; } catch { return ''; }
-      });
-      const cachedGistRawUrlRef = useRef('');
-      const lastGistEtagRef = useRef('');
+      const [firebaseUrl, setFirebaseUrl] = useState(initialFirebaseUrl);
+      const lastSyncedAtRef = useRef('');
       const [syncMode, setSyncMode] = useState('live');
       const [isAutoRefresh, setIsAutoRefresh] = useState(true);
-      const [refreshIntervalSec, setRefreshIntervalSec] = useState(5);
-      const [countdown, setCountdown] = useState(5);
+      const [refreshIntervalSec, setRefreshIntervalSec] = useState(2);
+      const [countdown, setCountdown] = useState(2);
       const [syncStatus, setSyncStatus] = useState('idle');
       const [syncError, setSyncError] = useState('');
       const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
-      const [modalTab, setModalTab] = useState('github');
+      const [modalTab, setModalTab] = useState('firebase');
       const [pasteTargetTab, setPasteTargetTab] = useState('Active');
       const [rawJsonInput, setRawJsonInput] = useState('');
       const [copiedSnippet, setCopiedSnippet] = useState(null);
@@ -576,66 +516,46 @@
         setLastRefreshed(now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       }, []);
 
-      const fetchLiveFeed = useCallback(async () => {
-        setSyncStatus('syncing');
+      const fetchLiveFeed = useCallback(async (forceFull = false) => {
         setSyncError('');
         try {
-          const cleanId = gistId.trim();
-          if (!cleanId) throw new Error('أدخل Gist ID أولاً');
+          const cleanBaseUrl = firebaseUrl.trim().replace(/\/+$/, '');
+          if (!cleanBaseUrl) throw new Error('أدخل رابط Firebase Realtime Database أولاً');
 
-          const reqHeaders = { Accept: 'application/vnd.github+json' };
-          if (gistToken.trim()) {
-            reqHeaders['Authorization'] = `Bearer ${gistToken.trim()}`;
-          }
-          if (lastGistEtagRef.current) {
-            reqHeaders['If-None-Match'] = lastGistEtagRef.current;
-          }
-
-          const apiRes = await fetch(`https://api.github.com/gists/${cleanId}`, {
-            headers: reqHeaders,
-            cache: 'no-store'
-          });
-
-          if (apiRes.status === 304) {
-            setSyncStatus('connected');
-            return;
-          }
-
-          let data = null;
-          if (apiRes.ok) {
-            const newEtag = apiRes.headers.get('ETag');
-            if (newEtag) lastGistEtagRef.current = newEtag;
-            const gistMeta = await apiRes.json();
-            const fileEntry =
-              gistMeta.files?.['hurrier-live.json'] || Object.values(gistMeta.files || {})[0];
-            if (!fileEntry || !fileEntry.content) {
-              throw new Error('ملف hurrier-live.json غير موجود داخل الـ Gist');
+          // فحص بصمة التحديث (28 بايت فقط) كل ثانيتين لتجنب تحميل البيانات كاملة إلا عند وجود جديد
+          if (!forceFull && lastSyncedAtRef.current) {
+            const checkRes = await fetch(`${cleanBaseUrl}/hurrier_live/syncedAt.json`, { cache: 'no-store' });
+            if (checkRes.ok) {
+              const remoteSyncedAt = await checkRes.json();
+              if (remoteSyncedAt && remoteSyncedAt === lastSyncedAtRef.current) {
+                setSyncStatus('connected');
+                return;
+              }
             }
-            if (fileEntry.raw_url) {
-              cachedGistRawUrlRef.current = fileEntry.raw_url.replace(/\/raw\/[a-f0-9]{40}\//, '/raw/');
-            }
-            data = JSON.parse(fileEntry.content);
-          } else if (apiRes.status === 403 || apiRes.status === 429) {
-            const fallbackUrl =
-              cachedGistRawUrlRef.current ||
-              `https://gist.githubusercontent.com/${DEFAULT_GIST_OWNER}/${cleanId}/raw/hurrier-live.json`;
-            const rawRes = await fetch(`${fallbackUrl}?t=${Date.now()}`, { cache: 'no-store' });
-            if (!rawRes.ok) throw new Error(`GitHub Fallback HTTP ${rawRes.status}`);
-            data = await rawRes.json();
-          } else {
-            throw new Error(`GitHub Gist HTTP ${apiRes.status}`);
           }
 
+          setSyncStatus('syncing');
+          const res = await fetch(`${cleanBaseUrl}/hurrier_live.json`, { cache: 'no-store' });
+          if (!res.ok) throw new Error(`Firebase HTTP ${res.status}`);
+          const data = await res.json();
+
+          if (!data || Object.keys(data).length === 0) {
+            throw new Error('قاعدة البيانات فارغة حالياً — في انتظار إرسال أول تحديث من صفحة Hurrier');
+          }
+
+          if (data.syncedAt) {
+            lastSyncedAtRef.current = data.syncedAt;
+          }
           applyHurrierBundle(data);
           setSyncStatus('connected');
         } catch (err) {
           setSyncStatus('error');
           setSyncError(err?.message || 'في انتظار وصول أول تحديث من متصفح Hurrier...');
         }
-      }, [gistId, gistToken, applyHurrierBundle]);
+      }, [firebaseUrl, applyHurrierBundle]);
 
       useEffect(() => {
-        fetchLiveFeed();
+        fetchLiveFeed(true);
       }, [fetchLiveFeed]);
 
       useEffect(() => {
@@ -644,7 +564,7 @@
         const timer = setInterval(() => {
           setCountdown((prev) => {
             if (prev <= 1) {
-              fetchLiveFeed();
+              fetchLiveFeed(false);
               return refreshIntervalSec;
             }
             return prev - 1;
@@ -678,11 +598,6 @@
         return base;
       }, []);
 
-      const generatedGistScript = useMemo(
-        () => buildGitHubGistCollectorScript(gistId, gistToken),
-        [gistId, gistToken]
-      );
-
       const handleApplyPastedJson = () => {
         try {
           const parsed = JSON.parse(rawJsonInput);
@@ -703,7 +618,7 @@
       };
 
       const handleRefresh = () => {
-        fetchLiveFeed();
+        fetchLiveFeed(true);
         setCountdown(refreshIntervalSec);
       };
 
@@ -1375,10 +1290,10 @@
                     <ShieldCheckIcon size={20} className="text-emerald-600" />
                     <div>
                       <h2 className="text-base font-bold text-gray-900">
-                        البث المباشر عبر GitHub (Remote Read-Only Sync)
+                        البث اللحظي عبر Firebase (تحديث كل ثانيتين)
                       </h2>
                       <p className="text-xs text-gray-500">
-                        مربوط تلقائياً بالـ Gist الخاص بك — التوكن لا يظهر للموظفين
+                        مربوط بقاعدة بيانات Firebase للقراءة فقط للموظفين بدون قيود سرعة
                       </p>
                     </div>
                   </div>
@@ -1394,14 +1309,14 @@
                 <div className="flex border-b border-gray-200 bg-white px-6 gap-6 text-xs font-semibold">
                   <button
                     type="button"
-                    onClick={() => setModalTab('github')}
+                    onClick={() => setModalTab('firebase')}
                     className={`py-3 border-b-2 transition-colors ${
-                      modalTab === 'github'
+                      modalTab === 'firebase'
                         ? 'border-blue-600 text-blue-600'
                         : 'border-transparent text-gray-500 hover:text-gray-800'
                     }`}
                   >
-                    1. الربط عبر GitHub
+                    1. حالة الربط اللحظي (Firebase)
                   </button>
                   <button
                     type="button"
@@ -1417,63 +1332,31 @@
                 </div>
 
                 <div className="p-6 space-y-4 text-sm max-h-[70vh] overflow-y-auto">
-                  {modalTab === 'github' && (
+                  {modalTab === 'firebase' && (
                     <div className="space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                            GitHub Secret Gist ID
-                          </label>
-                          <input
-                            type="text"
-                            value={gistId}
-                            onChange={(e) => {
-                              setGistId(e.target.value);
-                              cachedGistRawUrlRef.current = '';
-                            }}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-mono focus:outline-none focus:border-blue-500"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                            GitHub Gist Token (اختياري لزيادة سرعة السحب)
-                          </label>
-                          <input
-                            type="password"
-                            value={gistToken}
-                            onChange={(e) => {
-                              setGistToken(e.target.value);
-                              try { localStorage.setItem('hurrier_gh_reader_token', e.target.value); } catch {}
-                            }}
-                            placeholder="الصق التوكن هنا لتوليد السكريبت..."
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-mono focus:outline-none focus:border-blue-500"
-                          />
-                        </div>
+                      <div className="p-3.5 rounded-lg bg-emerald-50/70 border border-emerald-200 text-xs text-emerald-900 leading-relaxed">
+                        <strong>متصل بالبث اللحظي (2s):</strong> الداشبورد تفحص التغييرات كل <strong>ثانيتين</strong> من Firebase Realtime Database بصلاحية القراءة فقط للموظفين.
                       </div>
 
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-gray-800">
-                            سكريبت السحب (يلصق في Console تاب Hurrier عندك)
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleCopyCode('ghScript', generatedGistScript)}
-                            className="px-2.5 py-1 rounded bg-gray-900 hover:bg-gray-800 text-white text-xs font-semibold flex items-center gap-1"
-                          >
-                            {copiedSnippet === 'ghScript' ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-                            {copiedSnippet === 'ghScript' ? 'تم النسخ' : 'نسخ سكريبت Hurrier'}
-                          </button>
-                        </div>
-                        <pre className="p-2.5 rounded-lg bg-gray-900 text-gray-100 font-mono text-[10px] overflow-x-auto max-h-28">
-                          {generatedGistScript}
-                        </pre>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                          Firebase Realtime Database URL
+                        </label>
+                        <input
+                          type="text"
+                          value={firebaseUrl}
+                          onChange={(e) => {
+                            setFirebaseUrl(e.target.value);
+                            lastSyncedAtRef.current = '';
+                          }}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-mono focus:outline-none focus:border-blue-500"
+                        />
                       </div>
 
                       <div className="p-3 rounded-lg bg-blue-50/60 border border-blue-200 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
-                            <Link2Icon size={14} /> رابط الموظفين (عرض فقط بدون Token)
+                            <Link2Icon size={14} /> رابط الموظفين (عرض فقط - تحديث كل ثانيتين)
                           </span>
                           <button
                             type="button"
@@ -1493,7 +1376,7 @@
                         <button
                           type="button"
                           onClick={() => {
-                            fetchLiveFeed();
+                            fetchLiveFeed(true);
                             setIsSyncModalOpen(false);
                           }}
                           className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors flex items-center gap-2"
