@@ -462,46 +462,47 @@
 
     function extractCourierProfileFromDoc(selectedCourier, doc) {
       const base = selectedCourier || {};
-      const c = doc?.courier || doc || {};
-      const resolvedId = String(c.id || c.user_id || c.courier_id || doc?.courierId || base.id || "").trim();
-      const resolvedName = normalizeText(c.name || c.full_name || c.courier_name || doc?.courierName || base.name || "Courier");
-      const phone = normalizeText(
-        c.phone ||
-          c.phone_number ||
-          c.mobile ||
-          c.mobile_number ||
-          c.contact_number ||
-          c.user?.phone ||
-          c.user?.phone_number
-      );
-      const contract = normalizeText(
-        c.contract_type || c.contract || c.employment_type || c.batch_name || c.batch?.name
-      ) || "-";
-      const vehicle = normalizeText(
-        (typeof c.vehicle === "object" ? c.vehicle?.name || c.vehicle?.type : c.vehicle) ||
-          c.vehicle_type ||
-          c.equipment ||
-          c.vehicle_name
-      ) || "-";
-      const fleetId = normalizeText(c.fleet_id || c.city_code || c.fleet) || "eg-cairo";
-      const statusRaw = c.status || c.state || c.shift_status || "Working";
+      const c = doc?.courier || {};
+      const courierId = String(c.id || doc?.courierId || base.id || "").trim();
+      const userId = String(doc?.user_id || doc?.userId || c.user_id || courierId || "").trim();
+      const resolvedName = normalizeText(c.name || doc?.courierName || base.name || "Courier");
+      const phone = normalizeText(c.phone_number || c.phone || c.mobile || "");
+
+      const contractInfo = doc?.contract_info || c.contract_info || {};
+      const contractType = contractInfo.type ? humanizeSnakeCase(contractInfo.type) : "";
+      const contractName = normalizeText(contractInfo.name);
+      const contract = contractType
+        ? contractName
+          ? `${contractType} (${contractName})`
+          : contractType
+        : contractName || "-";
+
+      const vehicle = normalizeText(c.vehicle || c.vehicle_type) || "-";
+      const fleetId = normalizeText(c.fleet_id || c.city_code) || "eg-cairo";
+
+      const statusRaw = c.status || "Working";
       const statusLabel = humanizeSnakeCase(statusRaw);
-      const statusReason = normalizeText(c.not_working_reason || c.reason || c.break_reason);
-      const statusUntil = c.break_until || c.until ? formatShortTimeOnly(c.break_until || c.until) : "";
-      const rawBalance = c.balance ?? c.wallet_balance ?? c.cash_balance ?? c.cod_balance;
+      const statusMeta = doc?.status_meta_data || c.status_meta_data || {};
+      const performedBy = normalizeText(statusMeta.performed_by);
+      const statusReason = statusMeta.reason ? humanizeSnakeCase(statusMeta.reason) : "";
+      const statusUntil = doc?.status_until ? formatShortTimeOnly(doc.status_until) : "";
+
+      const rawBalance = doc?.balance ?? c.balance;
       const balanceStr =
         rawBalance !== undefined && rawBalance !== null && rawBalance !== ""
           ? `${Number(rawBalance).toFixed(2)} EGP`
           : "";
 
       return {
-        id: resolvedId,
+        courierId,
+        userId,
         name: resolvedName,
         phone,
         contract,
         vehicle,
         fleetId,
         statusLabel,
+        performedBy,
         statusReason,
         statusUntil,
         balanceStr,
@@ -3191,19 +3192,25 @@
                       <span>
                         User ID{" "}
                         <strong className="font-mono text-gray-900">
-                          {selectedCourierFullView.id ? `#${selectedCourierFullView.id}` : "جاري الجلب..."}
+                          {selectedCourierFullView.userId ? `#${selectedCourierFullView.userId}` : "جاري الجلب..."}
                         </strong>
                       </span>
-                      {selectedCourierFullView.id && (
+                      {selectedCourierFullView.userId && (
                         <button
                           type="button"
-                          onClick={() => copyToClipboard("riderId", selectedCourierFullView.id)}
+                          onClick={() => copyToClipboard("riderId", selectedCourierFullView.userId)}
                           className="text-blue-600 hover:text-blue-800 px-1.5 py-0.5 rounded border border-blue-200 text-xs"
                           title="نسخ User ID"
                         >
                           {copiedText === "riderId" ? "✓ Copied" : "⧉"}
                         </button>
                       )}
+                      {selectedCourierFullView.courierId &&
+                        selectedCourierFullView.courierId !== selectedCourierFullView.userId && (
+                          <span className="text-xs text-gray-400 font-mono">
+                            (Courier #{selectedCourierFullView.courierId})
+                          </span>
+                        )}
                     </div>
                   </div>
 
@@ -3224,6 +3231,11 @@
                     <div className="text-base font-bold text-gray-900">{selectedCourierFullView.statusLabel}</div>
                     {selectedCourierFullView.statusUntil && (
                       <div className="text-xs text-gray-500">Until {selectedCourierFullView.statusUntil}</div>
+                    )}
+                    {selectedCourierFullView.performedBy && (
+                      <div className="text-xs text-gray-500">
+                        Performed by {selectedCourierFullView.performedBy}
+                      </div>
                     )}
                     {selectedCourierFullView.statusReason && (
                       <div className="text-xs text-gray-500">Reason: {selectedCourierFullView.statusReason}</div>
