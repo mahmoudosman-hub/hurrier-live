@@ -633,11 +633,39 @@
         }
       });
 
-      const [isZoneSetupConfirmed, setIsZoneSetupConfirmed] = useState(false);
-      const [activeTab, setActiveTab] = useState("Active");
+      const [selectedZoneIds, setSelectedZoneIds] = useState(() => {
+        try {
+          const raw = sessionStorage.getItem("hurrier_emp_zone_ids");
+          if (!raw) return [];
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed)
+            ? Array.from(new Set(parsed.map(Number).filter(isRealHurrierZoneId)))
+            : [];
+        } catch {
+          return [];
+        }
+      });
+
+      const [isZoneSetupConfirmed, setIsZoneSetupConfirmed] = useState(() => {
+        try {
+          const confirmed = sessionStorage.getItem("hurrier_emp_zone_confirmed") === "true";
+          const raw = sessionStorage.getItem("hurrier_emp_zone_ids");
+          const parsed = raw ? JSON.parse(raw) : [];
+          return confirmed && Array.isArray(parsed) && parsed.filter(isRealHurrierZoneId).length > 0;
+        } catch {
+          return false;
+        }
+      });
+
+      const [activeTab, setActiveTab] = useState(() => {
+        try {
+          return sessionStorage.getItem("hurrier_emp_active_tab") || "Active";
+        } catch {
+          return "Active";
+        }
+      });
       const [searchQuery, setSearchQuery] = useState("");
       const [selectedCity, setSelectedCity] = useState("Cairo");
-      const [selectedZoneIds, setSelectedZoneIds] = useState([]);
       const [zoneSearchQuery, setZoneSearchQuery] = useState("");
 
       const [activeQuickFilter, setActiveQuickFilter] = useState("All");
@@ -733,6 +761,8 @@
           const trimmedName = normalizeText(employeeName);
           try {
             if (trimmedName) localStorage.setItem("hurrier_emp_name", trimmedName);
+            sessionStorage.setItem("hurrier_emp_zone_ids", JSON.stringify(cleanIds));
+            sessionStorage.setItem("hurrier_emp_zone_confirmed", "true");
           } catch {}
 
           setSelectedZoneIds(cleanIds);
@@ -750,6 +780,12 @@
       );
 
       const handleResetToZoneSelection = useCallback(async () => {
+        try {
+          sessionStorage.removeItem("hurrier_emp_zone_ids");
+          sessionStorage.removeItem("hurrier_emp_zone_confirmed");
+          sessionStorage.removeItem("hurrier_emp_active_tab");
+        } catch {}
+
         setIsZoneSetupConfirmed(false);
         setSelectedZoneIds([]);
         setDeliveries([]);
@@ -761,9 +797,18 @@
         unregisterSessionFromFirebase(false);
       }, [unregisterSessionFromFirebase]);
 
-      // Send heartbeat every 15s while monitoring & clean up on tab close
+      // Persist active tab across refreshes
+      useEffect(() => {
+        try {
+          sessionStorage.setItem("hurrier_emp_active_tab", activeTab);
+        } catch {}
+      }, [activeTab]);
+
+      // Register session immediately on mount/refresh & send heartbeat every 15s while monitoring
       useEffect(() => {
         if (!isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
+
+        registerSessionInFirebase(selectedZoneIds, employeeName);
 
         const hbTimer = setInterval(() => {
           fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}/heartbeat_at.json`, {
@@ -783,20 +828,21 @@
           clearInterval(hbTimer);
           window.removeEventListener("beforeunload", handleUnload);
         };
-      }, [isZoneSetupConfirmed, selectedZoneIds, sessionId, unregisterSessionFromFirebase]);
+      }, [isZoneSetupConfirmed, selectedZoneIds, sessionId, employeeName, registerSessionInFirebase, unregisterSessionFromFirebase]);
 
       const requestOrderDetailsFromHurrier = useCallback(async (orderId) => {
         if (!orderId) return;
         const cleanId = String(orderId).replace(/^HF_[A-Z]{2}/i, "").trim();
         if (!cleanId) return;
         try {
-          const existingRes = await fetch(`${FIREBASE_DB_URL}/config/requested_order_details.json`);
-          const existing = existingRes.ok ? await existingRes.json() : [];
-          const arr = Array.isArray(existing) ? existing.map(String).filter((x) => x !== cleanId) : [];
-          arr.unshift(cleanId);
+          const curRes = await fetch(`${FIREBASE_DB_URL}/config/requested_order_details.json`, { cache: "no-store" });
+          const curList = curRes.ok ? await curRes.json() : [];
+          const nextList = Array.from(
+            new Set([cleanId, ...(Array.isArray(curList) ? curList.map(String) : [])])
+          ).slice(0, 10);
           await fetch(`${FIREBASE_DB_URL}/config/requested_order_details.json`, {
             method: "PUT",
-            body: JSON.stringify(arr.slice(0, 20))
+            body: JSON.stringify(nextList)
           });
         } catch {
           // تجاهل
