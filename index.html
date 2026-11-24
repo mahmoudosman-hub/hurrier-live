@@ -124,17 +124,64 @@
     ];
 
     const MOCK_ZONES = [
-      { id: 10162, zone: "Manial nesting", city: "Cairo", starting: 0, working: 11, ending: 17, break: 4, tempBreak: 0, delay: "9.7m", queued: 4, dispatched: 2, active: 8, puPercent: 50, doPercent: 50, zeroDel: 9, lowDel: 6, medDel: 2, highDel: 0 },
-      { id: 10004, zone: "Manial sp", city: "Cairo", starting: 0, working: 62, ending: 40, break: 2, tempBreak: 2, delay: "9.7m", queued: 3, dispatched: 17, active: 45, puPercent: 40, doPercent: 60, zeroDel: 2, lowDel: 22, medDel: 16, highDel: 2 },
-      { id: 10022, zone: "Tahrir", city: "Cairo", starting: 0, working: 83, ending: 60, break: 4, tempBreak: 1, delay: "9.7m", queued: 5, dispatched: 19, active: 68, puPercent: 30, doPercent: 70, zeroDel: 2, lowDel: 35, medDel: 26, highDel: 0 },
-      { id: 10163, zone: "Tahrir nesting", city: "Cairo", starting: 0, working: 19, ending: 19, break: 3, tempBreak: 1, delay: "9.7m", queued: 3, dispatched: 3, active: 18, puPercent: 39, doPercent: 61, zeroDel: 3, lowDel: 13, medDel: 4, highDel: 0 },
-      { id: 10181, zone: "Haram nesting pt", city: "Cairo", starting: 1, working: 28, ending: 40, break: 6, tempBreak: 2, delay: "7.1m", queued: 10, dispatched: 1, active: 27, puPercent: 63, doPercent: 37, zeroDel: 17, lowDel: 25, medDel: 1, highDel: 0 },
-      { id: 10125, zone: "Haram nesting sp", city: "Cairo", starting: 0, working: 2, ending: 6, break: 4, tempBreak: 1, delay: "7.1m", queued: 8, dispatched: 0, active: 2, puPercent: 0, doPercent: 100, zeroDel: 4, lowDel: 2, medDel: 0, highDel: 0 },
-      { id: 10182, zone: "Haram pt", city: "Cairo", starting: 1, working: 79, ending: 66, break: 6, tempBreak: 1, delay: "7.1m", queued: 9, dispatched: 12, active: 66, puPercent: 43, doPercent: 57, zeroDel: 3, lowDel: 49, medDel: 14, highDel: 0 },
-      { id: 10183, zone: "Haram pt 2", city: "Cairo", starting: 1, working: 78, ending: 65, break: 7, tempBreak: 1, delay: "7.1m", queued: 9, dispatched: 17, active: 66, puPercent: 43, doPercent: 57, zeroDel: 3, lowDel: 43, medDel: 19, highDel: 0 },
-      { id: 10018, zone: "Haram sp", city: "Cairo", starting: 0, working: 22, ending: 20, break: 5, tempBreak: 0, delay: "7.1m", queued: 9, dispatched: 3, active: 19, puPercent: 43, doPercent: 57, zeroDel: 2, lowDel: 14, medDel: 4, highDel: 0 },
-      { id: 10139, zone: "Haram sp 2", city: "Cairo", starting: 0, working: 42, ending: 36, break: 7, tempBreak: 1, delay: "7.1m", queued: 9, dispatched: 4, active: 36, puPercent: 34, doPercent: 66, zeroDel: 5, lowDel: 28, medDel: 6, highDel: 0 },
-      { id: 10074, zone: "Hadayek el ahram sp", city: "Cairo", starting: 0, working: 71, ending: 93, break: 13, tempBreak: 4, delay: "2.8m", queued: 21, dispatched: 4, active: 63, puPercent: 26, doPercent: 74, zeroDel: 41, lowDel: 48, medDel: 7, highDel: 0 }
+      { id: 10162, zone: "Manial nesting", parentZone: "Cairo_city_centre", city: "Cairo", starting: 0, working: 11, ending: 17, break: 4, tempBreak: 0, delay: "9.7m", queued: 4, dispatched: 2, active: 8, puPercent: 50, doPercent: 50, zeroDel: 9, lowDel: 6, medDel: 2, highDel: 0 },
+      { id: 10004, zone: "Manial sp", parentZone: "Cairo_city_centre", city: "Cairo", starting: 0, working: 62, ending: 40, break: 2, tempBreak: 2, delay: "9.7m", queued: 3, dispatched: 17, active: 45, puPercent: 40, doPercent: 60, zeroDel: 2, lowDel: 22, medDel: 16, highDel: 2 },
+      { id: 10022, zone: "Tahrir", parentZone: "Cairo_city_centre", city: "Cairo", starting: 0, working: 83, ending: 60, break: 4, tempBreak: 1, delay: "9.7m", queued: 5, dispatched: 19, active: 68, puPercent: 30, doPercent: 70, zeroDel: 2, lowDel: 35, medDel: 26, highDel: 0 },
+      { id: 10163, zone: "Tahrir nesting", parentZone: "Cairo_city_centre", city: "Cairo", starting: 0, working: 19, ending: 19, break: 3, tempBreak: 1, delay: "9.7m", queued: 3, dispatched: 3, active: 18, puPercent: 39, doPercent: 61, zeroDel: 3, lowDel: 13, medDel: 4, highDel: 0 },
+      { id: 10181, zone: "Haram nesting pt", parentZone: "Giza", city: "Cairo", starting: 1, working: 28, ending: 40, break: 6, tempBreak: 2, delay: "7.1m", queued: 10, dispatched: 1, active: 27, puPercent: 63, doPercent: 37, zeroDel: 17, lowDel: 25, medDel: 1, highDel: 0 },
+      { id: 10125, zone: "Haram nesting sp", parentZone: "Giza", city: "Cairo", starting: 0, working: 2, ending: 6, break: 4, tempBreak: 1, delay: "7.1m", queued: 8, dispatched: 0, active: 2, puPercent: 0, doPercent: 100, zeroDel: 4, lowDel: 2, medDel: 0, highDel: 0 },
+      { id: 10182, zone: "Haram pt", parentZone: "Giza", city: "Cairo", starting: 1, working: 79, ending: 66, break: 6, tempBreak: 1, delay: "7.1m", queued: 9, dispatched: 12, active: 66, puPercent: 43, doPercent: 57, zeroDel: 3, lowDel: 49, medDel: 14, highDel: 0 },
+      { id: 10183, zone: "Haram pt 2", parentZone: "Giza", city: "Cairo", starting: 1, working: 78, ending: 65, break: 7, tempBreak: 1, delay: "7.1m", queued: 9, dispatched: 17, active: 66, puPercent: 43, doPercent: 57, zeroDel: 3, lowDel: 43, medDel: 19, highDel: 0 },
+      { id: 10018, zone: "Haram sp", parentZone: "Giza", city: "Cairo", starting: 0, working: 22, ending: 20, break: 5, tempBreak: 0, delay: "7.1m", queued: 9, dispatched: 3, active: 19, puPercent: 43, doPercent: 57, zeroDel: 2, lowDel: 14, medDel: 4, highDel: 0 },
+      { id: 10139, zone: "Haram sp 2", parentZone: "Giza", city: "Cairo", starting: 0, working: 42, ending: 36, break: 7, tempBreak: 1, delay: "7.1m", queued: 9, dispatched: 4, active: 36, puPercent: 34, doPercent: 66, zeroDel: 5, lowDel: 28, medDel: 6, highDel: 0 },
+      { id: 10074, zone: "Hadayek el ahram sp", parentZone: "Hadayek el ahram", city: "Cairo", starting: 0, working: 71, ending: 93, break: 13, tempBreak: 4, delay: "2.8m", queued: 21, dispatched: 4, active: 63, puPercent: 26, doPercent: 74, zeroDel: 41, lowDel: 48, medDel: 7, highDel: 0 }
+    ];
+
+    const FALLBACK_CITIES_CATALOG = [
+      {
+        id: 1,
+        name: "Cairo",
+        zones: [
+          { id: 10004, name: "Manial sp" },
+          { id: 10162, name: "Manial nesting" },
+          { id: 10022, name: "Tahrir" },
+          { id: 10163, name: "Tahrir nesting" },
+          { id: 10018, name: "Haram sp" },
+          { id: 10139, name: "Haram sp 2" },
+          { id: 10182, name: "Haram pt" },
+          { id: 10183, name: "Haram pt 2" },
+          { id: 10125, name: "Haram nesting sp" },
+          { id: 10181, name: "Haram nesting pt" },
+          { id: 10074, name: "Hadayek el ahram sp" },
+          { id: 10000, name: "Nasr city sp" },
+          { id: 10003, name: "Old maadi" },
+          { id: 10002, name: "New maadi" },
+          { id: 10001, name: "Mokattam sp" },
+          { id: 10138, name: "October hosary" }
+        ]
+      },
+      {
+        id: 200,
+        name: "Alexandria",
+        zones: [
+          { id: 10027, name: "Gleem sp" },
+          { id: 10028, name: "Raml station sp" },
+          { id: 10085, name: "Semouha club sp" },
+          { id: 10025, name: "Sidi bishr sp" },
+          { id: 10079, name: "Al bitash sp" },
+          { id: 10144, name: "Kilo 21 sp" }
+        ]
+      },
+      { id: 225, name: "Al mahallah al kubra", zones: [{ id: 10140, name: "Al mahallah al kubra sp" }] },
+      { id: 207, name: "Assiut", zones: [{ id: 10053, name: "Assiut SP" }] },
+      { id: 216, name: "Banha", zones: [{ id: 10078, name: "Banha sp" }] },
+      { id: 275, name: "Beni suef", zones: [{ id: 10158, name: "Old beni suef" }] },
+      { id: 210, name: "Port said", zones: [] },
+      { id: 220, name: "Shebin el koom", zones: [] },
+      { id: 230, name: "Sohag", zones: [] },
+      { id: 240, name: "Suez", zones: [] },
+      { id: 250, name: "Tanta", zones: [] },
+      { id: 260, name: "Zagazig", zones: [] }
     ];
 
     const DISPATCHER_STATS = [
@@ -1588,8 +1635,23 @@
 
       const [activeTab, setActiveTab] = useState('Active');
       const [searchQuery, setSearchQuery] = useState('');
-      const [selectedCity, setSelectedCity] = useState('All Cities');
-      const [selectedZoneFilter, setSelectedZoneFilter] = useState('All Zones');
+      const [zoneFilterState, setZoneFilterState] = useState(() => {
+        try {
+          const saved = localStorage.getItem('hurrier_zone_filter_v1');
+          if (saved) return JSON.parse(saved);
+        } catch {}
+        return { mode: 'all', cities: [], zoneIds: [] };
+      });
+      const [citiesCatalog, setCitiesCatalog] = useState(FALLBACK_CITIES_CATALOG);
+      const [isLocationMenuOpen, setIsLocationMenuOpen] = useState(false);
+      const [isZonesDialogOpen, setIsZonesDialogOpen] = useState(false);
+      const [isCitiesDialogOpen, setIsCitiesDialogOpen] = useState(false);
+      const [zoneDialogSearch, setZoneDialogSearch] = useState('');
+      const [draftZoneIds, setDraftZoneIds] = useState([]);
+      const [draftCities, setDraftCities] = useState([]);
+      const [syncZonesToHurrier, setSyncZonesToHurrier] = useState(true);
+      const locationDropdownRef = useRef(null);
+
       const [quickFilter, setQuickFilter] = useState('all');
       const [issueStatusFilter, setIssueStatusFilter] = useState('all');
       const [issueTypeFilter, setIssueTypeFilter] = useState('all');
@@ -1631,154 +1693,172 @@
       const [rawJsonInput, setRawJsonInput] = useState('');
       const [copiedSnippet, setCopiedSnippet] = useState(null);
 
-      const sidebarItemsWithCounts = useMemo(() => {
-        return SIDEBAR_ITEMS.map((item) =>
-          Object.prototype.hasOwnProperty.call(tabCounts, item.id)
-            ? { ...item, count: tabCounts[item.id] }
-            : item
-        );
-      }, [tabCounts]);
-
-      const availableCities = useMemo(() => {
-        const set = new Set(['All Cities', 'Cairo', 'Alexandria']);
-        citySummary.forEach((c) => { if (c.city) set.add(c.city); });
-        return Array.from(set);
-      }, [citySummary]);
-
-      const availableZones = useMemo(() => {
-        const set = new Set(['All Zones']);
-        zonesList.forEach((z) => { if (z.zone) set.add(z.zone); });
-        return Array.from(set);
-      }, [zonesList]);
-
-      const applyHurrierBundle = useCallback((bundle) => {
-        if (!bundle || bundle.empty || Object.keys(bundle).length === 0) return;
-
-        const tabBuckets = [
-          { key: 'active', tab: 'Active' },
-          { key: 'queued', tab: 'Queued' },
-          { key: 'dispatched', tab: 'Dispatched' },
-          { key: 'actionable', tab: 'Actionable' },
-          { key: 'waiting_for_assembly', tab: 'Waiting for Assembly' },
-          { key: 'preorder', tab: 'Pre-order' },
-          { key: 'upcoming', tab: 'Upcoming' },
-          { key: 'cancelled', tab: 'Cancelled' },
-          { key: 'completed', tab: 'Completed' }
-        ];
-
-        let hasAnyDelivery = false;
-        const updatedMap = new Map();
-        const nextCounts = {};
-
-        tabBuckets.forEach(({ key, tab }) => {
-          const payload = bundle[key];
-          if (payload && Array.isArray(payload.records)) {
-            hasAnyDelivery = true;
-            const mapped = payload.records.map((r, idx) => mapHurrierRecordToDelivery(r, tab, idx));
-            updatedMap.set(tab, mapped);
-            nextCounts[tab] = payload.metadata?.total_count ?? mapped.length;
+      // إغلاق قائمة المدن والزونات عند الضغط خارجها
+      useEffect(() => {
+        const handleOutsideClick = (e) => {
+          if (locationDropdownRef.current && !locationDropdownRef.current.contains(e.target)) {
+            setIsLocationMenuOpen(false);
           }
-        });
-
-        if (hasAnyDelivery) {
-          setDeliveries((prev) => {
-            const preserved = prev.filter((d) => !updatedMap.has(d.tab));
-            const incoming = Array.from(updatedMap.values()).flat();
-            return [...incoming, ...preserved];
-          });
-          setTabCounts((prev) => ({ ...prev, ...nextCounts }));
-        }
-
-        if (Array.isArray(bundle.couriers)) {
-          setIndividualCouriers(bundle.couriers);
-        }
-
-        if (Array.isArray(bundle.issues)) {
-          setIssuesList(bundle.issues);
-          setTabCounts((prev) => ({ ...prev, Issues: bundle.issues.length }));
-        }
-
-        if (bundle.stats && Array.isArray(bundle.stats.cities)) {
-          const newSummaries = [];
-          const newZoneRows = [];
-
-          bundle.stats.cities.forEach((c) => {
-            const s = c.stat || {};
-            newSummaries.push({
-              city: c.city_name,
-              queued: s.queued_count ?? 0,
-              queuedPct: s.queued_percent ?? 0,
-              dispatched: s.dispatched_count ?? 0,
-              dispatchedPct: s.dispatched_percent ?? 0,
-              active: s.active_count ?? 0,
-              activePct: s.active_percent ?? 0,
-              delay: `${Number(s.delay || 0).toFixed(1)}m`,
-              puPct: s.picked_up_percent ?? 0,
-              doPct: s.drop_off_percent ?? 0,
-              zeroDel: s.zero_deliveries ?? 0,
-              lowDel: s.low_deliveries ?? 0,
-              medDel: s.medium_deliveries ?? 0,
-              highDel: s.high_deliveries ?? 0,
-              starting: s.couriers_in_starting ?? 0,
-              working: s.couriers_in_working ?? 0,
-              ending: s.couriers_in_ending ?? 0,
-              tempBreak: s.couriers_in_temp_break ?? 0,
-              break: s.couriers_in_break ?? 0
-            });
-
-            (c.zones || []).forEach((z) => {
-              const zDelay = `${Number(z.stat?.delay || 0).toFixed(1)}m`;
-              (z.starting_points || []).forEach((sp) => {
-                const st = sp.stat || {};
-                newZoneRows.push({
-                  id: sp.id,
-                  zone: sp.name,
-                  parentZone: z.zone_name,
-                  city: c.city_name,
-                  starting: st.couriers_in_starting ?? 0,
-                  working: st.couriers_in_working ?? 0,
-                  ending: st.couriers_in_ending ?? 0,
-                  break: st.couriers_in_break ?? 0,
-                  tempBreak: st.couriers_in_temp_break ?? 0,
-                  delay: st.delay ? `${Number(st.delay).toFixed(1)}m` : zDelay,
-                  queued: st.queued_count ?? 0,
-                  dispatched: st.dispatched_count ?? 0,
-                  active: st.active_count ?? 0,
-                  puPercent: st.picked_up_percent ?? 0,
-                  doPercent: st.drop_off_percent ?? 0,
-                  zeroDel: st.zero_deliveries ?? 0,
-                  lowDel: st.low_deliveries ?? 0,
-                  medDel: st.medium_deliveries ?? 0,
-                  highDel: st.high_deliveries ?? 0
-                });
-              });
-            });
-          });
-
-          if (newSummaries.length > 0) setCitySummary(newSummaries);
-          if (newZoneRows.length > 0) setZonesList(newZoneRows);
-        }
-
-        if (Array.isArray(bundle.dispatchers) && bundle.dispatchers.length > 0) {
-          setDispatcherStats(
-            bundle.dispatchers.map((d) => ({
-              picked_by: d.picked_by,
-              picked: d.picked ?? 0,
-              processing: d.processing ?? 0,
-              max_picked_for: d.min_picked_at ? formatRelativeDeadline(d.min_picked_at).replace('-', '') : '-'
-            }))
-          );
-        }
-
-        const now = new Date();
-        setLastRefreshed(now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        };
+        document.addEventListener('mousedown', handleOutsideClick);
+        return () => document.removeEventListener('mousedown', handleOutsideClick);
       }, []);
 
+      // دمج كتالوج المدن والزونات مع البيانات الحية
+      const mergedCitiesCatalog = useMemo(() => {
+        const cityMap = new Map();
+        citiesCatalog.forEach((c) => {
+          cityMap.set(c.name, {
+            id: c.id,
+            name: c.name,
+            zones: new Map((c.zones || []).map((z) => [String(z.id), { id: Number(z.id), name: z.name }]))
+          });
+        });
+
+        zonesList.forEach((z) => {
+          const cName = z.city || 'Cairo';
+          if (!cityMap.has(cName)) {
+            cityMap.set(cName, { id: cName, name: cName, zones: new Map() });
+          }
+          cityMap.get(cName).zones.set(String(z.id), { id: Number(z.id), name: z.zone });
+        });
+
+        return Array.from(cityMap.values())
+          .map((c) => ({
+            id: c.id,
+            name: c.name,
+            zones: Array.from(c.zones.values()).sort((a, b) => a.name.localeCompare(b.name))
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name));
+      }, [citiesCatalog, zonesList]);
+
+      const zoneIdToMetaMap = useMemo(() => {
+        const map = new Map();
+        mergedCitiesCatalog.forEach((c) => {
+          c.zones.forEach((z) => {
+            map.set(String(z.id), { id: z.id, name: z.name, city: c.name });
+          });
+        });
+        return map;
+      }, [mergedCitiesCatalog]);
+
+      const zoneNameToCityMap = useMemo(() => {
+        const map = new Map();
+        mergedCitiesCatalog.forEach((c) => {
+          c.zones.forEach((z) => {
+            map.set(z.name.toLowerCase().trim(), c.name);
+          });
+        });
+        return map;
+      }, [mergedCitiesCatalog]);
+
+      const selectedZoneNamesSet = useMemo(() => {
+        if (zoneFilterState.mode !== 'multiple_zones') return new Set();
+        const names = new Set();
+        (zoneFilterState.zoneIds || []).forEach((id) => {
+          const meta = zoneIdToMetaMap.get(String(id));
+          if (meta && meta.name) names.add(meta.name.toLowerCase().trim());
+        });
+        return names;
+      }, [zoneFilterState, zoneIdToMetaMap]);
+
+      const applyAndSaveZoneFilter = useCallback(async (nextState, pushToHurrier = false) => {
+        setZoneFilterState(nextState);
+        try {
+          localStorage.setItem('hurrier_zone_filter_v1', JSON.stringify(nextState));
+        } catch {}
+
+        if (pushToHurrier) {
+          try {
+            const cleanBaseUrl = firebaseUrl.trim().replace(/\/+$/, '');
+            const isCustomZones = nextState.mode === 'multiple_zones' && Array.isArray(nextState.zoneIds) && nextState.zoneIds.length > 0;
+            await fetch(`${cleanBaseUrl}/hurrier_live/zone_config.json`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                write_key: FIREBASE_WRITE_KEY,
+                mode: isCustomZones ? 'custom' : 'default',
+                zone_ids: isCustomZones ? nextState.zoneIds.map(String) : [],
+                updatedAt: new Date().toISOString()
+              })
+            });
+          } catch {}
+        }
+      }, [firebaseUrl]);
+
+      const locationDropdownLabel = useMemo(() => {
+        if (zoneFilterState.mode === 'city' && zoneFilterState.cities?.length === 1) {
+          return zoneFilterState.cities[0];
+        }
+        if (zoneFilterState.mode === 'multiple_cities') {
+          return zoneFilterState.cities?.length > 0
+            ? `Multiple Cities (${zoneFilterState.cities.length})`
+            : 'Multiple Cities';
+        }
+        if (zoneFilterState.mode === 'multiple_zones') {
+          return zoneFilterState.zoneIds?.length > 0
+            ? `Multiple Zones (${zoneFilterState.zoneIds.length})`
+            : 'Multiple Zones';
+        }
+        return 'All Cities';
+      }, [zoneFilterState]);
+
+      const matchesCityAndZoneFilter = useCallback((itemCity, itemZoneNames = [], itemZoneIds = []) => {
+        if (zoneFilterState.mode === 'all') return true;
+
+        if (zoneFilterState.mode === 'city' || zoneFilterState.mode === 'multiple_cities') {
+          const allowedCities = new Set((zoneFilterState.cities || []).map((c) => c.toLowerCase()));
+          if (allowedCities.size === 0) return true;
+          if (itemCity && allowedCities.has(String(itemCity).toLowerCase())) return true;
+          return itemZoneNames.some((zn) => {
+            const mappedCity = zoneNameToCityMap.get(String(zn).toLowerCase().trim());
+            return mappedCity && allowedCities.has(mappedCity.toLowerCase());
+          });
+        }
+
+        if (zoneFilterState.mode === 'multiple_zones') {
+          const allowedIds = new Set((zoneFilterState.zoneIds || []).map((id) => String(id)));
+          if (allowedIds.size === 0) return true;
+          if (itemZoneIds.some((id) => allowedIds.has(String(id)))) return true;
+          return itemZoneNames.some((zn) => selectedZoneNamesSet.has(String(zn).toLowerCase().trim()));
+        }
+
+        return true;
+      }, [zoneFilterState, zoneNameToCityMap, selectedZoneNamesSet]);
+
+      const sidebarItemsWithCounts = useMemo(() => {
+        return SIDEBAR_ITEMS.map((item) => {
+          if (!Object.prototype.hasOwnProperty.call(tabCounts, item.id)) return item;
+          if (zoneFilterState.mode === 'all' || item.id === 'Issues') {
+            return { ...item, count: tabCounts[item.id] };
+          }
+          const filteredCount = deliveries.filter((d) => {
+            if (d.tab !== item.id) return false;
+            const zList = Array.isArray(d.allZones) && d.allZones.length > 0
+              ? d.allZones
+              : String(d.zone || '').split(',').map((s) => s.trim()).filter(Boolean);
+            return matchesCityAndZoneFilter(d.city, zList, []);
+          }).length;
+          return { ...item, count: filteredCount };
+        });
+      }, [tabCounts, zoneFilterState.mode, deliveries, matchesCityAndZoneFilter]);
       const fetchLiveFeed = useCallback(async (forceFull = false) => {
         setSyncError('');
         try {
           const cleanBaseUrl = firebaseUrl.trim().replace(/\/+$/, '');
           if (!cleanBaseUrl) throw new Error('أدخل رابط Firebase Realtime Database أولاً');
+
+          // جلب كتالوج المدن والزونات الكامل عند التحديث الكامل
+          if (forceFull) {
+            fetch(`${cleanBaseUrl}/hurrier_live/cities_catalog.json`, { cache: 'no-store' })
+              .then((r) => (r.ok ? r.json() : null))
+              .then((cat) => {
+                if (cat && Array.isArray(cat.cities) && cat.cities.length > 0) {
+                  setCitiesCatalog(cat.cities);
+                }
+              })
+              .catch(() => {});
+          }
 
           if (!forceFull && lastSyncedAtRef.current) {
             const checkRes = await fetch(`${cleanBaseUrl}/hurrier_live/syncedAt.json`, { cache: 'no-store' });
@@ -1879,26 +1959,24 @@
 
       const filteredZones = useMemo(() => {
         return zonesList.filter((c) => {
-          const matchesCity = selectedCity === 'All Cities' || c.city === selectedCity;
-          const matchesZone = selectedZoneFilter === 'All Zones' || c.zone === selectedZoneFilter;
+          const matchesLoc = matchesCityAndZoneFilter(c.city, [c.zone], [c.id]);
           const q = searchQuery.trim().toLowerCase();
           const matchesSearch =
             !q ||
             c.zone.toLowerCase().includes(q) ||
             (c.parentZone && c.parentZone.toLowerCase().includes(q)) ||
             String(c.id).includes(q);
-          return matchesCity && matchesZone && matchesSearch;
+          return matchesLoc && matchesSearch;
         });
-      }, [zonesList, selectedCity, selectedZoneFilter, searchQuery]);
+      }, [zonesList, matchesCityAndZoneFilter, searchQuery]);
 
       const filteredDeliveries = useMemo(() => {
         return deliveries.filter((d) => {
           const matchesTab = d.tab === activeTab;
-          const matchesCity = selectedCity === 'All Cities' || d.city === selectedCity;
-          const matchesZone =
-            selectedZoneFilter === 'All Zones' ||
-            (Array.isArray(d.allZones) && d.allZones.some((z) => z.toLowerCase() === selectedZoneFilter.toLowerCase())) ||
-            d.zone.toLowerCase().includes(selectedZoneFilter.toLowerCase());
+          const zList = Array.isArray(d.allZones) && d.allZones.length > 0
+            ? d.allZones
+            : String(d.zone || '').split(',').map((s) => s.trim()).filter(Boolean);
+          const matchesLoc = matchesCityAndZoneFilter(d.city, zList, []);
 
           let matchesQuick = true;
           if (quickFilter === 'late') matchesQuick = d.isLate;
@@ -1922,7 +2000,9 @@
             String(d.courierId || '').includes(q) ||
             d.zone.toLowerCase().includes(q);
 
-          return matchesTab && matchesCity && matchesZone && matchesQuick && matchesSearch;
+          return matchesTab && matchesLoc && matchesQuick && matchesSearch;
+        });
+      }, [deliveries, activeTab, matchesCityAndZoneFilter, quickFilter, searchQuery]);
         });
       }, [deliveries, activeTab, selectedCity, selectedZoneFilter, quickFilter, searchQuery]);
 
@@ -1955,320 +2035,13 @@
       }, [filteredDeliveries]);
 
       const renderDashboardOverview = () => {
-        const visibleCities = citySummary.filter(
-          (c) => selectedCity === 'All Cities' || c.city === selectedCity
-        );
-
-        const totals = visibleCities.reduce(
-          (acc, c) => ({
-            queued: acc.queued + (c.queued || 0),
-            dispatched: acc.dispatched + (c.dispatched || 0),
-            active: acc.active + (c.active || 0),
-            working: acc.working + (c.working || 0),
-            ending: acc.ending + (c.ending || 0),
-            break: acc.break + (c.break || 0)
-          }),
-          { queued: 0, dispatched: 0, active: 0, working: 0, ending: 0, break: 0 }
-        );
-
-        return (
-          <div className="mt-6 space-y-6">
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-                <div className="text-xs font-semibold text-gray-500 uppercase">Total Queued</div>
-                <div className="text-2xl font-bold text-gray-900 mt-1">{totals.queued}</div>
-              </div>
-              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-                <div className="text-xs font-semibold text-gray-500 uppercase">Total Dispatched</div>
-                <div className="text-2xl font-bold text-amber-600 mt-1">{totals.dispatched}</div>
-              </div>
-              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-                <div className="text-xs font-semibold text-gray-500 uppercase">Total Active</div>
-                <div className="text-2xl font-bold text-blue-600 mt-1">{totals.active}</div>
-              </div>
-              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-                <div className="text-xs font-semibold text-gray-500 uppercase">Riders Working</div>
-                <div className="text-2xl font-bold text-emerald-600 mt-1">{totals.working}</div>
-              </div>
-              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-                <div className="text-xs font-semibold text-gray-500 uppercase">Riders Ending</div>
-                <div className="text-2xl font-bold text-orange-600 mt-1">{totals.ending}</div>
-              </div>
-              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-                <div className="text-xs font-semibold text-gray-500 uppercase">Riders On Break</div>
-                <div className="text-2xl font-bold text-gray-700 mt-1">{totals.break}</div>
-              </div>
-            </div>
-
-            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
-                  Region Performance &amp; Rider Shifts
-                </span>
-                <span className="text-xs text-gray-500">Live Synced Stats</span>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs whitespace-nowrap">
-                  <thead>
-                    <tr className="border-b border-gray-200 text-gray-500 font-semibold bg-white">
-                      <th className="py-3 px-4">REGION</th>
-                      <th className="py-3 px-3">QUEUED</th>
-                      <th className="py-3 px-3">DISP</th>
-                      <th className="py-3 px-3">ACTIVE</th>
-                      <th className="py-3 px-3">DELAY</th>
-                      <th className="py-3 px-3">PU / DO</th>
-                      <th className="py-3 px-3">0 / 1 / 2 / 3+ DEL</th>
-                      <th className="py-3 px-3">START</th>
-                      <th className="py-3 px-3">WORK</th>
-                      <th className="py-3 px-3">END</th>
-                      <th className="py-3 px-3">TEMP</th>
-                      <th className="py-3 px-3">BREAK</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100 text-sm">
-                    {visibleCities.map((row) => (
-                      <tr key={row.city} className="hover:bg-gray-50">
-                        <td className="py-3.5 px-4 font-semibold text-gray-900">{row.city}</td>
-                        <td className="py-3.5 px-3">
-                          <span className="font-semibold text-gray-800">{row.queued}</span>{' '}
-                          <span className="text-xs text-gray-400">({row.queuedPct}%)</span>
-                        </td>
-                        <td className="py-3.5 px-3">
-                          <span className="font-semibold text-gray-800">{row.dispatched}</span>{' '}
-                          <span className="text-xs text-gray-400">({row.dispatchedPct}%)</span>
-                        </td>
-                        <td className="py-3.5 px-3">
-                          <span className="font-semibold text-blue-600">{row.active}</span>{' '}
-                          <span className="text-xs text-gray-400">({row.activePct}%)</span>
-                        </td>
-                        <td className="py-3.5 px-3 font-semibold text-[#d32f2f]">{row.delay}</td>
-                        <td className="py-3.5 px-3 text-gray-700">
-                          {row.puPct}% / {row.doPct}%
-                        </td>
-                        <td className="py-3.5 px-3 text-xs text-gray-600 font-mono">
-                          {row.zeroDel} / {row.lowDel} / {row.medDel} / {row.highDel}
-                        </td>
-                        <td className="py-3.5 px-3 text-gray-700">{row.starting}</td>
-                        <td className="py-3.5 px-3 font-semibold text-emerald-700">{row.working}</td>
-                        <td className="py-3.5 px-3 text-amber-700">{row.ending}</td>
-                        <td className="py-3.5 px-3 text-gray-600">{row.tempBreak}</td>
-                        <td className="py-3.5 px-3 text-gray-600">{row.break}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
-                <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
-                  Starting Points Breakdown ({filteredZones.length} Zones)
-                </span>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs whitespace-nowrap">
-                  <thead>
-                    <tr className="border-b border-gray-200 text-gray-500 font-semibold">
-                      <th className="py-3 px-4">STARTING POINT</th>
-                      <th className="py-3 px-3">PARENT ZONE</th>
-                      <th className="py-3 px-3">QUEUED</th>
-                      <th className="py-3 px-3">DISP</th>
-                      <th className="py-3 px-3">ACTIVE</th>
-                      <th className="py-3 px-3">DELAY</th>
-                      <th className="py-3 px-3">PU / DO</th>
-                      <th className="py-3 px-3">0 / 1 / 2 / 3+</th>
-                      <th className="py-3 px-3">WORK</th>
-                      <th className="py-3 px-3">END</th>
-                      <th className="py-3 px-3">BREAK</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100 text-sm">
-                    {filteredZones.map((sp) => (
-                      <tr key={sp.id} className="hover:bg-gray-50">
-                        <td className="py-3 px-4 font-medium text-gray-900">{sp.zone}</td>
-                        <td className="py-3 px-3 text-xs text-gray-500">{sp.parentZone || '-'}</td>
-                        <td className="py-3 px-3">{sp.queued}</td>
-                        <td className="py-3 px-3">{sp.dispatched}</td>
-                        <td className="py-3 px-3 font-medium text-blue-600">{sp.active}</td>
-                        <td className={`py-3 px-3 font-medium ${parseFloat(sp.delay) > 5 ? 'text-[#d32f2f]' : 'text-gray-600'}`}>
-                          {sp.delay}
-                        </td>
-                        <td className="py-3 px-3 text-gray-600">{sp.puPercent}% / {sp.doPercent}%</td>
-                        <td className="py-3 px-3 text-xs font-mono text-gray-500">
-                          {sp.zeroDel}/{sp.lowDel}/{sp.medDel}/{sp.highDel}
-                        </td>
-                        <td className="py-3 px-3 font-medium text-emerald-700">{sp.working}</td>
-                        <td className="py-3 px-3 text-amber-700">{sp.ending}</td>
-                        <td className="py-3 px-3 text-gray-600">{sp.break}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        );
-      };
-
-      const renderIssuesWatchlist = () => (
-        <div className="mt-6 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-50 p-3 rounded-lg border border-gray-200">
-            <div className="flex items-center gap-2">
-              {[
-                { id: 'all', label: `All Issues (${issuesList.length})` },
-                { id: 'open', label: `Open Issues (${issuesList.filter((i) => !i.picked_by).length})` },
-                { id: 'picked', label: `Picked Issues (${issuesList.filter((i) => Boolean(i.picked_by)).length})` }
-              ].map((st) => (
-                <button
-                  key={st.id}
-                  type="button"
-                  onClick={() => setIssueStatusFilter(st.id)}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
-                    issueStatusFilter === st.id
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-100'
-                  }`}
-                >
-                  {st.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-1.5 text-xs">
-              <span className="text-gray-500 font-medium mr-1">Type:</span>
-              {['all', 'pickup', 'dropoff', 'dispatch', 'courier'].map((tp) => (
-                <button
-                  key={tp}
-                  type="button"
-                  onClick={() => setIssueTypeFilter(tp)}
-                  className={`px-2.5 py-1 rounded-full capitalize font-medium ${
-                    issueTypeFilter === tp
-                      ? 'bg-gray-900 text-white'
-                      : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
-                  }`}
-                >
-                  {tp}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm whitespace-nowrap">
-                <thead>
-                  <tr className="border-b border-gray-200 text-gray-500 font-semibold text-xs bg-gray-50">
-                    <th className="py-3.5 px-4">TYPE</th>
-                    <th className="py-3.5 px-4">ISSUE</th>
-                    <th className="py-3.5 px-4">ORDER</th>
-                    <th className="py-3.5 px-4">COURIER</th>
-                    <th className="py-3.5 px-4">DEADLINE</th>
-                    <th className="py-3.5 px-4">OPEN FOR</th>
-                    <th className="py-3.5 px-4">PICKED BY</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {filteredIssues.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="py-12 text-center text-gray-500">
-                        No active issues matching current filters.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredIssues.map((iss, idx) => (
-                      <tr key={iss.id || idx} className="hover:bg-gray-50">
-                        <td className="py-3.5 px-4">
-                          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase bg-amber-50 text-amber-800 border border-amber-200">
-                            {iss.type}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4 font-medium text-gray-900">{iss.title}</td>
-                        <td className="py-3.5 px-4 text-blue-600 font-mono text-xs">{iss.order_code}</td>
-                        <td className="py-3.5 px-4 text-gray-700">{iss.courier_name}</td>
-                        <td className="py-3.5 px-4 text-xs font-semibold text-[#e53935]">
-                          {iss.deadline ? formatRelativeDeadline(iss.deadline) : '-'}
-                        </td>
-                        <td className="py-3.5 px-4 text-xs text-gray-500 font-mono">
-                          {iss.created_at ? formatRelativeDeadline(iss.created_at).replace('-', '') : '-'}
-                        </td>
-                        <td className="py-3.5 px-4 text-xs">
-                          {iss.picked_by ? (
-                            <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-medium">
-                              {iss.picked_by}
-                            </span>
-                          ) : (
-                            <span className="text-gray-400">Unassigned</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      );
-
-      const renderDispatcherDashboard = () => (
-        <div className="mt-6 bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead>
-              <tr className="border-b border-gray-200 text-gray-500 font-semibold text-xs bg-gray-50">
-                <th className="py-3.5 px-4">EMAIL</th>
-                <th className="py-3.5 px-4">ISSUES PICKED</th>
-                <th className="py-3.5 px-4">PROCESSING</th>
-                <th className="py-3.5 px-4">MAX PICKED FOR</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {dispatcherStats.map((disp, idx) => (
-                <tr key={idx} className="hover:bg-gray-50">
-                  <td className="py-3.5 px-4 font-medium text-gray-800">{disp.picked_by}</td>
-                  <td className="py-3.5 px-4">
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
-                      {disp.picked}
-                    </span>
-                  </td>
-                  <td className="py-3.5 px-4 text-gray-600">{disp.processing}</td>
-                  <td className="py-3.5 px-4 text-gray-600 font-mono text-xs">{disp.max_picked_for}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-
-      const renderActiveCouriersView = () => (
-        <div className="mt-6 w-full border-t border-gray-200">
-          {filteredZones.map((item) => {
-            const isHighDelay = parseFloat(item.delay) > 5;
-            const isExpanded = expandedZoneId === item.id;
-
-            const zoneCouriersFromApi = individualCouriers.filter(
-              (c) => String(c.starting_point_id) === String(item.id) ||
-                     (c.starting_point_name && c.starting_point_name.toLowerCase() === item.zone.toLowerCase())
-            );
-
-            const activeRidersInZone = [];
-            const seenRiderIds = new Set();
-            deliveries.forEach((d) => {
-              if (
-                d.courierId &&
-                !seenRiderIds.has(d.courierId) &&
-                (d.zone.toLowerCase().includes(item.zone.toLowerCase()) ||
-                  (Array.isArray(d.allZones) && d.allZones.some((z) => z.toLowerCase() === item.zone.toLowerCase())))
-              ) {
-                seenRiderIds.add(d.courierId);
-                activeRidersInZone.push({
-                  id: d.courierId,
-                  name: d.courier,
-                  status: d.status,
-                  orderId: d.id,
-                  vendor: d.vendor,
-                  deliveryRef: d
-                });
+        const visibleCities = citySummary.filter((c) => {
+          if (zoneFilterState.mode === 'all') return true;
+          if (zoneFilterState.mode === 'city' || zoneFilterState.mode === 'multiple_cities') {
+            return (zoneFilterState.cities || []).some((sc) => sc.toLowerCase() === c.city.toLowerCase());
+          }
+          return filteredZones.some((z) => z.city.toLowerCase() === c.city.toLowerCase());
+        });
               }
             });
 
@@ -2796,30 +2569,99 @@
                   <CoffeeIcon size={17} />
                 </button>
 
-                <div className="border-l border-gray-200 pl-2.5">
-                  <select
-                    value={selectedZoneFilter}
-                    onChange={(e) => setSelectedZoneFilter(e.target.value)}
-                    className="bg-transparent text-xs font-medium text-gray-700 cursor-pointer focus:outline-none max-w-[140px] py-1"
-                    title="Filter by Starting Point / Zone"
+                {/* Hurrier Exact Cities / Multiple Cities / Multiple Zones Dropdown */}
+                <div className="relative border-l border-gray-200 pl-2.5" ref={locationDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsLocationMenuOpen((prev) => !prev)}
+                    className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded text-xs font-medium transition-colors ${
+                      zoneFilterState.mode !== 'all'
+                        ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                        : 'text-gray-700 hover:bg-gray-100'
+                    }`}
                   >
-                    {availableZones.map((z) => (
-                      <option key={z} value={z}>{z}</option>
-                    ))}
-                  </select>
-                </div>
+                    <span className="max-w-[150px] truncate">{locationDropdownLabel}</span>
+                    {isLocationMenuOpen ? <ChevronUpIcon size={14} /> : <ChevronDownIcon size={14} />}
+                  </button>
 
-                <div className="border-l border-gray-200 pl-2.5">
-                  <select
-                    value={selectedCity}
-                    onChange={(e) => setSelectedCity(e.target.value)}
-                    className="bg-transparent text-xs font-medium text-gray-700 cursor-pointer focus:outline-none py-1"
-                    title="Filter by City"
-                  >
-                    {availableCities.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
+                  {isLocationMenuOpen && (
+                    <div className="absolute right-0 mt-1.5 w-56 bg-white rounded-md shadow-xl border border-gray-200 py-1 z-50 text-sm text-gray-800">
+                      <div className="max-h-64 overflow-y-auto divide-y divide-gray-50">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            applyAndSaveZoneFilter({ mode: 'all', cities: [], zoneIds: [] }, true);
+                            setIsLocationMenuOpen(false);
+                          }}
+                          className={`w-full text-left px-4 py-2.5 hover:bg-gray-100 transition-colors ${
+                            zoneFilterState.mode === 'all' ? 'font-bold text-blue-600 bg-blue-50/40' : ''
+                          }`}
+                        >
+                          All Cities
+                        </button>
+                        {mergedCitiesCatalog.map((cityObj) => {
+                          const isSelected =
+                            zoneFilterState.mode === 'city' &&
+                            zoneFilterState.cities?.[0]?.toLowerCase() === cityObj.name.toLowerCase();
+                          return (
+                            <button
+                              key={cityObj.id || cityObj.name}
+                              type="button"
+                              onClick={() => {
+                                applyAndSaveZoneFilter({ mode: 'city', cities: [cityObj.name], zoneIds: [] }, false);
+                                setIsLocationMenuOpen(false);
+                              }}
+                              className={`w-full text-left px-4 py-2.5 hover:bg-gray-100 transition-colors ${
+                                isSelected ? 'font-bold text-blue-600 bg-blue-50/40' : ''
+                              }`}
+                            >
+                              {cityObj.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="border-t border-gray-200 pt-1 mt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDraftCities(zoneFilterState.cities || []);
+                            setIsLocationMenuOpen(false);
+                            setIsCitiesDialogOpen(true);
+                          }}
+                          className={`w-full text-left px-4 py-2.5 hover:bg-gray-100 transition-colors flex items-center justify-between ${
+                            zoneFilterState.mode === 'multiple_cities' ? 'font-bold text-blue-600 bg-blue-50/40' : ''
+                          }`}
+                        >
+                          <span>Multiple Cities</span>
+                          {zoneFilterState.mode === 'multiple_cities' && (
+                            <span className="text-[11px] bg-blue-100 text-blue-700 px-1.5 rounded-full">
+                              {zoneFilterState.cities.length}
+                            </span>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDraftZoneIds(zoneFilterState.zoneIds || []);
+                            setZoneDialogSearch('');
+                            setIsLocationMenuOpen(false);
+                            setIsZonesDialogOpen(true);
+                          }}
+                          className={`w-full text-left px-4 py-2.5 hover:bg-gray-100 transition-colors flex items-center justify-between ${
+                            zoneFilterState.mode === 'multiple_zones' ? 'font-bold text-blue-600 bg-blue-50/40' : ''
+                          }`}
+                        >
+                          <span>Multiple Zones</span>
+                          {zoneFilterState.mode === 'multiple_zones' && (
+                            <span className="text-[11px] bg-blue-100 text-blue-700 px-1.5 rounded-full">
+                              {zoneFilterState.zoneIds.length}
+                            </span>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center ml-1">
@@ -2866,6 +2708,256 @@
               firebaseUrl={firebaseUrl}
               onClose={() => setSelectedOrder(null)}
             />
+          )}
+
+          {/* Hurrier Multiple Zones Selection Dialog */}
+          {isZonesDialogOpen && (
+            <div
+              className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+              onClick={() => setIsZonesDialogOpen(false)}
+            >
+              <div
+                className="bg-white rounded-lg max-w-2xl w-full shadow-2xl border border-gray-200 flex flex-col max-h-[85vh] overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-900">Select multiple zones</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Selected: <strong className="text-blue-600">{draftZoneIds.length}</strong> zones
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setDraftZoneIds([])}
+                      className="text-xs font-bold uppercase tracking-wider text-blue-600 hover:text-blue-800"
+                    >
+                      UNSELECT ALL
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsZonesDialogOpen(false)}
+                      className="p-1 text-gray-400 hover:text-gray-700 rounded"
+                    >
+                      <XIcon size={18} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="px-6 py-3 bg-gray-50 border-b border-gray-200 space-y-2.5">
+                  <div className="relative">
+                    <SearchIcon size={15} className="absolute left-3 top-2.5 text-gray-400" />
+                    <input
+                      type="text"
+                      value={zoneDialogSearch}
+                      onChange={(e) => setZoneDialogSearch(e.target.value)}
+                      placeholder="Search zones by name, ID, or city (e.g. Haram, Manial, Tahrir, Nasr city)..."
+                      className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-md text-xs focus:outline-none focus:border-blue-500 bg-white"
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={syncZonesToHurrier}
+                      onChange={(e) => setSyncZonesToHurrier(e.target.checked)}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span>تحديث السحب المباشر من Hurrier لهذه الزونات المختارة (Live Sync Selected Zones)</span>
+                  </label>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6 space-y-5">
+                  {mergedCitiesCatalog.map((cityObj) => {
+                    const q = zoneDialogSearch.trim().toLowerCase();
+                    const matchingZones = (cityObj.zones || []).filter(
+                      (z) =>
+                        !q ||
+                        z.name.toLowerCase().includes(q) ||
+                        String(z.id).includes(q) ||
+                        cityObj.name.toLowerCase().includes(q)
+                    );
+                    if (matchingZones.length === 0) return null;
+
+                    const allCitySelected = matchingZones.every((z) =>
+                      draftZoneIds.some((id) => String(id) === String(z.id))
+                    );
+
+                    return (
+                      <div key={cityObj.name} className="space-y-2">
+                        <div className="flex items-center justify-between border-b border-gray-100 pb-1.5">
+                          <span className="text-xs font-bold uppercase tracking-wider text-gray-500">
+                            {cityObj.name} ({matchingZones.length})
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const idsInCity = matchingZones.map((z) => z.id);
+                              if (allCitySelected) {
+                                setDraftZoneIds((prev) =>
+                                  prev.filter((id) => !idsInCity.some((cid) => String(cid) === String(id)))
+                                );
+                              } else {
+                                setDraftZoneIds((prev) => {
+                                  const next = new Set(prev.map(String));
+                                  idsInCity.forEach((cid) => next.add(String(cid)));
+                                  return Array.from(next).map(Number);
+                                });
+                              }
+                            }}
+                            className="text-[11px] font-semibold text-blue-600 hover:underline"
+                          >
+                            {allCitySelected ? 'Unselect City' : 'Select All in City'}
+                          </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {matchingZones.map((z) => {
+                            const checked = draftZoneIds.some((id) => String(id) === String(z.id));
+                            return (
+                              <label
+                                key={z.id}
+                                className={`flex items-center justify-between px-3 py-2 rounded border text-xs cursor-pointer transition-colors ${
+                                  checked
+                                    ? 'bg-blue-50/70 border-blue-300 text-blue-900 font-medium'
+                                    : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 truncate">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {
+                                      setDraftZoneIds((prev) =>
+                                        checked
+                                          ? prev.filter((id) => String(id) !== String(z.id))
+                                          : [...prev, z.id]
+                                      );
+                                    }}
+                                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                  />
+                                  <span className="truncate">{z.name}</span>
+                                </div>
+                                <span className="text-[10px] font-mono text-gray-400 ml-2">{z.id}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="px-6 py-3.5 bg-gray-50 border-t border-gray-200 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsZonesDialogOpen(false)}
+                    className="px-4 py-1.5 border border-gray-300 rounded text-xs font-semibold text-gray-700 bg-white hover:bg-gray-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (draftZoneIds.length === 0) {
+                        applyAndSaveZoneFilter({ mode: 'all', cities: [], zoneIds: [] }, syncZonesToHurrier);
+                      } else {
+                        applyAndSaveZoneFilter(
+                          { mode: 'multiple_zones', cities: [], zoneIds: draftZoneIds },
+                          syncZonesToHurrier
+                        );
+                      }
+                      setIsZonesDialogOpen(false);
+                      if (syncZonesToHurrier) {
+                        setTimeout(() => fetchLiveFeed(true), 1200);
+                      }
+                    }}
+                    className="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold shadow-sm"
+                  >
+                    Select
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Hurrier Multiple Cities Selection Dialog */}
+          {isCitiesDialogOpen && (
+            <div
+              className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+              onClick={() => setIsCitiesDialogOpen(false)}
+            >
+              <div
+                className="bg-white rounded-lg max-w-md w-full shadow-2xl border border-gray-200 flex flex-col max-h-[80vh] overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+                  <h2 className="text-lg font-bold text-gray-900">Select multiple cities</h2>
+                  <button
+                    type="button"
+                    onClick={() => setDraftCities([])}
+                    className="text-xs font-bold uppercase text-blue-600 hover:text-blue-800"
+                  >
+                    UNSELECT ALL
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6 space-y-2">
+                  {mergedCitiesCatalog.map((c) => {
+                    const checked = draftCities.includes(c.name);
+                    return (
+                      <label
+                        key={c.name}
+                        className={`flex items-center justify-between px-3.5 py-2.5 rounded border text-sm cursor-pointer ${
+                          checked
+                            ? 'bg-blue-50/70 border-blue-300 text-blue-900 font-semibold'
+                            : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              setDraftCities((prev) =>
+                                checked ? prev.filter((name) => name !== c.name) : [...prev, c.name]
+                              );
+                            }}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span>{c.name}</span>
+                        </div>
+                        <span className="text-xs text-gray-400">{c.zones.length} zones</span>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div className="px-6 py-3.5 bg-gray-50 border-t border-gray-200 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsCitiesDialogOpen(false)}
+                    className="px-4 py-1.5 border border-gray-300 rounded text-xs font-semibold text-gray-700 bg-white hover:bg-gray-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (draftCities.length === 0) {
+                        applyAndSaveZoneFilter({ mode: 'all', cities: [], zoneIds: [] }, false);
+                      } else {
+                        applyAndSaveZoneFilter({ mode: 'multiple_cities', cities: draftCities, zoneIds: [] }, false);
+                      }
+                      setIsCitiesDialogOpen(false);
+                    }}
+                    className="px-5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-semibold shadow-sm"
+                  >
+                    Select
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Live Sync Configuration Modal */}
