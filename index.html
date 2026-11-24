@@ -193,6 +193,37 @@
       { id: 10028, name: "Raml station sp", city: "Alexandria" }
     ];
 
+    const ZONE_QUICK_PRESETS = [
+      {
+        label: "الهرم وفيصل والطالبية",
+        ids: [10018, 10139, 10125, 10181, 10182, 10183, 10190, 10278, 10197, 10211]
+      },
+      {
+        label: "حدائق الأهرام",
+        ids: [10074, 10210, 10262]
+      },
+      {
+        label: "المنيل والسيدة زينب والتحرير",
+        ids: [10004, 10162, 10214, 10267, 10022, 10163, 10189, 10277]
+      },
+      {
+        label: "المعادي والمقطم وحلوان",
+        ids: [10002, 10003, 10130, 10009, 10161, 10174, 10232, 10269, 10215, 10228, 10265, 10001, 10064, 10217, 10227, 10231, 10020, 10241]
+      },
+      {
+        label: "مدينة نصر ومصر الجديدة وشبرا",
+        ids: [10000, 10024, 10128, 10230, 10218, 10196, 10127, 10186, 10266, 10229, 10005, 10131, 10216, 10006, 10033, 10045, 10143, 10164, 10192, 10222, 10270]
+      },
+      {
+        label: "أكتوبر والشيخ زايد",
+        ids: [10138, 10047, 10126, 10191, 10194, 10220, 10271, 10136, 10141, 10151, 10234, 10261, 10032, 10094, 10184, 10226, 10248, 10249, 10029, 10096, 10142, 10212, 10221]
+      },
+      {
+        label: "التجمع والرحاب ومدينتي والشروق",
+        ids: [10011, 10012, 10090, 10209, 10010, 10224, 10225, 10185, 10150, 10013, 10089, 10173, 10070, 10099, 10100, 10102, 10165, 10069, 10101, 10187, 10223, 10233, 10281]
+      }
+    ];
+
     const SIDEBAR_ITEMS = [
       { id: "Dashboard", label: "Dashboard" },
       { id: "Issues", label: "Issues" },
@@ -545,16 +576,36 @@
       };
     }
 
+    function getOrCreateEmployeeSessionId() {
+      try {
+        const key = "hurrier_emp_session_id";
+        let existing = sessionStorage.getItem(key);
+        if (!existing) {
+          existing = `emp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+          sessionStorage.setItem(key, existing);
+        }
+        return existing;
+      } catch {
+        return `emp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+      }
+    }
+
     function App() {
+      const [sessionId] = useState(() => getOrCreateEmployeeSessionId());
+      const [employeeName, setEmployeeName] = useState(() => {
+        try {
+          return localStorage.getItem("hurrier_emp_name") || "";
+        } catch {
+          return "";
+        }
+      });
+
+      const [isZoneSetupConfirmed, setIsZoneSetupConfirmed] = useState(false);
       const [activeTab, setActiveTab] = useState("Active");
       const [searchQuery, setSearchQuery] = useState("");
       const [selectedCity, setSelectedCity] = useState("Cairo");
-      const [cityFilterMode, setCityFilterMode] = useState("all");
-      const [selectedMultiCities, setSelectedMultiCities] = useState(["Cairo"]);
       const [selectedZoneIds, setSelectedZoneIds] = useState([]);
-      const [isZoneModalOpen, setIsZoneModalOpen] = useState(false);
       const [zoneSearchQuery, setZoneSearchQuery] = useState("");
-      const [syncSelectedZonesToHurrier, setSyncSelectedZonesToHurrier] = useState(true);
 
       const [activeQuickFilter, setActiveQuickFilter] = useState("All");
       const [selectedMartBranch, setSelectedMartBranch] = useState("ALL");
@@ -562,8 +613,6 @@
       const PAGE_SIZE = 100;
       const [currentPage, setCurrentPage] = useState(1);
       const [jumpPageInput, setJumpPageInput] = useState("");
-      const [serverPageData, setServerPageData] = useState(null);
-      const [isLoadingPage, setIsLoadingPage] = useState(false);
 
       const [deliveries, setDeliveries] = useState([]);
       const [couriers, setCouriers] = useState([]);
@@ -584,6 +633,9 @@
       const selectedOrderRef = useRef(null);
       selectedOrderRef.current = selectedOrder;
       const mainContainerRef = useRef(null);
+      const isZoneSetupConfirmedRef = useRef(false);
+      isZoneSetupConfirmedRef.current = isZoneSetupConfirmed;
+
       const copyToClipboard = useCallback((label, text) => {
         if (!text) return;
         if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -593,36 +645,110 @@
         setTimeout(() => setCopiedText(""), 1500);
       }, []);
 
-      const pushSelectedZonesToFirebase = useCallback(async (zoneIds, shouldSyncHurrier) => {
-        try {
-          await fetch(`${FIREBASE_DB_URL}/config/selected_zones.json`, {
-            method: "PUT",
-            body: JSON.stringify({
-              zone_ids: shouldSyncHurrier ? zoneIds : [],
-              updated_at: new Date().toISOString()
-            })
-          });
-        } catch {
-          // تجاهل
-        }
-      }, []);
+      const registerSessionInFirebase = useCallback(
+        async (zoneIds, empLabel) => {
+          const cleanIds = Array.from(new Set((zoneIds || []).map(Number).filter(isRealHurrierZoneId)));
+          const idSet = new Set(cleanIds);
+          const zoneNames = ALL_ZONES_CATALOG.filter((z) => idSet.has(Number(z.id))).map((z) => z.name);
+          const resolvedName = normalizeText(empLabel) || `Employee (${sessionId.slice(-4)})`;
 
-      const pushViewFilterToFirebase = useCallback(async (tabName, pageNum, quickFilter, zoneIds, shouldSyncHurrier) => {
-        try {
-          await fetch(`${FIREBASE_DB_URL}/config/view_filter.json`, {
+          try {
+            await fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}.json`, {
+              method: "PUT",
+              body: JSON.stringify({
+                session_id: sessionId,
+                employee_name: resolvedName,
+                zone_ids: cleanIds,
+                zone_names: zoneNames,
+                heartbeat_at: Date.now(),
+                updated_at: new Date().toISOString()
+              })
+            });
+          } catch {
+            // تجاهل
+          }
+        },
+        [sessionId]
+      );
+
+      const unregisterSessionFromFirebase = useCallback(
+        (useKeepalive = false) => {
+          try {
+            fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}.json`, {
+              method: "DELETE",
+              keepalive: useKeepalive
+            }).catch(() => {});
+            fetch(`${FIREBASE_DB_URL}/session_bundles/${sessionId}.json`, {
+              method: "DELETE",
+              keepalive: useKeepalive
+            }).catch(() => {});
+          } catch {
+            // تجاهل
+          }
+        },
+        [sessionId]
+      );
+
+      const handleConfirmZoneSelection = useCallback(
+        async (explicitZoneIds) => {
+          const sourceIds = Array.isArray(explicitZoneIds) ? explicitZoneIds : selectedZoneIds;
+          const cleanIds = Array.from(new Set(sourceIds.map(Number).filter(isRealHurrierZoneId)));
+          if (cleanIds.length === 0) return;
+
+          const trimmedName = normalizeText(employeeName);
+          try {
+            if (trimmedName) localStorage.setItem("hurrier_emp_name", trimmedName);
+          } catch {}
+
+          setSelectedZoneIds(cleanIds);
+          setDeliveries([]);
+          setTabCounts({});
+          setCurrentPage(1);
+          setActiveQuickFilter("All");
+          setSelectedMartBranch("ALL");
+          setIsZoneSetupConfirmed(true);
+          setConnectionStatus("connecting");
+
+          await registerSessionInFirebase(cleanIds, trimmedName);
+        },
+        [selectedZoneIds, employeeName, registerSessionInFirebase]
+      );
+
+      const handleResetToZoneSelection = useCallback(async () => {
+        setIsZoneSetupConfirmed(false);
+        setSelectedZoneIds([]);
+        setDeliveries([]);
+        setTabCounts({});
+        setCurrentPage(1);
+        setActiveQuickFilter("All");
+        setSelectedMartBranch("ALL");
+        setSelectedOrder(null);
+        unregisterSessionFromFirebase(false);
+      }, [unregisterSessionFromFirebase]);
+
+      // Send heartbeat every 15s while monitoring & clean up on tab close
+      useEffect(() => {
+        if (!isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
+
+        const hbTimer = setInterval(() => {
+          fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}/heartbeat_at.json`, {
             method: "PUT",
-            body: JSON.stringify({
-              tab: tabName || "Active",
-              page: Number(pageNum) || 1,
-              quick_filter: quickFilter || "All",
-              zone_ids: shouldSyncHurrier ? zoneIds : [],
-              updated_at: new Date().toISOString()
-            })
-          });
-        } catch {
-          // تجاهل
-        }
-      }, []);
+            body: JSON.stringify(Date.now())
+          }).catch(() => {});
+        }, 15000);
+
+        const handleUnload = () => {
+          if (isZoneSetupConfirmedRef.current) {
+            unregisterSessionFromFirebase(true);
+          }
+        };
+
+        window.addEventListener("beforeunload", handleUnload);
+        return () => {
+          clearInterval(hbTimer);
+          window.removeEventListener("beforeunload", handleUnload);
+        };
+      }, [isZoneSetupConfirmed, selectedZoneIds, sessionId, unregisterSessionFromFirebase]);
 
       const requestOrderDetailsFromHurrier = useCallback(async (orderId) => {
         if (!orderId) return;
@@ -680,7 +806,7 @@
         return () => clearInterval(pollTimer);
       }, [selectedOrder, fetchSingleOrderDetailDoc, requestOrderDetailsFromHurrier]);
 
-      const applyFirebaseBundle = useCallback((bundle) => {
+      const applySessionBundle = useCallback((bundle) => {
         if (!bundle || typeof bundle !== "object") return;
 
         const bucketMap = [
@@ -708,19 +834,6 @@
 
         setDeliveries(nextDeliveries);
         setTabCounts(nextCounts);
-
-        if (bundle.requestedPageData && Array.isArray(bundle.requestedPageData.records)) {
-          setServerPageData({
-            tab: bundle.requestedPageData.tab || "Active",
-            page: Number(bundle.requestedPageData.page) || 1,
-            quickFilter: bundle.requestedPageData.quickFilter || "All",
-            totalCount: bundle.requestedPageData.totalCount,
-            deliveries: bundle.requestedPageData.records.map((r) =>
-              mapHurrierRecordToDelivery(r, bundle.requestedPageData.tab || "Active")
-            )
-          });
-          setIsLoadingPage(false);
-        }
 
         if (bundle.stats && Array.isArray(bundle.stats.cities)) {
           const summaries = [];
@@ -815,26 +928,28 @@
         setConnectionStatus("live");
       }, []);
 
-      const fetchLiveBundleFromFirebase = useCallback(async () => {
+      const fetchMySessionBundleFromFirebase = useCallback(async () => {
+        if (!isZoneSetupConfirmed) return;
         try {
-          const res = await fetch(`${FIREBASE_DB_URL}/live_bundle.json`, { cache: "no-store" });
+          const res = await fetch(`${FIREBASE_DB_URL}/session_bundles/${sessionId}.json`, { cache: "no-store" });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
           if (data) {
-            applyFirebaseBundle(data);
+            applySessionBundle(data);
           } else {
             setConnectionStatus("waiting");
           }
         } catch {
           setConnectionStatus("error");
         }
-      }, [applyFirebaseBundle]);
+      }, [applySessionBundle, isZoneSetupConfirmed, sessionId]);
 
       useEffect(() => {
-        fetchLiveBundleFromFirebase();
-        const interval = setInterval(fetchLiveBundleFromFirebase, 2000);
+        if (!isZoneSetupConfirmed) return;
+        fetchMySessionBundleFromFirebase();
+        const interval = setInterval(fetchMySessionBundleFromFirebase, 2000);
         return () => clearInterval(interval);
-      }, [fetchLiveBundleFromFirebase]);
+      }, [fetchMySessionBundleFromFirebase, isZoneSetupConfirmed]);
 
       const availableZones = useMemo(() => {
         const map = new Map();
@@ -856,36 +971,10 @@
             });
           }
         });
-        couriers.forEach((c) => {
-          const numId = Number(c?.id);
-          if (c.zone && isRealHurrierZoneId(numId)) {
-            const key = normalizeText(c.zone).toLowerCase();
-            const existing = map.get(key);
-            map.set(key, {
-              id: existing ? existing.id : numId,
-              name: normalizeText(c.zone),
-              city: c.city || existing?.city || "Cairo"
-            });
-          }
-        });
-        deliveries.forEach((d) => {
-          (d.zoneObjects || []).forEach((zo) => {
-            const numId = Number(zo?.id);
-            if (zo && zo.name && isRealHurrierZoneId(numId)) {
-              const key = normalizeText(zo.name).toLowerCase();
-              const existing = map.get(key);
-              map.set(key, {
-                id: existing ? existing.id : numId,
-                name: normalizeText(zo.name),
-                city: zo.city || d.city || existing?.city || "Cairo"
-              });
-            }
-          });
-        });
         return Array.from(map.values())
           .filter((z) => selectedCity === "All Cities" || z.city === selectedCity)
           .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-      }, [couriers, discoveredZonesFromBundle, deliveries, selectedCity]);
+      }, [discoveredZonesFromBundle, selectedCity]);
 
       const selectedZoneNames = useMemo(() => {
         if (!Array.isArray(selectedZoneIds) || selectedZoneIds.length === 0) return [];
@@ -898,56 +987,30 @@
 
       const matchesZoneFilter = useCallback(
         (delivery) => {
-          if (cityFilterMode === "zones" && selectedZoneIds.length > 0) {
-            const recZoneIds = (delivery.zoneObjects || [])
-              .map((zo) => Number(zo.id))
-              .filter((n) => !Number.isNaN(n) && n > 0);
-            const matchesById = recZoneIds.some((zid) => selectedZoneIds.map(Number).includes(zid));
-            if (matchesById) return true;
+          if (selectedZoneIds.length === 0) return false;
+          const recZoneIds = (delivery.zoneObjects || [])
+            .map((zo) => Number(zo.id))
+            .filter((n) => !Number.isNaN(n) && n > 0);
+          if (recZoneIds.some((zid) => selectedZoneIds.map(Number).includes(zid))) return true;
 
-            const recNames = [
-              ...(delivery.zonesList || []),
-              ...(delivery.zoneObjects || []).map((zo) => zo.name),
-              delivery.zone
-            ]
-              .map((n) => normalizeText(n).toLowerCase())
-              .filter(Boolean);
+          const recNames = [
+            ...(delivery.zonesList || []),
+            ...(delivery.zoneObjects || []).map((zo) => zo.name),
+            delivery.zone
+          ]
+            .map((n) => normalizeText(n).toLowerCase())
+            .filter(Boolean);
 
-            return selectedZoneNames.some((selName) =>
-              recNames.some((rn) => rn === selName || rn.includes(selName) || selName.includes(rn))
-            );
-          }
-
-          if (cityFilterMode === "multi_cities") {
-            if (!selectedMultiCities.length) return true;
-            return selectedMultiCities.some(
-              (c) => normalizeText(c).toLowerCase() === normalizeText(delivery.city).toLowerCase()
-            );
-          }
-
-          if (selectedCity && selectedCity !== "All Cities") {
-            return normalizeText(selectedCity).toLowerCase() === normalizeText(delivery.city).toLowerCase();
-          }
-
-          return true;
+          return selectedZoneNames.some((selName) =>
+            recNames.some((rn) => rn === selName || rn.includes(selName) || selName.includes(rn))
+          );
         },
-        [cityFilterMode, selectedZoneIds, selectedZoneNames, selectedMultiCities, selectedCity]
+        [selectedZoneIds, selectedZoneNames]
       );
 
       const baseTabDeliveries = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();
-        const useServerExactPage =
-          cityFilterMode !== "zones" &&
-          !q &&
-          serverPageData &&
-          serverPageData.tab === activeTab &&
-          Number(serverPageData.page) === Number(currentPage) &&
-          Array.isArray(serverPageData.deliveries) &&
-          serverPageData.deliveries.length > 0;
-
-        const sourceList = useServerExactPage ? serverPageData.deliveries : deliveries;
-
-        return sourceList.filter((d) => {
+        return deliveries.filter((d) => {
           const matchesTab = d.tab === activeTab;
           const matchesZone = matchesZoneFilter(d);
           const matchesSearch =
@@ -958,7 +1021,7 @@
             d.zone.toLowerCase().includes(q);
           return matchesTab && matchesZone && matchesSearch;
         });
-      }, [deliveries, serverPageData, currentPage, cityFilterMode, activeTab, matchesZoneFilter, searchQuery]);
+      }, [deliveries, activeTab, matchesZoneFilter, searchQuery]);
 
       const martBranchesSummary = useMemo(() => {
         const martOrders = baseTabDeliveries.filter((d) => isTalabatMartVendor(d.vendor));
@@ -985,7 +1048,8 @@
           const hasCard = d.instructions.includes("Card");
           const isMart = isTalabatMartVendor(d.vendor);
           const isDarkstore = isMart || d.instructions.includes("Darkstores");
-          const isRestaurant = !isDarkstore && (d.instructions.includes("Restaurants") || d.instructions.includes("Supermarket"));
+          const isRestaurant =
+            !isDarkstore && (d.instructions.includes("Restaurants") || d.instructions.includes("Supermarket"));
 
           if (activeQuickFilter === "Delayed" && !isLate) return false;
           if (activeQuickFilter === "Cash" && !hasCash) return false;
@@ -1080,7 +1144,10 @@
           { label: "Ordered at", value: formatReadableTimestamp(orderObj.ordered_at || orderObj.created_at) },
           { label: "Send to restaurant", value: formatReadableTimestamp(orderObj.send_to_restaurant_at) },
           { label: "Restaurant confirmed at", value: formatReadableTimestamp(orderObj.restaurant_confirmed_at) },
-          { label: "Pickup - Committed", value: formatReadableTimestamp(orderObj.pickup_committed_at || orderObj.scheduled_pickup_at) },
+          {
+            label: "Pickup - Committed",
+            value: formatReadableTimestamp(orderObj.pickup_committed_at || orderObj.scheduled_pickup_at)
+          },
           { label: "Food is ready at", value: formatReadableTimestamp(orderObj.food_ready_at || orderObj.prepared_at) },
           {
             label: "Picked up at",
@@ -1088,7 +1155,9 @@
           },
           {
             label: "Promised delivery time",
-            value: formatReadableTimestamp(orderObj.scheduled_dropoff_at || orderObj.promised_delivery_at || rec.scheduled_dropoff_at)
+            value: formatReadableTimestamp(
+              orderObj.scheduled_dropoff_at || orderObj.promised_delivery_at || rec.scheduled_dropoff_at
+            )
           }
         ];
 
@@ -1141,7 +1210,12 @@
                 entry.accepted = true;
                 if (entry.pickedUpAt === "-") entry.pickedUpAt = timeSec;
               }
-              if (stateRaw.includes("undispatch") || stateRaw.includes("cancel") || stateRaw.includes("reject") || stateRaw.includes("unassign")) {
+              if (
+                stateRaw.includes("undispatch") ||
+                stateRaw.includes("cancel") ||
+                stateRaw.includes("reject") ||
+                stateRaw.includes("unassign")
+              ) {
                 entry.removedAt = timeSec;
               }
               riderMap.set(courierName, entry);
@@ -1155,7 +1229,8 @@
               subLabel: tr.reason || tr.triggered_by || tr.source || "",
               courierName,
               isAccepted: stateRaw.includes("accept"),
-              isRemoved: stateRaw.includes("undispatch") || stateRaw.includes("cancel") || stateRaw.includes("unassign")
+              isRemoved:
+                stateRaw.includes("undispatch") || stateRaw.includes("cancel") || stateRaw.includes("unassign")
             });
           });
         });
@@ -1164,9 +1239,10 @@
         const acceptedRiders = ridersHistory.filter((r) => r.accepted);
 
         const notes = Array.isArray(doc.dispatcher_notes) ? doc.dispatcher_notes : [];
-        const items = Array.isArray(orderObj.items) && orderObj.items.length > 0
-          ? orderObj.items
-          : [{ name: `${vendorName} #${vendorOrderNo}`, quantity: 1, price: orderValueStr }];
+        const items =
+          Array.isArray(orderObj.items) && orderObj.items.length > 0
+            ? orderObj.items
+            : [{ name: `${vendorName} #${vendorOrderNo}`, quantity: 1, price: orderValueStr }];
 
         return {
           ...selectedOrder,
@@ -1214,87 +1290,29 @@
       }, [availableZones, zoneSearchQuery]);
 
       const effectiveTabCounts = useMemo(() => {
-        if (cityFilterMode === "zones" && selectedZoneIds.length > 0) {
-          const perTab = {};
-          ["Active", "Queued", "Dispatched", "Actionable", "Pre-order", "Waiting for Assembly"].forEach((t) => {
-            perTab[t] = deliveries.filter((d) => d.tab === t && matchesZoneFilter(d)).length;
-          });
-          return perTab;
-        }
-        if (cityFilterMode === "multi_cities") {
-          const perTab = {};
-          ["Active", "Queued", "Dispatched", "Actionable", "Pre-order", "Waiting for Assembly"].forEach((t) => {
-            perTab[t] = deliveries.filter((d) => d.tab === t && matchesZoneFilter(d)).length;
-          });
-          return perTab;
-        }
-        return tabCounts;
-      }, [cityFilterMode, selectedZoneIds, deliveries, matchesZoneFilter, tabCounts]);
+        const perTab = {};
+        ["Active", "Queued", "Dispatched", "Actionable", "Pre-order", "Waiting for Assembly"].forEach((t) => {
+          const localCount = deliveries.filter((d) => d.tab === t && matchesZoneFilter(d)).length;
+          perTab[t] = localCount > 0 ? localCount : tabCounts[t] ?? 0;
+        });
+        return perTab;
+      }, [deliveries, matchesZoneFilter, tabCounts]);
+
+      const selectedZoneCouriers = useMemo(() => {
+        if (selectedZoneIds.length === 0) return couriers;
+        const idSet = new Set(selectedZoneIds.map(Number));
+        const filtered = couriers.filter((c) => idSet.has(Number(c.id)));
+        return filtered.length > 0 ? filtered : couriers;
+      }, [couriers, selectedZoneIds]);
 
       const renderDashboardView = () => (
         <div className="mt-6 space-y-6">
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
             <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
-                Region Performance &amp; Rider Shifts
+                Selected Zones Performance &amp; Rider Shifts ({selectedZoneCouriers.length} Zones)
               </span>
-              <span className="text-xs text-gray-500">Live Firebase Stream (2s)</span>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs whitespace-nowrap">
-                <thead>
-                  <tr className="border-b border-gray-200 text-gray-500 font-semibold bg-white">
-                    <th className="py-3 px-4">REGION</th>
-                    <th className="py-3 px-3">QUEUED</th>
-                    <th className="py-3 px-3">DISP</th>
-                    <th className="py-3 px-3">ACTIVE</th>
-                    <th className="py-3 px-3">DELAY</th>
-                    <th className="py-3 px-3">PU / DO</th>
-                    <th className="py-3 px-3">0 / 1 / 2 / 3+ DEL</th>
-                    <th className="py-3 px-3">START</th>
-                    <th className="py-3 px-3">WORK</th>
-                    <th className="py-3 px-3">END</th>
-                    <th className="py-3 px-3">TEMP</th>
-                    <th className="py-3 px-3">BREAK</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 text-sm">
-                  {citySummary.map((row) => (
-                    <tr key={row.city} className="hover:bg-gray-50">
-                      <td className="py-3.5 px-4 font-semibold text-gray-900">{row.city}</td>
-                      <td className="py-3.5 px-3">
-                        {row.queued} <span className="text-xs text-gray-400">({row.queuedPct}%)</span>
-                      </td>
-                      <td className="py-3.5 px-3">
-                        {row.dispatched} <span className="text-xs text-gray-400">({row.dispatchedPct}%)</span>
-                      </td>
-                      <td className="py-3.5 px-3 font-semibold text-blue-600">
-                        {row.active} <span className="text-xs text-gray-400">({row.activePct}%)</span>
-                      </td>
-                      <td className="py-3.5 px-3 font-semibold text-[#d32f2f]">{row.delay}</td>
-                      <td className="py-3.5 px-3 text-gray-700">
-                        {row.puPct}% / {row.doPct}%
-                      </td>
-                      <td className="py-3.5 px-3 text-xs text-gray-600 font-mono">
-                        {row.zeroDel} / {row.lowDel} / {row.medDel} / {row.highDel}
-                      </td>
-                      <td className="py-3.5 px-3">{row.starting}</td>
-                      <td className="py-3.5 px-3 font-semibold text-emerald-700">{row.working}</td>
-                      <td className="py-3.5 px-3 font-amber-700">{row.ending}</td>
-                      <td className="py-3.5 px-3 text-gray-600">{row.tempBreak}</td>
-                      <td className="py-3.5 px-3 text-gray-600">{row.break}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-            <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
-              <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
-                Starting Points Breakdown ({couriers.length} Zones)
-              </span>
+              <span className="text-xs text-gray-500">Independent Employee Stream (2s)</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs whitespace-nowrap">
@@ -1312,7 +1330,7 @@
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 text-sm">
-                  {couriers.map((sp) => (
+                  {selectedZoneCouriers.map((sp) => (
                     <tr key={sp.id} className="hover:bg-gray-50">
                       <td className="py-3 px-4 font-medium text-gray-900">{sp.zone}</td>
                       <td className="py-3 px-3">{sp.queued}</td>
@@ -1333,12 +1351,60 @@
               </table>
             </div>
           </div>
+
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+            <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
+                Region Overview
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs whitespace-nowrap">
+                <thead>
+                  <tr className="border-b border-gray-200 text-gray-500 font-semibold bg-white">
+                    <th className="py-3 px-4">REGION</th>
+                    <th className="py-3 px-3">QUEUED</th>
+                    <th className="py-3 px-3">DISP</th>
+                    <th className="py-3 px-3">ACTIVE</th>
+                    <th className="py-3 px-3">DELAY</th>
+                    <th className="py-3 px-3">PU / DO</th>
+                    <th className="py-3 px-3">WORK</th>
+                    <th className="py-3 px-3">END</th>
+                    <th className="py-3 px-3">BREAK</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 text-sm">
+                  {citySummary.map((row) => (
+                    <tr key={row.city} className="hover:bg-gray-50">
+                      <td className="py-3.5 px-4 font-semibold text-gray-900">{row.city}</td>
+                      <td className="py-3.5 px-3">
+                        {row.queued} <span className="text-xs text-gray-400">({row.queuedPct}%)</span>
+                      </td>
+                      <td className="py-3.5 px-3">
+                        {row.dispatched} <span className="text-xs text-gray-400">({row.dispatchedPct}%)</span>
+                      </td>
+                      <td className="py-3.5 px-3 font-semibold text-blue-600">
+                        {row.active} <span className="text-xs text-gray-400">({row.activePct}%)</span>
+                      </td>
+                      <td className="py-3.5 px-3 font-semibold text-[#d32f2f]">{row.delay}</td>
+                      <td className="py-3.5 px-3 text-gray-700">
+                        {row.puPct}% / {row.doPct}%
+                      </td>
+                      <td className="py-3.5 px-3 font-semibold text-emerald-700">{row.working}</td>
+                      <td className="py-3.5 px-3 font-amber-700">{row.ending}</td>
+                      <td className="py-3.5 px-3 text-gray-600">{row.break}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       );
 
       const renderActiveCouriersView = () => (
         <div className="mt-6 w-full border-t border-gray-200">
-          {couriers.map((item) => {
+          {selectedZoneCouriers.map((item) => {
             const isHighDelay = parseFloat(item.delay) > 5;
             const isExpanded = expandedZoneId === item.id;
             return (
@@ -1467,7 +1533,7 @@
                 {issuesList.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="py-10 text-center text-gray-500 text-xs">
-                      No active issues found.
+                      No active issues found for your selected zones.
                     </td>
                   </tr>
                 ) : (
@@ -1476,17 +1542,13 @@
                       <td className="py-3.5 px-4 font-semibold text-blue-600">
                         {iss.order_code || iss.order_id || iss.id || "-"}
                       </td>
-                      <td className="py-3.5 px-4 text-gray-800">
-                        {iss.reason || iss.type || iss.title || "Issue"}
-                      </td>
+                      <td className="py-3.5 px-4 text-gray-800">{iss.reason || iss.type || iss.title || "Issue"}</td>
                       <td className="py-3.5 px-4">
                         <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-xs font-semibold">
                           {iss.status || "Open"}
                         </span>
                       </td>
-                      <td className="py-3.5 px-4 text-gray-600 text-xs">
-                        {iss.picked_by || iss.assignee || "-"}
-                      </td>
+                      <td className="py-3.5 px-4 text-gray-600 text-xs">{iss.picked_by || iss.assignee || "-"}</td>
                     </tr>
                   ))
                 )}
@@ -1496,65 +1558,24 @@
         </div>
       );
 
-      const totalItemsForPagination = useMemo(() => {
-        if (
-          cityFilterMode !== "zones" &&
-          !searchQuery.trim() &&
-          (activeQuickFilter === "All" ||
-            activeQuickFilter === "Darkstores" ||
-            activeQuickFilter === "Cash" ||
-            activeQuickFilter === "Card")
-        ) {
-          if (
-            serverPageData &&
-            serverPageData.tab === activeTab &&
-            serverPageData.quickFilter === activeQuickFilter &&
-            typeof serverPageData.totalCount === "number" &&
-            serverPageData.totalCount > 0
-          ) {
-            return serverPageData.totalCount;
-          }
-          if (activeQuickFilter === "All" && typeof effectiveTabCounts[activeTab] === "number") {
-            return effectiveTabCounts[activeTab];
-          }
-        }
-        return filteredDeliveries.length;
-      }, [cityFilterMode, searchQuery, activeQuickFilter, serverPageData, activeTab, effectiveTabCounts, filteredDeliveries.length]);
-
+      const totalItemsForPagination = filteredDeliveries.length;
       const totalPages = Math.max(1, Math.ceil(totalItemsForPagination / PAGE_SIZE));
 
       const paginatedDeliveries = useMemo(() => {
-        const isUsingSingleServerPage =
-          cityFilterMode !== "zones" &&
-          !searchQuery.trim() &&
-          serverPageData &&
-          serverPageData.tab === activeTab &&
-          Number(serverPageData.page) === Number(currentPage) &&
-          Array.isArray(serverPageData.deliveries) &&
-          serverPageData.deliveries.length > 0 &&
-          filteredDeliveries.length <= PAGE_SIZE;
-
-        if (isUsingSingleServerPage) {
-          return filteredDeliveries;
-        }
         const safePage = Math.min(currentPage, totalPages);
         const startIdx = (safePage - 1) * PAGE_SIZE;
         return filteredDeliveries.slice(startIdx, startIdx + PAGE_SIZE);
-      }, [cityFilterMode, searchQuery, serverPageData, activeTab, currentPage, filteredDeliveries, totalPages]);
+      }, [currentPage, totalPages, filteredDeliveries]);
 
       const handlePageChange = useCallback(
         (nextPage) => {
           const clamped = Math.max(1, Math.min(totalPages, Number(nextPage) || 1));
           setCurrentPage(clamped);
-          if (cityFilterMode !== "zones") {
-            setIsLoadingPage(true);
-            pushViewFilterToFirebase(activeTab, clamped, activeQuickFilter, selectedZoneIds, syncSelectedZonesToHurrier);
-          }
           if (mainContainerRef.current) {
             mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
           }
         },
-        [totalPages, cityFilterMode, pushViewFilterToFirebase, activeTab, activeQuickFilter, selectedZoneIds, syncSelectedZonesToHurrier]
+        [totalPages]
       );
 
       const visiblePageNumbers = useMemo(() => {
@@ -1608,7 +1629,6 @@
                         setActiveQuickFilter(qf.id);
                         setCurrentPage(1);
                         if (qf.id !== "Darkstores") setSelectedMartBranch("ALL");
-                        pushViewFilterToFirebase(activeTab, 1, qf.id, selectedZoneIds, syncSelectedZonesToHurrier);
                       }}
                       className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
                         active
@@ -1626,9 +1646,7 @@
                 <button
                   type="button"
                   onClick={() =>
-                    setOrderSortMode((prev) =>
-                      prev === "hurrier_order" ? "live_first" : "hurrier_order"
-                    )
+                    setOrderSortMode((prev) => (prev === "hurrier_order" ? "live_first" : "hurrier_order"))
                   }
                   className="px-2.5 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 font-semibold"
                   title="تبديل الترتيب بين ترتيب صفحات Hurrier الأصلية أو إظهار أوردرات النهاردة أولاً"
@@ -1709,13 +1727,13 @@
                   {paginatedDeliveries.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="py-12 text-center text-gray-500">
-                        {isLoadingPage ? (
+                        {connectionStatus === "connecting" || connectionStatus === "waiting" ? (
                           <span className="text-blue-600 font-semibold">
-                            Loading page {currentPage} from Hurrier...
+                            جاري سحب أوردرات الزونات المختارة من Hurrier...
                           </span>
                         ) : (
                           <>
-                            No deliveries found for <span className="font-semibold">{activeTab}</span>.
+                            لا توجد أوردرات في قسم <span className="font-semibold">{activeTab}</span> للزونات المختارة حالياً.
                           </>
                         )}
                       </td>
@@ -1758,7 +1776,10 @@
                                   {copiedText === item.id ? "✓" : "⧉"}
                                 </button>
                               </div>
-                              <span className="text-xs text-gray-500 truncate max-w-[260px]" title={`VO #${item.vo} - ${item.vendor}`}>
+                              <span
+                                className="text-xs text-gray-500 truncate max-w-[260px]"
+                                title={`VO #${item.vo} - ${item.vendor}`}
+                              >
                                 VO #{item.vo} - {item.vendor}
                               </span>
                             </div>
@@ -1771,12 +1792,12 @@
                           </td>
 
                           <td className="py-3.5 px-3 align-top text-[14px] max-w-[240px] whitespace-normal">
-                            {item.courier === "-" || item.courier === "Assigning..." || item.courier === "Pending Acceptance" ? (
+                            {item.courier === "-" ||
+                            item.courier === "Assigning..." ||
+                            item.courier === "Pending Acceptance" ? (
                               <span className="text-gray-500">{item.courier}</span>
                             ) : (
-                              <span className="text-blue-600 font-medium leading-snug block">
-                                {item.courier}
-                              </span>
+                              <span className="text-blue-600 font-medium leading-snug block">{item.courier}</span>
                             )}
                           </td>
 
@@ -1785,18 +1806,12 @@
                             {item.time_in !== "-" && (
                               <div className="text-xs text-gray-500 mt-0.5">In: {item.time_in}</div>
                             )}
-                            {item.time_at !== "-" && (
-                              <div className="text-xs text-gray-500">At: {item.time_at}</div>
-                            )}
+                            {item.time_at !== "-" && <div className="text-xs text-gray-500">At: {item.time_at}</div>}
                           </td>
 
                           <td className="py-3.5 px-3 align-top max-w-[230px]" title={item.zone}>
                             <div className="flex items-center gap-1.5">
-                              <span
-                                className={`truncate text-xs font-medium ${
-                                  selectedZoneNames.length > 0 ? "text-blue-700 font-semibold" : "text-gray-700"
-                                }`}
-                              >
+                              <span className="truncate text-xs font-semibold text-blue-700">
                                 {shownZones.join(", ") || item.zone}
                               </span>
                               {extraZonesCount > 0 && (
@@ -1841,130 +1856,296 @@
               </table>
             </div>
 
-            {/* Hurrier-Style Bottom Pagination Bar */}
-            <div className="pt-3 pb-6 flex flex-wrap items-center justify-between gap-3">
-              <div className="text-xs text-gray-500">
-                {isLoadingPage ? (
-                  <span className="text-blue-600 font-semibold">Syncing page {currentPage}...</span>
-                ) : (
-                  <span>
-                    Showing <strong>{(currentPage - 1) * PAGE_SIZE + (paginatedDeliveries.length > 0 ? 1 : 0)}</strong>–
-                    <strong>{(currentPage - 1) * PAGE_SIZE + paginatedDeliveries.length}</strong> of{" "}
-                    <strong>{totalItemsForPagination}</strong>
-                  </span>
-                )}
+            {totalPages > 1 && (
+              <div className="pt-3 pb-6 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs text-gray-500">
+                  Showing <strong>{(currentPage - 1) * PAGE_SIZE + (paginatedDeliveries.length > 0 ? 1 : 0)}</strong>–
+                  <strong>{(currentPage - 1) * PAGE_SIZE + paginatedDeliveries.length}</strong> of{" "}
+                  <strong>{totalItemsForPagination}</strong>
+                </div>
+
+                <div className="flex items-center gap-1 select-none">
+                  <button
+                    type="button"
+                    disabled={currentPage <= 1}
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
+                      currentPage <= 1 ? "text-gray-300 cursor-not-allowed" : "text-gray-600 hover:bg-gray-100"
+                    }`}
+                  >
+                    ‹
+                  </button>
+
+                  {visiblePageNumbers.map((p, idx) =>
+                    p === "..." ? (
+                      <span key={`dots-${idx}`} className="px-2 text-gray-400 text-sm">
+                        ...
+                      </span>
+                    ) : (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => handlePageChange(p)}
+                        className={`min-w-[36px] h-9 px-2.5 flex items-center justify-center text-sm transition-colors ${
+                          Number(currentPage) === Number(p)
+                            ? "border-b-2 border-blue-600 text-blue-600 font-bold"
+                            : "text-gray-700 hover:bg-gray-100 rounded font-medium"
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    )
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={currentPage >= totalPages}
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
+                      currentPage >= totalPages ? "text-gray-300 cursor-not-allowed" : "text-gray-600 hover:bg-gray-100"
+                    }`}
+                  >
+                    ›
+                  </button>
+                </div>
+
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const num = Number(jumpPageInput);
+                    if (num >= 1 && num <= totalPages) {
+                      handlePageChange(num);
+                      setJumpPageInput("");
+                    }
+                  }}
+                  className="flex items-center gap-1.5 text-xs"
+                >
+                  <span className="text-gray-500">Go to:</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={totalPages}
+                    value={jumpPageInput}
+                    onChange={(e) => setJumpPageInput(e.target.value)}
+                    placeholder={`1-${totalPages}`}
+                    className="w-16 px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:border-blue-500"
+                  />
+                  <button
+                    type="submit"
+                    className="px-2.5 py-1 rounded border border-gray-300 bg-white hover:bg-gray-50 font-semibold text-gray-700"
+                  >
+                    Go
+                  </button>
+                </form>
               </div>
-
-              <div className="flex items-center gap-1 select-none">
-                <button
-                  type="button"
-                  disabled={currentPage <= 1}
-                  onClick={() => handlePageChange(currentPage - 1)}
-                  className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
-                    currentPage <= 1
-                      ? "text-gray-300 cursor-not-allowed"
-                      : "text-gray-600 hover:bg-gray-100"
-                  }`}
-                  title="Previous Page"
-                >
-                  ‹
-                </button>
-
-                {visiblePageNumbers.map((p, idx) =>
-                  p === "..." ? (
-                    <span key={`dots-${idx}`} className="px-2 text-gray-400 text-sm">
-                      ...
-                    </span>
-                  ) : (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => handlePageChange(p)}
-                      className={`min-w-[36px] h-9 px-2.5 flex items-center justify-center text-sm transition-colors ${
-                        Number(currentPage) === Number(p)
-                          ? "border-b-2 border-blue-600 text-blue-600 font-bold"
-                          : "text-gray-700 hover:bg-gray-100 rounded font-medium"
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  )
-                )}
-
-                <button
-                  type="button"
-                  disabled={currentPage >= totalPages}
-                  onClick={() => handlePageChange(currentPage + 1)}
-                  className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
-                    currentPage >= totalPages
-                      ? "text-gray-300 cursor-not-allowed"
-                      : "text-gray-600 hover:bg-gray-100"
-                  }`}
-                  title="Next Page"
-                >
-                  ›
-                </button>
-              </div>
-
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const num = Number(jumpPageInput);
-                  if (num >= 1 && num <= totalPages) {
-                    handlePageChange(num);
-                    setJumpPageInput("");
-                  }
-                }}
-                className="flex items-center gap-1.5 text-xs"
-              >
-                <span className="text-gray-500">Go to:</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={totalPages}
-                  value={jumpPageInput}
-                  onChange={(e) => setJumpPageInput(e.target.value)}
-                  placeholder={`1-${totalPages}`}
-                  className="w-16 px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:border-blue-500"
-                />
-                <button
-                  type="submit"
-                  className="px-2.5 py-1 rounded border border-gray-300 bg-white hover:bg-gray-50 font-semibold text-gray-700"
-                >
-                  Go
-                </button>
-              </form>
-            </div>
+            )}
           </div>
         );
       };
 
       const activeHeaderCount = effectiveTabCounts[activeTab];
 
+      const selectedZonesDisplayList = useMemo(() => {
+        const idSet = new Set(selectedZoneIds.map(Number));
+        return ALL_ZONES_CATALOG.filter((z) => idSet.has(Number(z.id)));
+      }, [selectedZoneIds]);
+
+      // --- 1) MANDATORY ZONE SELECTION GATE SCREEN ---
+      if (!isZoneSetupConfirmed) {
+        return (
+          <div className="min-h-screen w-full bg-slate-50 flex flex-col items-center justify-center p-4 sm:p-6 text-gray-800">
+            <div className="w-full max-w-4xl bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden flex flex-col max-h-[92vh]">
+              {/* Gate Header */}
+              <div className="px-6 py-5 bg-gradient-to-r from-slate-900 to-slate-800 text-white flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">🚴‍♂️</span>
+                  <div>
+                    <h1 className="text-lg sm:text-xl font-bold tracking-tight">
+                      تحديد زونات الموظف قبل بدء السحب (Independent Zone Gate)
+                    </h1>
+                    <p className="text-xs text-slate-300 mt-0.5">
+                      كل موظف يختار زوناته المستقلة — يتم سحب وعرض أوردرات زوناتك فقط لتخفيف الحمل وتسريع الداشبورد
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[11px] font-mono px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
+                  Session: {sessionId.slice(-6)}
+                </span>
+              </div>
+
+              {/* Employee Name / Desk Input */}
+              <div className="px-6 py-3.5 bg-blue-50/50 border-b border-blue-100 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs font-bold text-blue-900">
+                  <span>👤 اسم الموظف / رقم المكتب (اختياري):</span>
+                </div>
+                <input
+                  type="text"
+                  value={employeeName}
+                  onChange={(e) => setEmployeeName(e.target.value)}
+                  placeholder="مثال: Ahmed - Desk 3"
+                  className="flex-1 min-w-[220px] max-w-sm px-3.5 py-1.5 border border-blue-200 bg-white rounded-lg text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              {/* Quick Area Presets */}
+              <div className="px-6 py-3.5 bg-gray-50 border-b border-gray-200 space-y-2">
+                <div className="text-xs font-bold text-gray-600">
+                  اختيار سريع لمناطق القاهرة (Quick Presets):
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {ZONE_QUICK_PRESETS.map((preset) => {
+                    const allIn = preset.ids.every((id) => selectedZoneIds.includes(id));
+                    return (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        onClick={() => {
+                          setSelectedZoneIds((prev) => {
+                            if (allIn) {
+                              return prev.filter((id) => !preset.ids.includes(id));
+                            }
+                            return Array.from(new Set([...prev, ...preset.ids]));
+                          });
+                        }}
+                        className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                          allIn
+                            ? "bg-blue-600 text-white border-blue-600"
+                            : "bg-white text-gray-700 border-gray-300 hover:bg-blue-50 hover:border-blue-300"
+                        }`}
+                      >
+                        {allIn ? "✓ " : "+ "}
+                        {preset.label} ({preset.ids.length})
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Search & Bulk Actions */}
+              <div className="px-6 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3 bg-white">
+                <div className="relative flex-1 min-w-[240px]">
+                  <input
+                    type="text"
+                    value={zoneSearchQuery}
+                    onChange={(e) => setZoneSearchQuery(e.target.value)}
+                    placeholder="ابحث باسم الزون أو رقم ID (مثال: Haram, Manial, Maadi, Nasr city, 10018)..."
+                    className="w-full pl-3.5 pr-8 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-500"
+                  />
+                  {zoneSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setZoneSearchQuery("")}
+                      className="absolute right-2.5 top-2.5 text-xs text-gray-400 hover:text-gray-700"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const visibleIds = filteredZonesForModal.map((z) => Number(z.id));
+                      setSelectedZoneIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
+                    }}
+                    className="px-3 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 font-semibold hover:bg-blue-100"
+                  >
+                    تحديد نتائج البحث ({filteredZonesForModal.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedZoneIds([])}
+                    className="px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-gray-700 font-semibold hover:bg-gray-100"
+                  >
+                    مسح الكل
+                  </button>
+                </div>
+              </div>
+
+              {/* Zones Checkbox Grid */}
+              <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 bg-slate-50/50">
+                {filteredZonesForModal.map((z) => {
+                  const checked = selectedZoneIds.includes(Number(z.id));
+                  return (
+                    <label
+                      key={z.id}
+                      className={`flex items-center justify-between px-3.5 py-2.5 rounded-xl border cursor-pointer transition-all ${
+                        checked
+                          ? "bg-blue-50 border-blue-500 text-blue-800 font-semibold shadow-sm"
+                          : "bg-white border-gray-200 text-gray-800 hover:border-blue-300 hover:bg-gray-50"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            setSelectedZoneIds((prev) =>
+                              prev.includes(Number(z.id))
+                                ? prev.filter((id) => id !== Number(z.id))
+                                : [...prev, Number(z.id)]
+                            );
+                          }}
+                          className="w-4 h-4 rounded text-blue-600"
+                        />
+                        <span className="text-xs sm:text-sm truncate" title={z.name}>
+                          {z.name}
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-mono text-gray-400 ml-2 flex-shrink-0">{z.id}</span>
+                    </label>
+                  );
+                })}
+              </div>
+
+              {/* Gate Footer Action Bar */}
+              <div className="px-6 py-4 bg-white border-t border-gray-200 flex flex-wrap items-center justify-between gap-3">
+                <div className="text-xs text-gray-600">
+                  الزونات المختارة لجلستك:{" "}
+                  <strong className="text-blue-600 text-sm">{selectedZoneIds.length}</strong>{" "}
+                  {selectedZoneIds.length === 0 && (
+                    <span className="text-amber-700 mr-1">(اختر زون واحدة على الأقل للبدء)</span>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={selectedZoneIds.length === 0}
+                  onClick={() => handleConfirmZoneSelection(selectedZoneIds)}
+                  className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm ${
+                    selectedZoneIds.length === 0
+                      ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                      : "bg-blue-600 hover:bg-blue-700 text-white"
+                  }`}
+                >
+                  بدء المتابعة وسحب الداتا ({selectedZoneIds.length} زون) ←
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      // --- 2) ACTIVE INDEPENDENT EMPLOYEE DASHBOARD VIEW ---
       return (
-        <div className="flex h-screen w-full bg-white font-sans overflow-hidden text-gray-800">
+        <div className="flex h-screen w-full bg-white overflow-hidden text-gray-800">
           {/* Left Navigation Sidebar */}
-          <aside className="w-[230px] flex-shrink-0 border-r border-gray-200 flex flex-col h-full bg-white z-10">
+          <aside className="w-[235px] flex-shrink-0 border-r border-gray-200 flex flex-col h-full bg-white z-10">
             <div className="h-14 flex items-center justify-between px-4 border-b border-gray-200">
               <div className="flex items-center gap-2 font-bold text-lg tracking-tight text-gray-900">
                 <span className="text-xl">🚴‍♂️</span>
                 <span>Hurrier</span>
               </div>
               <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
-                VIEW ONLY
+                View Only
               </span>
             </div>
 
             <nav className="flex-1 overflow-y-auto py-3 flex flex-col">
               {SIDEBAR_ITEMS.map((item) => {
                 const isActive = activeTab === item.id;
-                const countVal =
-                  item.id === "Issues"
-                    ? issuesList.length > 0
-                      ? issuesList.length
-                      : undefined
-                    : effectiveTabCounts[item.id];
-
+                const countVal = effectiveTabCounts[item.id];
                 return (
                   <button
                     key={item.id}
@@ -1972,7 +2153,6 @@
                     onClick={() => {
                       setActiveTab(item.id);
                       setCurrentPage(1);
-                      pushViewFilterToFirebase(item.id, 1, activeQuickFilter, selectedZoneIds, syncSelectedZonesToHurrier);
                     }}
                     className={`flex items-center justify-between px-5 py-2.5 text-sm font-medium w-full text-left transition-colors ${
                       isActive
@@ -1981,7 +2161,7 @@
                     } ${item.className || ""}`}
                   >
                     <span>
-                      {item.label} {countVal !== undefined ? `(${countVal})` : ""}
+                      {item.label} {countVal !== undefined && `(${countVal})`}
                     </span>
                   </button>
                 );
@@ -1991,10 +2171,11 @@
 
           {/* Main Content Area */}
           <div className="flex-1 flex flex-col min-w-0 bg-white">
-            <header className="h-14 flex items-center justify-between px-6 border-b border-gray-200 bg-white gap-4">
-              <div className="flex items-center gap-3 text-xs text-gray-500">
+            {/* Top Header */}
+            <header className="h-14 flex items-center justify-between px-5 border-b border-gray-200 bg-white gap-3">
+              <div className="flex items-center gap-2.5 text-xs text-gray-500 min-w-0">
                 <span
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-bold border ${
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold border flex-shrink-0 ${
                     connectionStatus === "live"
                       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                       : connectionStatus === "error"
@@ -2014,26 +2195,57 @@
                   {connectionStatus === "live"
                     ? "LIVE (2s)"
                     : connectionStatus === "error"
-                    ? "Sync Error"
-                    : "Connecting..."}
+                    ? "Retry..."
+                    : "Syncing Zones..."}
                 </span>
-                <span className="hidden sm:inline">Last Sync: {lastSyncTime}</span>
+
+                <span className="hidden xl:inline flex-shrink-0">Last Sync: {lastSyncTime}</span>
+
+                {/* Active Employee Session & Selected Zones Pill */}
+                <div
+                  className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 font-semibold truncate max-w-[340px]"
+                  title={selectedZonesDisplayList.map((z) => z.name).join(", ")}
+                >
+                  <span>👤 {normalizeText(employeeName) || sessionId.slice(-5)}</span>
+                  <span className="text-blue-300">|</span>
+                  <span className="truncate">
+                    📍 {selectedZoneIds.length} Zones:{" "}
+                    {selectedZonesDisplayList
+                      .slice(0, 2)
+                      .map((z) => z.name)
+                      .join(", ")}
+                    {selectedZonesDisplayList.length > 2 ? ` +${selectedZonesDisplayList.length - 2}` : ""}
+                  </span>
+                </div>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5">
+                {/* Change Zones Button -> Resets session & returns to Zone Selection Gate */}
+                <button
+                  type="button"
+                  onClick={handleResetToZoneSelection}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-sm transition-colors flex-shrink-0"
+                  title="العودة لشاشة اختيار الزونات وتغيير زونات جلستك"
+                >
+                  <span>🔄 تغيير الزونات</span>
+                </button>
+
                 <div className="relative flex items-center">
                   <input
                     type="text"
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search by Order ID, Vendor, or Courier"
-                    className="pl-3 pr-7 py-1.5 border border-gray-300 rounded-lg text-xs sm:text-sm w-56 sm:w-64 focus:outline-none focus:border-blue-500"
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    placeholder="Search by Order ID or Courier"
+                    className="pl-3 pr-7 py-1.5 border border-gray-300 rounded text-sm w-52 sm:w-64 focus:outline-none focus:border-blue-500"
                   />
                   {searchQuery && (
                     <button
                       type="button"
                       onClick={() => setSearchQuery("")}
-                      className="absolute right-2 text-gray-400 hover:text-gray-700 text-xs"
+                      className="absolute right-2 text-xs text-gray-400 hover:text-gray-600"
                     >
                       ✕
                     </button>
@@ -2042,683 +2254,303 @@
 
                 <button
                   type="button"
-                  onClick={() => setIsZoneModalOpen(true)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                    cityFilterMode === "zones" && selectedZoneIds.length > 0
-                      ? "bg-blue-600 text-white border-blue-600"
-                      : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-                  }`}
+                  onClick={fetchMySessionBundleFromFirebase}
+                  className="px-3 py-1.5 border border-gray-300 rounded text-xs font-semibold text-gray-700 hover:bg-gray-50 flex-shrink-0"
                 >
-                  {cityFilterMode === "zones" && selectedZoneIds.length > 0
-                    ? `Zones (${selectedZoneIds.length})`
-                    : "Multiple Zones"}
+                  ↻ Refresh
                 </button>
-
-                <select
-                  value={cityFilterMode === "zones" ? "Multiple Zones" : selectedCity}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (val === "Multiple Zones") {
-                      setIsZoneModalOpen(true);
-                    } else {
-                      setSelectedCity(val);
-                      setCityFilterMode("all");
-                      setSelectedZoneIds([]);
-                      setCurrentPage(1);
-                      pushSelectedZonesToFirebase([], syncSelectedZonesToHurrier);
-                      pushViewFilterToFirebase(activeTab, 1, activeQuickFilter, [], syncSelectedZonesToHurrier);
-                    }
-                  }}
-                  className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-xs sm:text-sm font-medium text-gray-700 bg-white focus:outline-none focus:border-blue-500"
-                >
-                  <option value="All Cities">All Cities</option>
-                  <option value="Cairo">Cairo</option>
-                  <option value="Alexandria">Alexandria</option>
-                  <option value="Multiple Zones">Multiple Zones</option>
-                </select>
               </div>
             </header>
 
-            <main ref={mainContainerRef} className="flex-1 overflow-auto p-6">
+            {/* Main View Body */}
+            <main ref={mainContainerRef} className="flex-1 overflow-auto p-6 sm:p-8">
               <div className="max-w-[1440px] mx-auto">
-                <div className="flex items-center justify-between mb-2">
-                  <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
-                    {activeTab === "Active Couriers" ||
-                    activeTab === "Dashboard" ||
-                    activeTab === "Dispatcher Dashboard" ||
-                    activeTab === "Issues"
-                      ? activeTab
-                      : `${activeTab} Deliveries${activeHeaderCount !== undefined ? ` (${activeHeaderCount})` : ""}`}
-                  </h1>
-
-                  <button
-                    type="button"
-                    onClick={fetchLiveBundleFromFirebase}
-                    className="px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
-                  >
-                    ↻ Refresh
-                  </button>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                  <div>
+                    <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
+                      {activeTab === "Active Couriers"
+                        ? "Active Couriers"
+                        : activeTab === "Dashboard" || activeTab === "Dispatcher Dashboard" || activeTab === "Issues"
+                        ? activeTab
+                        : `${activeTab} Deliveries ${activeHeaderCount !== undefined ? `(${activeHeaderCount})` : ""}`}
+                    </h1>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      الزونات النشطة لجلستك:{" "}
+                      <span className="font-semibold text-blue-700">
+                        {selectedZonesDisplayList.map((z) => z.name).join(" • ")}
+                      </span>
+                    </p>
+                  </div>
                 </div>
 
-                {activeTab === "Dashboard"
-                  ? renderDashboardView()
-                  : activeTab === "Active Couriers"
-                  ? renderActiveCouriersView()
-                  : activeTab === "Dispatcher Dashboard"
-                  ? renderDispatcherDashboardView()
-                  : activeTab === "Issues"
-                  ? renderIssuesView()
-                  : renderDeliveriesTable()}
+                {activeTab === "Dashboard" && renderDashboardView()}
+                {activeTab === "Active Couriers" && renderActiveCouriersView()}
+                {activeTab === "Dispatcher Dashboard" && renderDispatcherDashboardView()}
+                {activeTab === "Issues" && renderIssuesView()}
+                {activeTab !== "Dashboard" &&
+                  activeTab !== "Active Couriers" &&
+                  activeTab !== "Dispatcher Dashboard" &&
+                  activeTab !== "Issues" &&
+                  renderDeliveriesTable()}
               </div>
             </main>
           </div>
 
-          {/* Select Multiple Zones Modal */}
-          {isZoneModalOpen && (
-            <div
-              className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
-              onClick={() => setIsZoneModalOpen(false)}
-            >
-              <div
-                className="bg-white w-full max-w-3xl max-h-[85vh] rounded-xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-                  <div>
-                    <h2 className="text-lg font-bold text-gray-900">Select multiple zones</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      Selected: <strong className="text-blue-600">{selectedZoneIds.length}</strong> zones
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedZoneIds([])}
-                      className="text-xs font-bold text-blue-600 hover:underline uppercase"
-                    >
-                      UNSELECT ALL
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsZoneModalOpen(false)}
-                      className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 font-bold"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-
-                <div className="px-6 py-3 border-b border-gray-100 space-y-2.5 bg-gray-50/60">
-                  <input
-                    type="text"
-                    value={zoneSearchQuery}
-                    onChange={(e) => setZoneSearchQuery(e.target.value)}
-                    placeholder="Search zones by name, ID, or city (e.g. Haram, Manial, Tahrir, Nasr city)..."
-                    className="w-full px-3.5 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:border-blue-500"
-                  />
-
-                  <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={syncSelectedZonesToHurrier}
-                      onChange={(e) => setSyncSelectedZonesToHurrier(e.target.checked)}
-                      className="rounded text-blue-600"
-                    />
-                    <span>تحديث السحب المباشر من Hurrier لهذه الزونات المختارة (Live Sync Selected Zones)</span>
-                  </label>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {filteredZonesForModal.map((z) => {
-                    const checked = selectedZoneIds.includes(Number(z.id));
-                    return (
-                      <label
-                        key={z.id}
-                        className={`flex items-center justify-between px-3.5 py-2.5 rounded-lg border cursor-pointer transition-colors ${
-                          checked
-                            ? "bg-blue-50/80 border-blue-400 text-blue-700 font-semibold"
-                            : "bg-white border-gray-200 text-gray-800 hover:bg-gray-50"
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => {
-                              setSelectedZoneIds((prev) =>
-                                prev.includes(Number(z.id))
-                                  ? prev.filter((id) => id !== Number(z.id))
-                                  : [...prev, Number(z.id)]
-                              );
-                            }}
-                            className="rounded text-blue-600"
-                          />
-                          <span className="text-xs sm:text-sm truncate">{z.name}</span>
-                        </div>
-                        <span className="text-xs font-mono text-gray-400 ml-2">{z.id}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-
-                <div className="px-6 py-3.5 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setIsZoneModalOpen(false)}
-                    className="px-4 py-2 rounded-lg border border-gray-300 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-100"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCurrentPage(1);
-                      if (selectedZoneIds.length > 0) {
-                        setCityFilterMode("zones");
-                        pushSelectedZonesToFirebase(selectedZoneIds, syncSelectedZonesToHurrier);
-                        pushViewFilterToFirebase(activeTab, 1, activeQuickFilter, selectedZoneIds, syncSelectedZonesToHurrier);
-                      } else {
-                        setCityFilterMode("all");
-                        pushSelectedZonesToFirebase([], syncSelectedZonesToHurrier);
-                        pushViewFilterToFirebase(activeTab, 1, activeQuickFilter, [], syncSelectedZonesToHurrier);
-                      }
-                      setIsZoneModalOpen(false);
-                    }}
-                    className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold"
-                  >
-                    Select
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Full Order Inspection Modal */}
+          {/* Full Order Inspection Modal (Customer Info + Phone + Rider Acceptance History + Events) */}
           {selectedOrderFullView && (
             <div
               className="fixed inset-0 bg-black/45 z-50 flex items-center justify-center p-3 sm:p-6"
               onClick={() => setSelectedOrder(null)}
             >
               <div
-                className="bg-white w-full max-w-6xl max-h-[92vh] rounded-xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
+                className="bg-white rounded-xl max-w-5xl w-full max-h-[92vh] shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
-                {/* Modal Top Header */}
-                <div className="px-6 py-3.5 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3 bg-white">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xl font-bold text-gray-900">{selectedOrderFullView.id}</span>
-                    <span className="text-xs px-2.5 py-1 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200">
-                      {selectedOrderFullView.orderCode}
-                    </span>
-                    <span className="text-xs px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
+                {/* Modal Header */}
+                <div className="px-6 py-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-lg font-bold text-gray-900">{selectedOrderFullView.orderCode}</span>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800">
                       {selectedOrderFullView.status}
                     </span>
-                    {!selectedOrderFullView.isLoadedFromApi && (
-                      <span className="text-xs text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                        Fetching full order data...
-                      </span>
-                    )}
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700">
+                      Deadline: {selectedOrderFullView.deadline}
+                    </span>
                   </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        requestOrderDetailsFromHurrier(selectedOrderFullView.id);
-                        fetchSingleOrderDetailDoc(selectedOrderFullView.id);
-                      }}
-                      className="px-3 py-1.5 text-xs font-semibold rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
-                    >
-                      ↻ Refresh Details
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedOrder(null)}
-                      className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 text-base font-bold"
-                    >
-                      ✕
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOrder(null)}
+                    className="px-3 py-1 rounded-lg text-gray-500 hover:bg-gray-200 font-bold"
+                  >
+                    ✕
+                  </button>
                 </div>
 
-                {/* Accepted & Assigned Riders Summary Bar */}
-                <div className="px-6 py-3 bg-slate-50 border-b border-gray-200">
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                    <div className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                      Riders History ({selectedOrderFullView.ridersHistory.length} Riders • {selectedOrderFullView.acceptedRiders.length} Accepted)
+                {/* Modal Sub-Tabs */}
+                <div className="flex border-b border-gray-200 px-6 gap-6 text-xs font-bold bg-white">
+                  {["Deliveries", "Customer & Address", "Order Items"].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setDetailModalTab(t)}
+                      className={`py-3 border-b-2 transition-colors ${
+                        detailModalTab === t
+                          ? "border-blue-600 text-blue-600"
+                          : "border-transparent text-gray-500 hover:text-gray-800"
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Modal Body */}
+                <div className="flex-1 overflow-y-auto p-6 space-y-6 text-sm">
+                  {/* Top Customer & Vendor Summary Cards */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/40 space-y-2">
+                      <div className="text-xs font-bold uppercase tracking-wider text-blue-800">
+                        بيانات العميل (Customer Details)
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                          <span className="text-gray-500">الاسم:</span>{" "}
+                          <strong className="text-gray-900">{selectedOrderFullView.customerName}</strong>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-gray-500">الهاتف:</span>{" "}
+                          <strong className="text-emerald-700 font-mono">
+                            {selectedOrderFullView.customerPhone || "جاري الجلب..."}
+                          </strong>
+                          {selectedOrderFullView.customerPhone && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                copyToClipboard("phone", selectedOrderFullView.customerPhone)
+                              }
+                              className="px-1.5 py-0.5 rounded bg-white border border-gray-300 text-[10px] hover:bg-gray-100"
+                            >
+                              {copiedText === "phone" ? "✓" : "نسخ"}
+                            </button>
+                          )}
+                        </div>
+                        <div>
+                          <span className="text-gray-500">العمارة:</span>{" "}
+                          <strong>{selectedOrderFullView.building}</strong>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">الدور:</span>{" "}
+                          <strong>{selectedOrderFullView.floor}</strong>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">الشقة:</span>{" "}
+                          <strong>{selectedOrderFullView.apartment}</strong>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">المدخل / Intercom:</span>{" "}
+                          <strong>
+                            {selectedOrderFullView.entrance} / {selectedOrderFullView.intercom}
+                          </strong>
+                        </div>
+                      </div>
+                      <div className="text-xs text-gray-700 pt-1 border-t border-blue-100">
+                        <span className="text-gray-500">العنوان:</span> {selectedOrderFullView.dropoffAddress}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-slate-500">
-                      يوضح كل طيار عمل Accepted أو تم تحويل الأوردر إليه وأوقات القبول والتحويل
+
+                    <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/70 space-y-2">
+                      <div className="text-xs font-bold uppercase tracking-wider text-gray-700">
+                        بيانات المطعم / الفرع (Vendor &amp; Value)
+                      </div>
+                      <div className="text-xs space-y-1">
+                        <div>
+                          <span className="text-gray-500">الفرع:</span>{" "}
+                          <strong className="text-gray-900">{selectedOrderFullView.vendorName}</strong> (VO #
+                          {selectedOrderFullView.vendorOrderNo})
+                        </div>
+                        <div>
+                          <span className="text-gray-500">قيمة الأوردر:</span>{" "}
+                          <strong className="text-gray-900">{selectedOrderFullView.orderValue}</strong> •{" "}
+                          <span className="text-gray-500">المسافة:</span>{" "}
+                          <strong>{selectedOrderFullView.distance}</strong>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">عنوان الاستلام:</span>{" "}
+                          <span className="text-gray-700">{selectedOrderFullView.pickupAddress}</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  {selectedOrderFullView.ridersHistory.length === 0 ? (
-                    <div className="text-xs text-gray-500 bg-white p-2.5 rounded border border-gray-200">
-                      Assigned Courier: <strong className="text-gray-800">{selectedOrderFullView.courier}</strong>
+                  {detailModalTab === "Deliveries" && (
+                    <>
+                      {/* Riders Assignment & Acceptance History */}
+                      <div className="border border-gray-200 rounded-xl overflow-hidden">
+                        <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 text-xs font-bold text-gray-700">
+                          سجل الطيارين وحالة القبول (Rider Assignment &amp; Acceptance History)
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs whitespace-nowrap">
+                            <thead>
+                              <tr className="border-b border-gray-200 text-gray-500 bg-white">
+                                <th className="py-2.5 px-4">COURIER</th>
+                                <th className="py-2.5 px-3">STATUS</th>
+                                <th className="py-2.5 px-3">DISPATCHED AT</th>
+                                <th className="py-2.5 px-3">ACCEPTED AT</th>
+                                <th className="py-2.5 px-3">PICKED UP AT</th>
+                                <th className="py-2.5 px-3">UNDISPATCHED / REMOVED</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {selectedOrderFullView.ridersHistory.length === 0 ? (
+                                <tr>
+                                  <td colSpan={6} className="py-4 px-4 text-gray-500">
+                                    الطيار الحالي: <strong>{selectedOrderFullView.courier}</strong> (جاري تحميل سجل التحركات...)
+                                  </td>
+                                </tr>
+                              ) : (
+                                selectedOrderFullView.ridersHistory.map((r, idx) => (
+                                  <tr key={idx} className="hover:bg-gray-50">
+                                    <td className="py-2.5 px-4 font-semibold text-gray-900">{r.courierName}</td>
+                                    <td className="py-2.5 px-3">
+                                      {r.accepted ? (
+                                        <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold">
+                                          Accepted ✓
+                                        </span>
+                                      ) : (
+                                        <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold">
+                                          Assigned Only
+                                        </span>
+                                      )}
+                                    </td>
+                                    <td className="py-2.5 px-3 font-mono">{r.dispatchedAt}</td>
+                                    <td className="py-2.5 px-3 font-mono text-emerald-700 font-bold">{r.acceptedAt}</td>
+                                    <td className="py-2.5 px-3 font-mono">{r.pickedUpAt}</td>
+                                    <td className="py-2.5 px-3 font-mono text-red-600">{r.removedAt}</td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      {/* Timeline Events */}
+                      <div className="border border-gray-200 rounded-xl p-4 space-y-3">
+                        <div className="text-xs font-bold text-gray-700">
+                          التسلسل الزمني للأحداث بالثواني (Delivery Transitions Timeline)
+                        </div>
+                        {selectedOrderFullView.allEvents.length === 0 ? (
+                          <div className="text-xs text-gray-500">لا توجد أحداث مسجلة بعد.</div>
+                        ) : (
+                          <div className="space-y-2">
+                            {selectedOrderFullView.allEvents.map((ev) => (
+                              <div
+                                key={ev.key}
+                                className="timeline-row flex items-start gap-3 text-xs pl-1"
+                              >
+                                <div className="timeline-line pt-1">
+                                  <span
+                                    className={`block w-3 h-3 rounded-full ${
+                                      ev.isAccepted
+                                        ? "bg-emerald-500"
+                                        : ev.isRemoved
+                                        ? "bg-red-500"
+                                        : "bg-blue-500"
+                                    }`}
+                                  />
+                                </div>
+                                <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+                                  <div>
+                                    <span className="font-bold text-gray-900">{ev.eventLabel}</span>
+                                    {ev.courierName && ev.courierName !== "-" && (
+                                      <span className="text-blue-700 font-medium ml-2">• {ev.courierName}</span>
+                                    )}
+                                    {ev.subLabel && <span className="text-gray-500 ml-2">({ev.subLabel})</span>}
+                                  </div>
+                                  <span className="font-mono font-bold text-gray-700">{ev.timeSec}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+
+                  {detailModalTab === "Customer & Address" && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      {selectedOrderFullView.timeChecks.map((tc) => (
+                        <div key={tc.label} className="p-3 rounded-lg bg-gray-50 border border-gray-200">
+                          <div className="text-gray-500">{tc.label}</div>
+                          <div className="font-bold text-gray-900 mt-1">{tc.value}</div>
+                        </div>
+                      ))}
                     </div>
-                  ) : (
-                    <div className="flex gap-2.5 overflow-x-auto pb-1">
-                      {selectedOrderFullView.ridersHistory.map((r, idx) => (
-                        <div
-                          key={idx}
-                          className={`flex-shrink-0 px-3.5 py-2 rounded-lg border text-xs min-w-[240px] ${
-                            r.accepted
-                              ? "bg-emerald-50/70 border-emerald-300"
-                              : "bg-white border-gray-200"
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-bold text-gray-900 truncate max-w-[175px]" title={r.courierName}>
-                              {r.courierName}
-                            </span>
-                            {r.accepted ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white">
-                                Accepted
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-200 text-gray-700">
-                                Assigned Only
-                              </span>
-                            )}
+                  )}
+
+                  {detailModalTab === "Order Items" && (
+                    <div className="border border-gray-200 rounded-xl divide-y divide-gray-100">
+                      {selectedOrderFullView.items.map((it, idx) => (
+                        <div key={idx} className="p-3.5 flex items-center justify-between text-xs">
+                          <div>
+                            <strong className="text-gray-900">{it.quantity || it.qty || 1}x</strong>{" "}
+                            <span>{it.name}</span>
                           </div>
-                          <div className="mt-1.5 text-[11px] text-gray-600 space-y-0.5 font-mono">
-                            <div>Dispatched: {r.dispatchedAt}</div>
-                            <div className={r.accepted ? "text-emerald-800 font-semibold" : ""}>
-                              Accepted At: {r.acceptedAt}
-                            </div>
-                            {r.pickedUpAt !== "-" && <div>Picked Up: {r.pickedUpAt}</div>}
-                            {r.removedAt !== "-" && (
-                              <div className="text-red-700 font-semibold">Reassigned/Removed: {r.removedAt}</div>
-                            )}
-                          </div>
+                          <strong className="text-gray-900">{it.price}</strong>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
 
-                {/* Main 3-Column Layout Matching Hurrier */}
-                <div className="flex-1 overflow-y-auto p-6 bg-gray-50/50">
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-                    {/* Left Column: Important Details */}
-                    <div className="lg:col-span-3 bg-white border border-gray-200 rounded-xl p-4 space-y-3 text-xs shadow-sm">
-                      <div className="font-bold text-sm text-gray-900 pb-2 border-b border-gray-100">
-                        Important Details
-                      </div>
-
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-500">Status</span>
-                        <span className="font-semibold text-gray-900 text-right">{selectedOrderFullView.status}</span>
-                      </div>
-
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-500">Platform</span>
-                        <span className="font-bold text-orange-600">{selectedOrderFullView.platformName}</span>
-                      </div>
-
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-500">Global Entity ID</span>
-                        <span className="font-mono text-gray-800">{selectedOrderFullView.globalEntityId}</span>
-                      </div>
-
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-500">Vendor code</span>
-                        <span className="font-mono text-gray-800">{selectedOrderFullView.vendorCode}</span>
-                      </div>
-
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-500">Vendor Order no.</span>
-                        <span className="font-semibold text-gray-900">{selectedOrderFullView.vendorOrderNo}</span>
-                      </div>
-
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-500">Order Value</span>
-                        <span className="font-semibold text-gray-900">{selectedOrderFullView.orderValue}</span>
-                      </div>
-
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-500">Cash at Pickup</span>
-                        <span className="font-mono text-gray-800">{selectedOrderFullView.cashPickupStr}</span>
-                      </div>
-
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-500">Cash at Dropoff</span>
-                        <span className="font-semibold text-emerald-700">{selectedOrderFullView.cashDropoffStr}</span>
-                      </div>
-
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-500">Manhattan distance</span>
-                        <span className="font-semibold text-gray-900">{selectedOrderFullView.distance}</span>
-                      </div>
-
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-500">Prep duration (TES)</span>
-                        <span className="font-semibold text-gray-900">{selectedOrderFullView.prepDurationStr}</span>
-                      </div>
-
-                      <div className="flex justify-between gap-2">
-                        <span className="text-gray-500">Courier delay</span>
-                        <span className="font-semibold text-gray-900">{selectedOrderFullView.courierDelayStr}</span>
-                      </div>
-                    </div>
-
-                    {/* Center Column: Pick up and Drop off + Deliveries/Transitions */}
-                    <div className="lg:col-span-6 space-y-5">
-                      <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm space-y-4">
-                        <div className="text-base font-bold text-gray-900">Pick up and Drop off</div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {/* Vendor Address */}
-                          <div className="border border-gray-200 rounded-xl p-4 space-y-2.5 text-xs bg-white">
-                            <div className="flex items-center justify-between font-bold text-gray-800">
-                              <span>Vendor Address</span>
-                              <button
-                                type="button"
-                                onClick={() => copyToClipboard("vendorAddr", selectedOrderFullView.pickupAddress)}
-                                className="text-blue-600 hover:underline text-[11px]"
-                              >
-                                {copiedText === "vendorAddr" ? "Copied" : "Copy"}
-                              </button>
-                            </div>
-                            <div className="font-semibold text-blue-600 text-sm">
-                              {selectedOrderFullView.vendorName}
-                            </div>
-                            <div className="text-gray-600 leading-relaxed">
-                              {selectedOrderFullView.pickupAddress}
-                            </div>
-                            <div className="grid grid-cols-2 gap-y-1.5 pt-2 border-t border-gray-100 text-gray-500">
-                              <div>Apartment <span className="float-right font-semibold text-gray-800">NA</span></div>
-                              <div>Zipcode <span className="float-right font-semibold text-gray-800">NA</span></div>
-                              <div>Building <span className="float-right font-semibold text-gray-800">NA</span></div>
-                              <div>Intercom <span className="float-right font-semibold text-gray-800">NA</span></div>
-                              <div>Floor <span className="float-right font-semibold text-gray-800">NA</span></div>
-                              <div>Entrance <span className="float-right font-semibold text-gray-800">NA</span></div>
-                            </div>
-                          </div>
-
-                          {/* Customer Address + Phone + Apartment/Building/Floor */}
-                          <div className="border border-gray-200 rounded-xl p-4 space-y-2.5 text-xs bg-white">
-                            <div className="flex items-center justify-between font-bold text-gray-800">
-                              <span>Customer Address</span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  copyToClipboard(
-                                    "custAddr",
-                                    `${selectedOrderFullView.customerName} | ${selectedOrderFullView.customerPhone} | ${selectedOrderFullView.dropoffAddress}`
-                                  )
-                                }
-                                className="text-blue-600 hover:underline text-[11px]"
-                              >
-                                {copiedText === "custAddr" ? "Copied" : "Copy"}
-                              </button>
-                            </div>
-
-                            <div className="flex items-center justify-between gap-2 flex-wrap">
-                              <span className="font-bold text-gray-900 text-sm">
-                                {selectedOrderFullView.customerName}
-                              </span>
-                              {selectedOrderFullView.customerPhone ? (
-                                <button
-                                  type="button"
-                                  onClick={() => copyToClipboard("custPhone", selectedOrderFullView.customerPhone)}
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200 hover:bg-blue-100"
-                                >
-                                  <span>📞 {selectedOrderFullView.customerPhone}</span>
-                                  <span className="text-[10px]">
-                                    {copiedText === "custPhone" ? "✓" : "Copy"}
-                                  </span>
-                                </button>
-                              ) : (
-                                <span className="text-[11px] text-gray-400">No phone</span>
-                              )}
-                            </div>
-
-                            <div className="text-gray-700 leading-relaxed">
-                              {selectedOrderFullView.dropoffAddress}
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-y-1.5 pt-2 border-t border-gray-100 text-gray-500">
-                              <div>
-                                Apartment{" "}
-                                <span className="float-right font-semibold text-gray-800">
-                                  {selectedOrderFullView.apartment}
-                                </span>
-                              </div>
-                              <div>
-                                Zipcode{" "}
-                                <span className="float-right font-semibold text-gray-800">
-                                  {selectedOrderFullView.zipcode}
-                                </span>
-                              </div>
-                              <div>
-                                Building{" "}
-                                <span className="float-right font-semibold text-gray-800">
-                                  {selectedOrderFullView.building}
-                                </span>
-                              </div>
-                              <div>
-                                Intercom{" "}
-                                <span className="float-right font-semibold text-gray-800">
-                                  {selectedOrderFullView.intercom}
-                                </span>
-                              </div>
-                              <div>
-                                Floor{" "}
-                                <span className="float-right font-semibold text-gray-800">
-                                  {selectedOrderFullView.floor}
-                                </span>
-                              </div>
-                              <div>
-                                Entrance{" "}
-                                <span className="float-right font-semibold text-gray-800">
-                                  {selectedOrderFullView.entrance}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Deadline Progress Bar */}
-                        <div className="pt-1 flex items-center gap-3">
-                          <span className="w-7 h-7 rounded bg-gray-100 border border-gray-200 flex items-center justify-center text-xs">
-                            🏪
-                          </span>
-                          <div
-                            className={`flex-1 h-7 rounded-full flex items-center justify-end px-4 text-xs font-bold text-white ${
-                              selectedOrderFullView.deadline.includes("-") ? "bg-[#e53935]" : "bg-emerald-600"
-                            }`}
-                          >
-                            Deadline {selectedOrderFullView.deadline}
-                          </div>
-                          <span className="w-7 h-7 rounded bg-gray-100 border border-gray-200 flex items-center justify-center text-xs">
-                            🏠
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Deliveries / Issues / Routes / Order Items Card */}
-                      <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm space-y-4">
-                        <div className="flex items-center gap-6 border-b border-gray-200 pb-2.5 text-sm font-semibold">
-                          {["Deliveries", "Issues", "Routes", "Order Items"].map((subTab) => (
-                            <button
-                              key={subTab}
-                              type="button"
-                              onClick={() => setDetailModalTab(subTab)}
-                              className={`pb-2 -mb-2.5 border-b-2 transition-colors ${
-                                detailModalTab === subTab
-                                  ? "border-blue-600 text-blue-600"
-                                  : "border-transparent text-gray-500 hover:text-gray-800"
-                              }`}
-                            >
-                              {subTab} {subTab === "Deliveries" ? `(${selectedOrderFullView.deliveriesList.length})` : ""}
-                            </button>
-                          ))}
-                        </div>
-
-                        {detailModalTab === "Deliveries" && (
-                          <div className="space-y-4">
-                            {selectedOrderFullView.deliveriesList.map((del, dIdx) => (
-                              <div key={dIdx} className="border border-gray-200 rounded-lg overflow-hidden">
-                                <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2 text-xs">
-                                  <div>
-                                    <span className="text-gray-400">ID </span>
-                                    <span className="font-bold text-gray-900">{del.id || selectedOrderFullView.id}</span>
-                                  </div>
-                                  <div>
-                                    <span className="text-gray-400">STATUS </span>
-                                    <span className="font-bold text-gray-900">
-                                      {(del.status || selectedOrderFullView.status).replace(/_/g, " ")}
-                                    </span>
-                                  </div>
-                                  <div className="max-w-[260px] truncate" title={selectedOrderFullView.zone}>
-                                    <span className="text-gray-400">ZONES </span>
-                                    <span className="font-medium text-gray-700">{selectedOrderFullView.zone}</span>
-                                  </div>
-                                </div>
-
-                                <div className="overflow-x-auto">
-                                  <table className="w-full text-left text-xs whitespace-nowrap">
-                                    <thead>
-                                      <tr className="border-b border-gray-200 text-gray-500 bg-white">
-                                        <th className="py-2.5 px-3">TIME</th>
-                                        <th className="py-2.5 px-3">EVENT</th>
-                                        <th className="py-2.5 px-3">COURIER</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-100">
-                                      {selectedOrderFullView.allEvents.length === 0 ? (
-                                        <tr>
-                                          <td colSpan={3} className="py-6 text-center text-gray-400">
-                                            No transition events recorded yet.
-                                          </td>
-                                        </tr>
-                                      ) : (
-                                        selectedOrderFullView.allEvents.map((ev) => (
-                                          <tr
-                                            key={ev.key}
-                                            className={`timeline-row ${
-                                              ev.isAccepted
-                                                ? "bg-emerald-50/60"
-                                                : ev.isRemoved
-                                                ? "bg-red-50/50"
-                                                : "hover:bg-gray-50"
-                                            }`}
-                                          >
-                                            <td className="py-2.5 px-3 font-mono text-gray-700">{ev.timeSec}</td>
-                                            <td className="py-2.5 px-3 timeline-line">
-                                              <div className="flex items-center gap-2.5">
-                                                <span
-                                                  className={`w-2.5 h-2.5 rounded-full z-10 flex-shrink-0 ${
-                                                    ev.isAccepted
-                                                      ? "bg-emerald-600"
-                                                      : ev.isRemoved
-                                                      ? "bg-red-600"
-                                                      : "bg-blue-600"
-                                                  }`}
-                                                />
-                                                <div>
-                                                  <div
-                                                    className={`font-semibold ${
-                                                      ev.isAccepted
-                                                        ? "text-emerald-700"
-                                                        : ev.isRemoved
-                                                        ? "text-red-700"
-                                                        : "text-blue-600"
-                                                    }`}
-                                                  >
-                                                    {ev.eventLabel}
-                                                  </div>
-                                                  {ev.subLabel && (
-                                                    <div className="text-[11px] text-gray-500">{ev.subLabel}</div>
-                                                  )}
-                                                </div>
-                                              </div>
-                                            </td>
-                                            <td className="py-2.5 px-3 font-medium text-blue-600">{ev.courierName}</td>
-                                          </tr>
-                                        ))
-                                      )}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {detailModalTab === "Order Items" && (
-                          <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 text-xs">
-                            {selectedOrderFullView.items.map((it, idx) => (
-                              <div key={idx} className="p-3 flex justify-between items-center">
-                                <div>
-                                  <span className="font-bold text-gray-900">{it.quantity || it.qty || 1}x</span>{" "}
-                                  <span className="text-gray-700">{it.name || it.title || "Item"}</span>
-                                </div>
-                                <span className="font-semibold text-gray-900">
-                                  {it.price || selectedOrderFullView.orderValue}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {(detailModalTab === "Issues" || detailModalTab === "Routes") && (
-                          <div className="py-8 text-center text-xs text-gray-400">
-                            No {detailModalTab.toLowerCase()} records available for this order.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Right Column: Notes & Time Checks */}
-                    <div className="lg:col-span-3 space-y-5">
-                      <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-2.5 text-xs shadow-sm">
-                        <div className="flex items-center justify-between font-bold text-gray-900">
-                          <span>Notes</span>
-                          <span className="text-gray-500 font-normal">{selectedOrderFullView.notes.length} notes</span>
-                        </div>
-                        {selectedOrderFullView.notes.length === 0 ? (
-                          <div className="text-gray-400 py-4 text-center">No dispatcher notes</div>
-                        ) : (
-                          <div className="space-y-2">
-                            {selectedOrderFullView.notes.map((n, idx) => (
-                              <div key={idx} className="bg-white p-2.5 rounded border border-amber-200">
-                                <div className="text-gray-800 font-medium">{n.note || n.text || n.content || "-"}</div>
-                                <div className="text-[10px] text-gray-400 mt-1">
-                                  {n.author || n.created_by || "Dispatcher"}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3 text-xs shadow-sm">
-                        <div className="font-bold text-sm text-gray-900 pb-2 border-b border-gray-100">
-                          Time Checks
-                        </div>
-                        {selectedOrderFullView.timeChecks.map((tc, idx) => (
-                          <div key={idx} className="flex justify-between gap-2">
-                            <span className="text-gray-500">{tc.label}</span>
-                            <span className="font-semibold text-gray-800 text-right">{tc.value}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
                 {/* Modal Footer */}
-                <div className="px-6 py-3 bg-white border-t border-gray-200 flex items-center justify-between text-xs">
-                  <span className="text-amber-700 font-medium">
-                    Read-Only View (Send to Vendor &amp; Cancel disabled for viewers)
-                  </span>
+                <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
+                  <span>View-Only Mode (No actions permitted)</span>
                   <button
                     type="button"
                     onClick={() => setSelectedOrder(null)}
-                    className="px-4 py-1.5 bg-white border border-gray-300 rounded-lg font-semibold text-gray-700 hover:bg-gray-100"
+                    className="px-4 py-1.5 rounded-lg bg-white border border-gray-300 font-semibold text-gray-700 hover:bg-gray-100"
                   >
                     Close
                   </button>
@@ -2730,10 +2562,8 @@
       );
     }
 
-    const rootEl = document.getElementById("root");
-    if (rootEl && window.ReactDOM) {
-      ReactDOM.createRoot(rootEl).render(<App />);
-    }
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
   </script>
 </body>
 </html>
