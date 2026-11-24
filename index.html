@@ -445,7 +445,6 @@
         try {
           await fetch(`${FIREBASE_DB_URL}/config/selected_zones.json`, {
             method: "PUT",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               zone_ids: shouldSyncHurrier ? zoneIds : [],
               updated_at: new Date().toISOString()
@@ -468,7 +467,6 @@
             arr.push(cleanId);
             await fetch(`${FIREBASE_DB_URL}/config/requested_order_details.json`, {
               method: "PUT",
-              headers: { "Content-Type": "application/json" },
               body: JSON.stringify(arr.slice(-25))
             });
           }
