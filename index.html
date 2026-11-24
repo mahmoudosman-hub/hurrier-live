@@ -507,18 +507,23 @@
             .map((sp) => ({
               id: Number(sp.id || sp.starting_point_id),
               name: normalizeText(sp.name || sp.starting_point_name),
-              city: normalizeText(rec.city_name || order.city_name || "Cairo")
+              city: rec.city_name || order.city_name || "Cairo"
             }))
         : [];
 
-      const orderIdNum = String(order.code || rec.order_id || rec.id || "");
+      const orderIdNum = String(rec.display_id || order.code || rec.order_id || rec.id || "");
       const courierName = rec.courier_name || order.courier_name || (tabName === "Queued" ? "Assigning..." : "-");
-      const isSplit = Boolean(rec.is_split || order.is_split || (Array.isArray(order.deliveries) && order.deliveries.length > 1));
+      const isSplit = Boolean(
+        orderIdNum.includes("-") ||
+          rec.is_split ||
+          order.is_split ||
+          (Array.isArray(order.deliveries) && order.deliveries.length > 1)
+      );
 
       return {
         uid: `${tabName}-${orderIdNum}-${rec.id || courierName}-${Math.random().toString(36).slice(2, 6)}`,
         id: orderIdNum,
-        orderCode: order.order_code || `HF_EG${orderIdNum}`,
+        orderCode: order.order_code || `HF_EG${orderIdNum.split("-")[0]}`,
         vendor: order.vendor_name || rec.vendor_name || "Unknown Vendor",
         vo: order.vendor_order_number || order.vo || "-",
         deadline: deadlineStr,
@@ -1384,6 +1389,7 @@
           const isDs = isTalabatMartVendor(d.vendor) || d.instructions.includes("Darkstores");
           return !isDs && (d.instructions.includes("Restaurants") || d.instructions.includes("Supermarket"));
         }).length;
+        const splitCount = baseTabDeliveries.filter((d) => d.isSplit).length;
 
         const quickFilters = [
           { id: "All", label: `All (${baseTabDeliveries.length})` },
@@ -1392,7 +1398,7 @@
           { id: "Card", label: `Card (${cardCount})` },
           { id: "Restaurants", label: `Restaurants (${restaurantCount})` },
           { id: "Darkstores", label: `Darkstores - Talabat Mart (${darkstoreCount})` },
-          { id: "Split", label: "Split Orders" }
+          { id: "Split", label: `Split Orders (${splitCount})` }
         ];
 
         return (
@@ -1584,6 +1590,33 @@
         return selectedCity;
       }, [cityFilterMode, selectedZoneIds, selectedMultiCities, selectedCity]);
 
+      const effectiveTabCounts = useMemo(() => {
+        if (cityFilterMode === "zones" && selectedZoneIds.length > 0) {
+          const byTab = { ...tabCounts };
+          ["Actionable", "Pre-order", "Waiting for Assembly", "Queued", "Dispatched", "Active"].forEach((t) => {
+            const matching = deliveries.filter((d) => d.tab === t && matchesZoneFilter(d));
+            if (matching.length > 0 || !byTab[t]) {
+              byTab[t] = matching.length;
+            }
+          });
+          return byTab;
+        }
+        if (cityFilterMode === "all" && selectedCity !== "All Cities" && citySummary.length > 0) {
+          const cityRow = citySummary.find(
+            (c) => normalizeText(c.city).toLowerCase() === normalizeText(selectedCity).toLowerCase()
+          );
+          if (cityRow) {
+            return {
+              ...tabCounts,
+              Active: cityRow.active ?? tabCounts.Active,
+              Queued: cityRow.queued ?? tabCounts.Queued,
+              Dispatched: cityRow.dispatched ?? tabCounts.Dispatched
+            };
+          }
+        }
+        return tabCounts;
+      }, [cityFilterMode, selectedZoneIds, selectedCity, citySummary, tabCounts, deliveries, matchesZoneFilter]);
+
       return (
         <div className="flex h-screen w-full bg-white overflow-hidden text-gray-800">
           {/* Left Navigation Sidebar */}
@@ -1601,7 +1634,7 @@
             <nav className="flex-1 overflow-y-auto py-3 flex flex-col">
               {SIDEBAR_ITEMS.map((item) => {
                 const isActive = activeTab === item.id;
-                const countVal = tabCounts[item.id];
+                const countVal = effectiveTabCounts[item.id];
                 return (
                   <button
                     key={item.id}
@@ -1719,7 +1752,7 @@
                     {activeTab === "Active Couriers" || activeTab === "Dashboard" || activeTab === "Dispatcher Dashboard" || activeTab === "Issues"
                       ? activeTab
                       : `${activeTab} Deliveries ${
-                          tabCounts[activeTab] !== undefined ? `(${tabCounts[activeTab]})` : ""
+                          effectiveTabCounts[activeTab] !== undefined ? `(${effectiveTabCounts[activeTab]})` : ""
                         }`}
                   </h1>
 
