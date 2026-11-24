@@ -45,73 +45,154 @@
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
 
     const ALL_ZONES_CATALOG = [
-      { id: 10022, name: "Tahrir", city: "Cairo" },
-      { id: 10163, name: "Tahrir nesting", city: "Cairo" },
-      { id: 10162, name: "Manial nesting", city: "Cairo" },
-      { id: 10004, name: "Manial sp", city: "Cairo" },
+      { id: 10231, name: "Hybrid fleet mokattam easy sports", city: "Cairo" },
+      { id: 10002, name: "New maadi", city: "Cairo" },
+      { id: 10003, name: "Old maadi", city: "Cairo" },
+      { id: 10130, name: "Maadi nesting sp", city: "Cairo" },
+      { id: 10020, name: "Helwan SP", city: "Cairo" },
+      { id: 10009, name: "Zahraa maadi and meraag", city: "Cairo" },
+      { id: 10001, name: "Mokattam sp", city: "Cairo" },
+      { id: 10143, name: "Shobra 2 sp", city: "Cairo" },
+      { id: 10064, name: "Mokkatam asmarat sp", city: "Cairo" },
+      { id: 10094, name: "Sheikh zayed 2 sp", city: "Cairo" },
+      { id: 10251, name: "Hybrid fleet imbabah", city: "Cairo" },
+      { id: 10179, name: "Obour golf pt", city: "Cairo" },
+      { id: 10167, name: "Mohandiseen nesting p", city: "Cairo" },
       { id: 10181, name: "Haram nesting pt", city: "Cairo" },
-      { id: 10125, name: "Haram nesting sp", city: "Cairo" },
-      { id: 10182, name: "Haram pt", city: "Cairo" },
-      { id: 10183, name: "Haram pt 2", city: "Cairo" },
-      { id: 10018, name: "Haram sp", city: "Cairo" },
-      { id: 10139, name: "Haram sp 2", city: "Cairo" },
+      { id: 10138, name: "October hosary", city: "Cairo" },
+      { id: 1, name: "Heliopolis", city: "Cairo" },
+      { id: 10012, name: "Tagammoa 1 sp", city: "Cairo" },
+      { id: 10089, name: "Rehab 2 sp", city: "Cairo" },
+      { id: 10069, name: "Shorouk city sp 1", city: "Cairo" },
+      { id: 10090, name: "Tagamo3 5 south", city: "Cairo" },
+      { id: 10100, name: "Madinaty 3 sp south park", city: "Cairo" },
+      { id: 10235, name: "Ain shams nesting sp", city: "Cairo" },
+      { id: 10180, name: "Obour hay awal pt", city: "Cairo" },
+      { id: 10011, name: "Tagamoa 5 north", city: "Cairo" },
       { id: 10074, name: "Hadayek el ahram sp", city: "Cairo" },
-      { id: 10277, name: "Hybrid el sayeda zeinab bc", city: "Cairo" },
-      { id: 10189, name: "Hybrid fleet el sayeda", city: "Cairo" },
-      { id: 10267, name: "Hybrid al-manial bc", city: "Cairo" },
-      { id: 10266, name: "Hybrid ard el golf bc", city: "Cairo" },
-      { id: 10268, name: "Hybrid el hadeeqa el dawlia bc", city: "Cairo" },
-      { id: 10237, name: "Hybrid fleet agouza", city: "Cairo" },
-      { id: 10214, name: "Hybrid fleet al manial", city: "Cairo" },
-      { id: 10219, name: "Hybrid fleet ain shams", city: "Cairo" },
+      { id: 10091, name: "Mohamed naguib sp", city: "Cairo" },
+      { id: 10063, name: "Hadayek el qobba 1 sp", city: "Cairo" },
+      { id: 10102, name: "Madinaty 4 sp craft zone", city: "Cairo" },
+      { id: 10182, name: "Haram pt", city: "Cairo" },
+      { id: 10129, name: "Mohandiseen nesting sp", city: "Cairo" },
+      { id: 10183, name: "Haram pt 2", city: "Cairo" },
+      { id: 10115, name: "Ain shams (abdelhamed badawi) 2", city: "Cairo" },
+      { id: 10024, name: "Hay 10 and nasr city", city: "Cairo" },
+      { id: 10127, name: "Heliopolis nesting sp", city: "Cairo" },
+      { id: 10163, name: "Tahrir nesting", city: "Cairo" },
+      { id: 10160, name: "Rock vera", city: "Cairo" },
+      { id: 10166, name: "Mohandiseen p", city: "Cairo" },
+      { id: 10128, name: "Naser city nesting sp", city: "Cairo" },
+      { id: 10033, name: "Hegaz", city: "Cairo" },
+      { id: 10125, name: "Haram nesting sp", city: "Cairo" },
+      { id: 10000, name: "Nasr city sp", city: "Cairo" },
+      { id: 10165, name: "Madienty central park ebikes", city: "Cairo" },
+      { id: 10006, name: "Merryland", city: "Cairo" },
+      { id: 10139, name: "Haram sp 2", city: "Cairo" },
+      { id: 10022, name: "Tahrir", city: "Cairo" },
+      { id: 10162, name: "Manial nesting", city: "Cairo" },
+      { id: 10005, name: "Sheraton", city: "Cairo" },
+      { id: 10004, name: "Manial sp", city: "Cairo" },
+      { id: 10045, name: "Shobra sp", city: "Cairo" },
+      { id: 10013, name: "Rehab 1 sp", city: "Cairo" },
+      { id: 10096, name: "Palm hills sp", city: "Cairo" },
+      { id: 10150, name: "Golden square", city: "Cairo" },
+      { id: 10047, name: "October hosary 2", city: "Cairo" },
+      { id: 10018, name: "Haram sp", city: "Cairo" },
+      { id: 10099, name: "Madinaty 2 sp central park", city: "Cairo" },
+      { id: 10067, name: "Obour hay awal sp", city: "Cairo" },
+      { id: 10092, name: "Hadayek el qobba 2 sp", city: "Cairo" },
+      { id: 10164, name: "Shobra nesting", city: "Cairo" },
+      { id: 2, name: "Mohandiseen", city: "Cairo" },
+      { id: 10101, name: "Shorouk city sp 2", city: "Cairo" },
+      { id: 10126, name: "October nesting", city: "Cairo" },
+      { id: 10010, name: "Auc sp", city: "Cairo" },
+      { id: 10070, name: "Madinaty 1 sp air mall & arabesque", city: "Cairo" },
+      { id: 10141, name: "Wahat fardous sp", city: "Cairo" },
+      { id: 10113, name: "Ains shams (ahmed essmat) 1", city: "Cairo" },
+      { id: 10159, name: "Obour golf sp", city: "Cairo" },
+      { id: 10131, name: "Sheraton nesting sp", city: "Cairo" },
+      { id: 10161, name: "Zahraa maadi nesting", city: "Cairo" },
+      { id: 10151, name: "Wahat sp 2", city: "Cairo" },
+      { id: 10032, name: "Sheikh zayed 1 sp", city: "Cairo" },
+      { id: 10104, name: "Abasseya sp", city: "Cairo" },
+      { id: 10217, name: "Hybrid fleet mokattam mafarik", city: "Cairo" },
+      { id: 10193, name: "Hybrid fleet el zaitoun", city: "Cairo" },
       { id: 10186, name: "Hybrid fleet ard el golf", city: "Cairo" },
+      { id: 10216, name: "Hybrid fleet sheraton", city: "Cairo" },
+      { id: 10229, name: "Hybrid fleet heliopolis rabwa", city: "Cairo" },
+      { id: 10266, name: "Hybrid ard el golf bc", city: "Cairo" },
+      { id: 10223, name: "Hybrid fleet shorouk 1st area", city: "Cairo" },
+      { id: 10234, name: "Hybrid fleet wahat beta gardens", city: "Cairo" },
+      { id: 10209, name: "Hybrid fleet tagmmoa hay 1", city: "Cairo" },
+      { id: 10207, name: "Obour industrial area hybrid fleet", city: "Cairo" },
+      { id: 10248, name: "Hybrid fleet sheikh zayed hay 4", city: "Cairo" },
+      { id: 10249, name: "Hybrid fleet west somed", city: "Cairo" },
+      { id: 10219, name: "Hybrid fleet ain shams", city: "Cairo" },
+      { id: 10261, name: "Hybrid fleet - mountain view park wahat", city: "Cairo" },
+      { id: 10226, name: "Hybrid fleet sheikh zayed hay 9", city: "Cairo" },
+      { id: 10189, name: "Hybrid fleet el sayeda", city: "Cairo" },
+      { id: 10214, name: "Hybrid fleet al manial", city: "Cairo" },
+      { id: 10029, name: "Beverly hills sp", city: "Cairo" },
+      { id: 10238, name: "Hybrid fleet el daher", city: "Cairo" },
+      { id: 10230, name: "Hybrid fleet nasrcity hay 8", city: "Cairo" },
+      { id: 10142, name: "Palm hills 2 sp", city: "Cairo" },
+      { id: 10195, name: "Hybrid fleet lebanon square", city: "Cairo" },
+      { id: 10222, name: "Hybrid fleet shobra", city: "Cairo" },
       { id: 10185, name: "Hybrid fleet banafseg", city: "Cairo" },
+      { id: 10275, name: "Hybrid fleet toya mall", city: "Cairo" },
+      { id: 10174, name: "Hybrid fleet maadi", city: "Cairo" },
+      { id: 10184, name: "Hybrid fleet zayed", city: "Cairo" },
+      { id: 10212, name: "Hybrid fleet palm hills 1", city: "Cairo" },
+      { id: 10232, name: "Hybrid fleet maadi old", city: "Cairo" },
+      { id: 10136, name: "Motamyez sp", city: "Cairo" },
+      { id: 10218, name: "Hybrid fleet el hadeeka el dawlya", city: "Cairo" },
+      { id: 10196, name: "Hybrid fleet tayaran", city: "Cairo" },
+      { id: 10224, name: "Hybrid fleet tagmmoa auc", city: "Cairo" },
+      { id: 10225, name: "Hybrid fleet golden lotus", city: "Cairo" },
+      { id: 10188, name: "Hybrid fleet rock vera", city: "Cairo" },
+      { id: 10173, name: "Hybrid fleet rehab", city: "Cairo" },
+      { id: 10208, name: "Hybrid fleet banks center", city: "Cairo" },
+      { id: 10191, name: "Hybrid fleet october 4th", city: "Cairo" },
+      { id: 10210, name: "Hybrid fleet hadayek el ahram", city: "Cairo" },
+      { id: 10211, name: "Hybrid fleet maryoteya", city: "Cairo" },
+      { id: 10264, name: "Hybrid lebanon bc", city: "Cairo" },
+      { id: 10252, name: "Hybrid fleet mohafzet el giza", city: "Cairo" },
+      { id: 10256, name: "Hybrid fleet mosaddak", city: "Cairo" },
+      { id: 10262, name: "Hybrid fleet hadayek el ahram - area d", city: "Cairo" },
+      { id: 10227, name: "Hybrid fleet mokattam nafora", city: "Cairo" },
+      { id: 10241, name: "Hybrid fleet helwan", city: "Cairo" },
+      { id: 10215, name: "Hybrid fleet maadi meraag", city: "Cairo" },
+      { id: 10194, name: "Hybrid fleet october 6th", city: "Cairo" },
+      { id: 10237, name: "Hybrid fleet agouza", city: "Cairo" },
+      { id: 10114, name: "Ain shams (zatoun) 3", city: "Cairo" },
+      { id: 10198, name: "Hybrid fleet taqa", city: "Cairo" },
+      { id: 10221, name: "Hybrid fleet palm hills 360", city: "Cairo" },
+      { id: 10228, name: "Hybrid fleet maadi laselky", city: "Cairo" },
+      { id: 10250, name: "Hybrid fleet el nadi el gedid", city: "Cairo" },
+      { id: 10233, name: "Hybrid fleet shorouk 8th district", city: "Cairo" },
+      { id: 10177, name: "Hybrid fleet obour", city: "Cairo" },
+      { id: 10213, name: "Hybrid fleet el montazah", city: "Cairo" },
+      { id: 10265, name: "Hybrid taqseem laselky bc", city: "Cairo" },
+      { id: 10220, name: "Hybrid fleet october wahet el mohandseen", city: "Cairo" },
+      { id: 10260, name: "Obour golf hybrid fleet", city: "Cairo" },
+      { id: 10197, name: "Hybrid fleet tersa", city: "Cairo" },
+      { id: 10190, name: "Hybrid fleet talbya", city: "Cairo" },
+      { id: 10271, name: "Hybrid wahet el mohandsen bc", city: "Cairo" },
+      { id: 10269, name: "Hybrid maadi old bc", city: "Cairo" },
+      { id: 10192, name: "Shobra nesting 2", city: "Cairo" },
+      { id: 10273, name: "Hybrid fleet gardenia", city: "Cairo" },
+      { id: 10267, name: "Hybrid al-manial bc", city: "Cairo" },
+      { id: 10270, name: "Hybrid shobra bc", city: "Cairo" },
+      { id: 10277, name: "Hybrid el sayeda zeinab bc", city: "Cairo" },
+      { id: 10068, name: "Smart village dandy mall sp 1", city: "Cairo" },
+      { id: 10278, name: "Hybrid talbyia bc", city: "Cairo" },
+      { id: 10272, name: "Hybrid mohafzet el giza bc", city: "Cairo" },
+      { id: 10276, name: "Hybrid agouza bc", city: "Cairo" },
+      { id: 10281, name: "Hybrid fleet shorouk 4", city: "Cairo" },
+      { id: 10187, name: "Hybrid fleet shorouk 3rd", city: "Cairo" },
       { id: 10290, name: "Hybrid fleet talbya", city: "Cairo" },
       { id: 10291, name: "Hybrid talbya bc", city: "Cairo" },
-      { id: 10208, name: "Hybrid fleet banks center", city: "Cairo" },
-      { id: 10218, name: "Hybrid fleet el hadeeka el dawlya", city: "Cairo" },
-      { id: 10238, name: "Hybrid fleet el daher", city: "Cairo" },
-      { id: 10213, name: "Hybrid fleet el montazah", city: "Cairo" },
-      { id: 10250, name: "Hybrid fleet el nadi el gedid", city: "Cairo" },
-      { id: 10193, name: "Hybrid fleet el zeitoun", city: "Cairo" },
-      { id: 10273, name: "Hybrid fleet gardenia", city: "Cairo" },
-      { id: 10210, name: "Hybrid fleet hadayek el ahram", city: "Cairo" },
-      { id: 10276, name: "Hybrid agouza bc", city: "Cairo" },
-      { id: 10127, name: "Heliopolis nesting sp", city: "Cairo" },
-      { id: 10020, name: "Helwan SP", city: "Cairo" },
-      { id: 10135, name: "Helwan sp 2", city: "Cairo" },
-      { id: 10101, name: "Dokki sp", city: "Cairo" },
-      { id: 10102, name: "Dokki nesting sp", city: "Cairo" },
-      { id: 10103, name: "Mohandiseen sp", city: "Cairo" },
-      { id: 10104, name: "Mohandiseen nesting sp", city: "Cairo" },
-      { id: 10105, name: "Agouza sp", city: "Cairo" },
-      { id: 10106, name: "Zamalek sp", city: "Cairo" },
-      { id: 10107, name: "Maadi sp", city: "Cairo" },
-      { id: 10108, name: "Maadi nesting sp", city: "Cairo" },
-      { id: 10109, name: "Nasr city sp", city: "Cairo" },
-      { id: 10110, name: "Nasr city 2 sp", city: "Cairo" },
-      { id: 10111, name: "Nasr city nesting sp", city: "Cairo" },
-      { id: 10112, name: "Heliopolis sp", city: "Cairo" },
-      { id: 10113, name: "New cairo sp", city: "Cairo" },
-      { id: 10114, name: "Tagamoa sp", city: "Cairo" },
-      { id: 10115, name: "Rehab sp", city: "Cairo" },
-      { id: 10116, name: "Madinaty sp", city: "Cairo" },
-      { id: 10117, name: "Shorouk sp", city: "Cairo" },
-      { id: 10118, name: "Obour sp", city: "Cairo" },
-      { id: 10119, name: "6th of october sp", city: "Cairo" },
-      { id: 10120, name: "Sheikh zayed sp", city: "Cairo" },
-      { id: 10121, name: "Faisal sp", city: "Cairo" },
-      { id: 10122, name: "Faisal nesting sp", city: "Cairo" },
-      { id: 10123, name: "Omranya sp", city: "Cairo" },
-      { id: 10124, name: "Boulaq el dakrour sp", city: "Cairo" },
-      { id: 10126, name: "Shubra sp", city: "Cairo" },
-      { id: 10128, name: "Hadayek el kobba sp", city: "Cairo" },
-      { id: 10129, name: "Ain shams sp", city: "Cairo" },
-      { id: 10130, name: "Matariya sp", city: "Cairo" },
-      { id: 10131, name: "El salam sp", city: "Cairo" },
-      { id: 10132, name: "Badr sp", city: "Cairo" },
-      { id: 10133, name: "Mokattam sp", city: "Cairo" },
-      { id: 10134, name: "Sayeda zeinab sp", city: "Cairo" },
       { id: 10027, name: "Gleem sp", city: "Alexandria" },
       { id: 10028, name: "Raml station sp", city: "Alexandria" }
     ];
@@ -129,8 +210,13 @@
       { id: "Upcoming", label: "Upcoming Orders" },
       { id: "Cancelled", label: "Cancelled Orders" },
       { id: "Completed", label: "Completed Orders" },
-      { id: "Dispatcher Dashboard", label: "Dispatcher Dashboard", className: "mt-4" }
+      { id: "Dispatcher Dashboard", label: "Dispatcher Dashboard", className: "mt-6" }
     ];
+
+    function isRealHurrierZoneId(id) {
+      const n = Number(id);
+      return Number.isInteger(n) && n > 0 && n < 90000;
+    }
 
     function normalizeText(v) {
       return String(v || "").replace(/\s+/g, " ").trim();
@@ -716,26 +802,30 @@
       const availableZones = useMemo(() => {
         const map = new Map();
         ALL_ZONES_CATALOG.forEach((z) => {
+          const numId = Number(z.id);
+          if (!isRealHurrierZoneId(numId)) return;
           const key = normalizeText(z.name).toLowerCase();
-          map.set(key, { ...z, id: Number(z.id) });
+          map.set(key, { ...z, id: numId });
         });
         discoveredZonesFromBundle.forEach((z) => {
-          if (z && z.name) {
+          const numId = Number(z?.id);
+          if (z && z.name && isRealHurrierZoneId(numId)) {
             const key = normalizeText(z.name).toLowerCase();
             const existing = map.get(key);
             map.set(key, {
-              id: Number(z.id || existing?.id || Math.abs(key.split("").reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) | 0, 0))),
+              id: existing ? existing.id : numId,
               name: normalizeText(z.name),
               city: z.city || existing?.city || "Cairo"
             });
           }
         });
         couriers.forEach((c) => {
-          if (c.zone) {
+          const numId = Number(c?.id);
+          if (c.zone && isRealHurrierZoneId(numId)) {
             const key = normalizeText(c.zone).toLowerCase();
             const existing = map.get(key);
             map.set(key, {
-              id: Number(c.id || existing?.id || Math.abs(key.split("").reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) | 0, 0))),
+              id: existing ? existing.id : numId,
               name: normalizeText(c.zone),
               city: c.city || existing?.city || "Cairo"
             });
@@ -743,25 +833,14 @@
         });
         deliveries.forEach((d) => {
           (d.zoneObjects || []).forEach((zo) => {
-            if (zo && zo.name) {
+            const numId = Number(zo?.id);
+            if (zo && zo.name && isRealHurrierZoneId(numId)) {
               const key = normalizeText(zo.name).toLowerCase();
               const existing = map.get(key);
               map.set(key, {
-                id: Number(zo.id || existing?.id || Math.abs(key.split("").reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) | 0, 0))),
+                id: existing ? existing.id : numId,
                 name: normalizeText(zo.name),
                 city: zo.city || d.city || existing?.city || "Cairo"
-              });
-            }
-          });
-          (d.zonesList || []).forEach((zName) => {
-            const clean = normalizeText(zName);
-            if (!clean) return;
-            const key = clean.toLowerCase();
-            if (!map.has(key)) {
-              map.set(key, {
-                id: Math.abs(key.split("").reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) | 0, 0)),
-                name: clean,
-                city: d.city || "Cairo"
               });
             }
           });
@@ -1056,7 +1135,7 @@
         const q = zoneSearchQuery.trim().toLowerCase();
         return availableZones.filter((z) => {
           const nameClean = normalizeText(z.name);
-          if (!nameClean) return false;
+          if (!nameClean || !isRealHurrierZoneId(z.id)) return false;
           if (/^(vo\s*#|hf_eg|\d{6,})/i.test(nameClean)) return false;
           if (/\b(vo\s*#|talabat\s*mart|طلبات\s*مارت)\b/i.test(nameClean)) return false;
           return !q || nameClean.toLowerCase().includes(q) || String(z.id).includes(q) || z.city.toLowerCase().includes(q);
