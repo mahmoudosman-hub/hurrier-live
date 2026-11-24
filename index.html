@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Hurrier - Full Live Operations Dashboard (View Only)</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
   <style>
     body {
       margin: 0;
@@ -16,7 +16,20 @@
   </style>
 </head>
 <body class="bg-white text-gray-800">
-  <div id="root"></div>
+  <div id="root">
+    <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;font-size:14px;">
+      Loading Hurrier Live Dashboard...
+    </div>
+  </div>
+
+  <script>
+    window.addEventListener('error', function (e) {
+      var rootEl = document.getElementById('root');
+      if (rootEl && rootEl.innerText.indexOf('Loading Hurrier') !== -1) {
+        rootEl.innerHTML = '<div style="padding:24px;font-family:sans-serif;color:#991b1b;background:#fef2f2;border:1px solid #fecaca;margin:24px;border-radius:8px;"><strong>Dashboard Load Error:</strong> ' + (e.message || 'Script error') + '</div>';
+      }
+    });
+  </script>
 
   <script type="text/babel">
     const { useState, useMemo, useEffect, useCallback, useRef } = React;
