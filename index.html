@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard (View-Only)</title>
+  <title>Hurrier Live Operations Dashboard — التجربة الناجحة رقم 1</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -379,9 +379,13 @@
       const addrSources = [
         orderObj?.dropoff_address,
         orderObj?.delivery_address,
+        orderObj?.customer_address,
         detailRawObj?.detail?.dropoff_address,
         detailRawObj?.detail?.delivery_address,
         detailRawObj?.detail?.order?.dropoff_address,
+        detailRawObj?.detail?.order?.delivery_address,
+        detailRawObj?.detailFull?.dropoff_address,
+        detailRawObj?.detailFull?.order?.dropoff_address,
         detailRawObj?.customerExtra?.dropoff_address,
         detailRawObj?.customerExtra?.delivery_address,
         detailRawObj?.customerExtra?.address,
@@ -398,12 +402,23 @@
             src.full_name ||
             src.fullName ||
             src.recipient_name ||
+            src.contact_name ||
             src.name ||
             (first || last ? `${first} ${last}` : "")
         );
         if (full && !/^customer\s*#?\d*$/i.test(full)) {
           name = full;
           break;
+        }
+      }
+
+      if (!name) {
+        for (const aSrc of addrSources) {
+          const rName = normalizeText(aSrc.recipient_name || aSrc.contact_name || aSrc.name);
+          if (rName && !/^customer\s*#?\d*$/i.test(rName)) {
+            name = rName;
+            break;
+          }
         }
       }
 
@@ -425,6 +440,7 @@
         "customer_phone",
         "recipient_phone",
         "contact_phone",
+        "contact_number",
         "tel"
       ];
 
@@ -483,14 +499,31 @@
         return "NA";
       };
 
-      const apartment = pickField(["apartment", "apartment_number", "apt", "flat"]);
-      const building = pickField(["building", "building_number", "building_name"]);
-      const floor = pickField(["floor", "floor_number"]);
+      const apartment = pickField(["apartment", "apartment_number", "apt", "flat", "unit"]);
+      const building = pickField(["building", "building_number", "building_name", "house_number"]);
+      const floor = pickField(["floor", "floor_number", "level"]);
       const zipcode = pickField(["zipcode", "zip_code", "postal_code"]);
-      const intercom = pickField(["intercom"]);
-      const entrance = pickField(["entrance", "door"]);
+      const intercom = pickField(["intercom", "buzzer"]);
+      const entrance = pickField(["entrance", "door", "gate"]);
+      const deliveryNote = pickField(["instructions", "delivery_instructions", "delivery_note", "note", "comment", "address_line_2"]);
 
-      return { name, phone, apartment, building, floor, zipcode, intercom, entrance };
+      let streetAddress = "";
+      for (const aSrc of addrSources) {
+        const s = normalizeText(
+          aSrc.street_address ||
+            aSrc.formatted_address ||
+            aSrc.full_address ||
+            aSrc.address_line_1 ||
+            aSrc.street ||
+            aSrc.address
+        );
+        if (s) {
+          streetAddress = s;
+          break;
+        }
+      }
+
+      return { name, phone, apartment, building, floor, zipcode, intercom, entrance, deliveryNote, streetAddress };
     }
 
     function mapHurrierRecordToDelivery(rec, tabName) {
@@ -635,6 +668,8 @@
       const mainContainerRef = useRef(null);
       const isZoneSetupConfirmedRef = useRef(false);
       isZoneSetupConfirmedRef.current = isZoneSetupConfirmed;
+      const prewarmedOrderIdsRef = useRef(new Set());
+      const hoverTimerRef = useRef(null);
 
       const copyToClipboard = useCallback((label, text) => {
         if (!text) return;
@@ -757,18 +792,30 @@
         try {
           const existingRes = await fetch(`${FIREBASE_DB_URL}/config/requested_order_details.json`);
           const existing = existingRes.ok ? await existingRes.json() : [];
-          const arr = Array.isArray(existing) ? existing.map(String) : [];
-          if (!arr.includes(cleanId)) {
-            arr.push(cleanId);
-            await fetch(`${FIREBASE_DB_URL}/config/requested_order_details.json`, {
-              method: "PUT",
-              body: JSON.stringify(arr.slice(-25))
-            });
-          }
+          const arr = Array.isArray(existing) ? existing.map(String).filter((x) => x !== cleanId) : [];
+          arr.unshift(cleanId);
+          await fetch(`${FIREBASE_DB_URL}/config/requested_order_details.json`, {
+            method: "PUT",
+            body: JSON.stringify(arr.slice(0, 20))
+          });
         } catch {
           // تجاهل
         }
       }, []);
+
+      const handleOrderRowHover = useCallback(
+        (orderId) => {
+          if (!orderId) return;
+          const cleanId = String(orderId).replace(/^HF_[A-Z]{2}/i, "").trim();
+          if (!cleanId || prewarmedOrderIdsRef.current.has(cleanId)) return;
+          if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+          hoverTimerRef.current = setTimeout(() => {
+            prewarmedOrderIdsRef.current.add(cleanId);
+            requestOrderDetailsFromHurrier(cleanId);
+          }, 220);
+        },
+        [requestOrderDetailsFromHurrier]
+      );
 
       const fetchSingleOrderDetailDoc = useCallback(async (orderId) => {
         if (!orderId) return;
@@ -801,7 +848,7 @@
           if (selectedOrderRef.current?.id) {
             fetchSingleOrderDetailDoc(selectedOrderRef.current.id);
           }
-        }, 2000);
+        }, 600);
 
         return () => clearInterval(pollTimer);
       }, [selectedOrder, fetchSingleOrderDetailDoc, requestOrderDetailsFromHurrier]);
@@ -1096,8 +1143,15 @@
         if (!selectedOrder) return null;
         const doc = liveOrderDetailDoc || {};
         const rec = selectedOrder.rawRecord || {};
+        const recOrder = rec.order || {};
         const detail = doc.detail || doc.detailFull || doc.detailShort || {};
-        const orderObj = detail.order || detail || rec.order || rec || {};
+        const detailOrder = detail.order || {};
+        const orderObj = {
+          ...rec,
+          ...recOrder,
+          ...detail,
+          ...detailOrder
+        };
 
         const customerInfo = extractCustomerInfoFromOrder(orderObj, doc);
 
@@ -1123,47 +1177,40 @@
         const prepDurationStr = formatDurationMinutes(orderObj.prep_duration ?? orderObj.preparation_time ?? 5);
         const courierDelayStr = formatDurationMinutes(orderObj.courier_delay ?? rec.courier_delay ?? 0);
 
-        const pickupAddrObj = orderObj.pickup_address || detail.pickup_address || {};
-        const dropoffAddrObj = orderObj.dropoff_address || detail.dropoff_address || {};
+        const pickupAddrObj =
+          orderObj.pickup_address || detail.pickup_address || recOrder.pickup_address || rec.pickup_address || {};
+        const dropoffAddrObj =
+          orderObj.dropoff_address ||
+          orderObj.delivery_address ||
+          detail.dropoff_address ||
+          recOrder.dropoff_address ||
+          rec.dropoff_address ||
+          {};
 
         const pickupAddressStr =
-          pickupAddrObj.street_address ||
-          pickupAddrObj.formatted_address ||
-          pickupAddrObj.address ||
-          orderObj.pickup_address_text ||
-          "-";
+          normalizeText(
+            pickupAddrObj.street_address ||
+              pickupAddrObj.formatted_address ||
+              pickupAddrObj.address_line_1 ||
+              pickupAddrObj.address ||
+              orderObj.pickup_address_text
+          ) || "-";
 
         const dropoffAddressStr =
-          dropoffAddrObj.street_address ||
-          dropoffAddrObj.formatted_address ||
-          dropoffAddrObj.address ||
-          orderObj.dropoff_address_text ||
+          customerInfo.streetAddress ||
+          normalizeText(
+            dropoffAddrObj.street_address ||
+              dropoffAddrObj.formatted_address ||
+              dropoffAddrObj.address_line_1 ||
+              dropoffAddrObj.address ||
+              orderObj.dropoff_address_text
+          ) ||
           "-";
-
-        const timeChecks = [
-          { label: "Ordered at", value: formatReadableTimestamp(orderObj.ordered_at || orderObj.created_at) },
-          { label: "Send to restaurant", value: formatReadableTimestamp(orderObj.send_to_restaurant_at) },
-          { label: "Restaurant confirmed at", value: formatReadableTimestamp(orderObj.restaurant_confirmed_at) },
-          {
-            label: "Pickup - Committed",
-            value: formatReadableTimestamp(orderObj.pickup_committed_at || orderObj.scheduled_pickup_at)
-          },
-          { label: "Food is ready at", value: formatReadableTimestamp(orderObj.food_ready_at || orderObj.prepared_at) },
-          {
-            label: "Picked up at",
-            value: formatReadableTimestamp(orderObj.picked_up_at || rec.picked_up_at)
-          },
-          {
-            label: "Promised delivery time",
-            value: formatReadableTimestamp(
-              orderObj.scheduled_dropoff_at || orderObj.promised_delivery_at || rec.scheduled_dropoff_at
-            )
-          }
-        ];
 
         const rawDeliveries = Array.isArray(doc.deliveries) && doc.deliveries.length > 0 ? doc.deliveries : [rec];
         const allEvents = [];
         const riderMap = new Map();
+        const transitionTimeByState = new Map();
 
         rawDeliveries.forEach((del, dIdx) => {
           const delCourier = del.courier_name || selectedOrder.courier || "-";
@@ -1186,6 +1233,10 @@
               tr.occurred_at ||
               tr.time ||
               tr.metadata?.performed_at;
+
+            if (stateRaw && rawTimeVal && !transitionTimeByState.has(stateRaw)) {
+              transitionTimeByState.set(stateRaw, rawTimeVal);
+            }
 
             const timeSec = formatExactTimeSeconds(rawTimeVal);
             const courierName = tr.courier_name || delCourier || "-";
@@ -1235,6 +1286,49 @@
           });
         });
 
+        const orderedAtRaw =
+          orderObj.ordered_at ||
+          orderObj.created_at ||
+          orderObj.placed_at ||
+          transitionTimeByState.get("queued") ||
+          transitionTimeByState.get("new");
+        const sentToRestRaw =
+          orderObj.send_to_restaurant_at ||
+          orderObj.sent_to_restaurant_at ||
+          orderObj.sent_to_vendor_at;
+        const restConfirmedRaw =
+          orderObj.restaurant_confirmed_at ||
+          orderObj.vendor_confirmed_at ||
+          orderObj.confirmed_at;
+        const pickupCommittedRaw =
+          orderObj.pickup_committed_at ||
+          orderObj.committed_pickup_at ||
+          orderObj.scheduled_pickup_at;
+        const foodReadyRaw =
+          orderObj.food_ready_at ||
+          orderObj.prepared_at ||
+          orderObj.ready_for_pickup_at;
+        const pickedUpRaw =
+          orderObj.picked_up_at ||
+          rec.picked_up_at ||
+          transitionTimeByState.get("picked_up") ||
+          transitionTimeByState.get("left_pickup");
+        const promisedDeliveryRaw =
+          orderObj.scheduled_dropoff_at ||
+          orderObj.promised_delivery_at ||
+          orderObj.promised_dropoff_at ||
+          rec.scheduled_dropoff_at;
+
+        const timeChecks = [
+          { label: "Ordered at", value: formatReadableTimestamp(orderedAtRaw) },
+          { label: "Send to restaurant", value: formatReadableTimestamp(sentToRestRaw) },
+          { label: "Restaurant confirmed at", value: formatReadableTimestamp(restConfirmedRaw) },
+          { label: "Pickup - Committed", value: formatReadableTimestamp(pickupCommittedRaw) },
+          { label: "Food is ready at", value: formatReadableTimestamp(foodReadyRaw) },
+          { label: "Picked up at", value: formatReadableTimestamp(pickedUpRaw) },
+          { label: "Promised delivery time", value: formatReadableTimestamp(promisedDeliveryRaw) }
+        ];
+
         const ridersHistory = Array.from(riderMap.values());
         const acceptedRiders = ridersHistory.filter((r) => r.accepted);
 
@@ -1254,6 +1348,7 @@
           zipcode: customerInfo.zipcode,
           intercom: customerInfo.intercom,
           entrance: customerInfo.entrance,
+          deliveryNote: customerInfo.deliveryNote,
           vendorName,
           vendorOrderNo,
           globalEntityId,
@@ -1755,6 +1850,7 @@
                       return (
                         <tr
                           key={item.uid}
+                          onMouseEnter={() => handleOrderRowHover(item.id)}
                           onClick={() => setSelectedOrder(item)}
                           className="hover:bg-blue-50/30 transition-colors cursor-pointer"
                         >
@@ -1960,9 +2056,14 @@
                 <div className="flex items-center gap-3">
                   <span className="text-2xl">🚴‍♂️</span>
                   <div>
-                    <h1 className="text-lg sm:text-xl font-bold tracking-tight">
-                      تحديد زونات الموظف قبل بدء السحب (Independent Zone Gate)
-                    </h1>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h1 className="text-lg sm:text-xl font-bold tracking-tight">
+                        تحديد زونات الموظف قبل بدء السحب (Independent Zone Gate)
+                      </h1>
+                      <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-400/20 text-amber-200 border border-amber-300/40">
+                        ★ التجربة الناجحة رقم 1
+                      </span>
+                    </div>
                     <p className="text-xs text-slate-300 mt-0.5">
                       كل موظف يختار زوناته المستقلة — يتم سحب وعرض أوردرات زوناتك فقط لتخفيف الحمل وتسريع الداشبورد
                     </p>
@@ -2137,15 +2238,20 @@
                 <span className="text-xl">🚴‍♂️</span>
                 <span>Hurrier</span>
               </div>
-              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
-                View Only
-              </span>
+              <div className="flex flex-col items-end gap-0.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                  View Only
+                </span>
+                <span className="text-[9px] font-bold text-emerald-700">
+                  التجربة الناجحة رقم 1
+                </span>
+              </div>
             </div>
 
             <nav className="flex-1 overflow-y-auto py-3 flex flex-col">
               {SIDEBAR_ITEMS.map((item) => {
                 const isActive = activeTab === item.id;
-                const countVal = effectiveTabCounts[item.id];
+                const badgeCount = effectiveTabCounts[item.id];
                 return (
                   <button
                     key={item.id}
@@ -2161,21 +2267,30 @@
                     } ${item.className || ""}`}
                   >
                     <span>
-                      {item.label} {countVal !== undefined && `(${countVal})`}
+                      {item.label} {badgeCount !== undefined && `(${badgeCount})`}
                     </span>
                   </button>
                 );
               })}
             </nav>
+
+            <div className="p-3 border-t border-gray-200 bg-gray-50 text-xs space-y-1">
+              <div className="font-bold text-gray-800 truncate">
+                👤 {normalizeText(employeeName) || `Session ${sessionId.slice(-5)}`}
+              </div>
+              <div className="text-[11px] text-gray-500">
+                Active Zones: <strong className="text-blue-600">{selectedZoneIds.length}</strong>
+              </div>
+            </div>
           </aside>
 
           {/* Main Content Area */}
           <div className="flex-1 flex flex-col min-w-0 bg-white">
             {/* Top Header */}
-            <header className="h-14 flex items-center justify-between px-5 border-b border-gray-200 bg-white gap-3">
-              <div className="flex items-center gap-2.5 text-xs text-gray-500 min-w-0">
+            <header className="h-14 flex items-center justify-between px-6 border-b border-gray-200 bg-white gap-3">
+              <div className="flex items-center gap-3 text-xs">
                 <span
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold border flex-shrink-0 ${
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold border ${
                     connectionStatus === "live"
                       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                       : connectionStatus === "error"
@@ -2195,41 +2310,23 @@
                   {connectionStatus === "live"
                     ? "LIVE (2s)"
                     : connectionStatus === "error"
-                    ? "Retry..."
+                    ? "Sync Error"
                     : "Syncing Zones..."}
                 </span>
 
-                <span className="hidden xl:inline flex-shrink-0">Last Sync: {lastSyncTime}</span>
+                <span className="text-gray-500 hidden md:inline">Last Sync: {lastSyncTime}</span>
 
-                {/* Active Employee Session & Selected Zones Pill */}
-                <div
-                  className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 font-semibold truncate max-w-[340px]"
-                  title={selectedZonesDisplayList.map((z) => z.name).join(", ")}
-                >
-                  <span>👤 {normalizeText(employeeName) || sessionId.slice(-5)}</span>
-                  <span className="text-blue-300">|</span>
-                  <span className="truncate">
-                    📍 {selectedZoneIds.length} Zones:{" "}
-                    {selectedZonesDisplayList
-                      .slice(0, 2)
-                      .map((z) => z.name)
-                      .join(", ")}
-                    {selectedZonesDisplayList.length > 2 ? ` +${selectedZonesDisplayList.length - 2}` : ""}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2.5">
-                {/* Change Zones Button -> Resets session & returns to Zone Selection Gate */}
                 <button
                   type="button"
                   onClick={handleResetToZoneSelection}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white shadow-sm transition-colors flex-shrink-0"
-                  title="العودة لشاشة اختيار الزونات وتغيير زونات جلستك"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold shadow-sm transition-colors"
+                  title="العودة لاختيار زونات جديدة"
                 >
-                  <span>🔄 تغيير الزونات</span>
+                  <span>🔄 تغيير الزونات ({selectedZoneIds.length})</span>
                 </button>
+              </div>
 
+              <div className="flex items-center gap-3">
                 <div className="relative flex items-center">
                   <input
                     type="text"
@@ -2238,14 +2335,14 @@
                       setSearchQuery(e.target.value);
                       setCurrentPage(1);
                     }}
-                    placeholder="Search by Order ID or Courier"
-                    className="pl-3 pr-7 py-1.5 border border-gray-300 rounded text-sm w-52 sm:w-64 focus:outline-none focus:border-blue-500"
+                    placeholder="Search Order ID, Courier, Vendor..."
+                    className="pl-3.5 pr-8 py-1.5 border border-gray-300 rounded-lg text-sm w-56 sm:w-64 focus:outline-none focus:border-blue-500"
                   />
                   {searchQuery && (
                     <button
                       type="button"
                       onClick={() => setSearchQuery("")}
-                      className="absolute right-2 text-xs text-gray-400 hover:text-gray-600"
+                      className="absolute right-2.5 text-gray-400 hover:text-gray-700 text-xs"
                     >
                       ✕
                     </button>
@@ -2255,79 +2352,97 @@
                 <button
                   type="button"
                   onClick={fetchMySessionBundleFromFirebase}
-                  className="px-3 py-1.5 border border-gray-300 rounded text-xs font-semibold text-gray-700 hover:bg-gray-50 flex-shrink-0"
+                  className="px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 hover:bg-gray-50"
                 >
                   ↻ Refresh
                 </button>
               </div>
             </header>
 
-            {/* Main View Body */}
-            <main ref={mainContainerRef} className="flex-1 overflow-auto p-6 sm:p-8">
+            {/* Selected Zones Pill Strip */}
+            <div className="px-6 py-2 bg-slate-50 border-b border-gray-200 flex items-center gap-2 overflow-x-auto text-xs">
+              <span className="font-bold text-gray-600 flex-shrink-0">الزونات النشطة:</span>
+              {selectedZonesDisplayList.map((z) => (
+                <span
+                  key={z.id}
+                  className="px-2.5 py-0.5 rounded-full bg-white border border-blue-200 text-blue-800 font-semibold flex-shrink-0"
+                >
+                  {z.name} <span className="text-gray-400 font-mono">({z.id})</span>
+                </span>
+              ))}
+            </div>
+
+            {/* Dynamic Main View */}
+            <main ref={mainContainerRef} className="flex-1 overflow-auto p-6">
               <div className="max-w-[1440px] mx-auto">
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                  <div>
-                    <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
-                      {activeTab === "Active Couriers"
-                        ? "Active Couriers"
-                        : activeTab === "Dashboard" || activeTab === "Dispatcher Dashboard" || activeTab === "Issues"
-                        ? activeTab
-                        : `${activeTab} Deliveries ${activeHeaderCount !== undefined ? `(${activeHeaderCount})` : ""}`}
-                    </h1>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      الزونات النشطة لجلستك:{" "}
-                      <span className="font-semibold text-blue-700">
-                        {selectedZonesDisplayList.map((z) => z.name).join(" • ")}
-                      </span>
-                    </p>
-                  </div>
+                <div className="flex items-center justify-between">
+                  <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
+                    {activeTab === "Active Couriers"
+                      ? "Active Couriers"
+                      : activeTab === "Dashboard" || activeTab === "Dispatcher Dashboard" || activeTab === "Issues"
+                      ? activeTab
+                      : `${activeTab} Deliveries ${activeHeaderCount !== undefined ? `(${activeHeaderCount})` : ""}`}
+                  </h1>
                 </div>
 
-                {activeTab === "Dashboard" && renderDashboardView()}
-                {activeTab === "Active Couriers" && renderActiveCouriersView()}
-                {activeTab === "Dispatcher Dashboard" && renderDispatcherDashboardView()}
-                {activeTab === "Issues" && renderIssuesView()}
-                {activeTab !== "Dashboard" &&
-                  activeTab !== "Active Couriers" &&
-                  activeTab !== "Dispatcher Dashboard" &&
-                  activeTab !== "Issues" &&
-                  renderDeliveriesTable()}
+                {activeTab === "Dashboard"
+                  ? renderDashboardView()
+                  : activeTab === "Active Couriers"
+                  ? renderActiveCouriersView()
+                  : activeTab === "Dispatcher Dashboard"
+                  ? renderDispatcherDashboardView()
+                  : activeTab === "Issues"
+                  ? renderIssuesView()
+                  : renderDeliveriesTable()}
               </div>
             </main>
           </div>
 
-          {/* Full Order Inspection Modal (Customer Info + Phone + Rider Acceptance History + Events) */}
+          {/* Read-Only Full Order & Customer Details Modal */}
           {selectedOrderFullView && (
             <div
-              className="fixed inset-0 bg-black/45 z-50 flex items-center justify-center p-3 sm:p-6"
+              className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-3 sm:p-6"
               onClick={() => setSelectedOrder(null)}
             >
               <div
-                className="bg-white rounded-xl max-w-5xl w-full max-h-[92vh] shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
+                className="bg-white rounded-2xl w-full max-w-4xl max-h-[92vh] shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
-                {/* Modal Header */}
-                <div className="px-6 py-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <span className="text-lg font-bold text-gray-900">{selectedOrderFullView.orderCode}</span>
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800">
+                {/* Modal Top Header */}
+                <div className="px-6 py-4 bg-white border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <span className="text-xl font-bold text-gray-900">{selectedOrderFullView.orderCode}</span>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard("orderCode", selectedOrderFullView.orderCode)}
+                      className="text-xs px-2 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
+                    >
+                      {copiedText === "orderCode" ? "✓ Copied" : "⧉ Copy"}
+                    </button>
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
                       {selectedOrderFullView.status}
                     </span>
-                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700">
+                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-50 text-red-700 border border-red-200">
                       Deadline: {selectedOrderFullView.deadline}
                     </span>
+                    {!selectedOrderFullView.isLoadedFromApi && (
+                      <span className="text-xs font-semibold text-blue-600 animate-pulse">
+                        ⚡ جاري تحديث البيانات الحية...
+                      </span>
+                    )}
                   </div>
+
                   <button
                     type="button"
                     onClick={() => setSelectedOrder(null)}
-                    className="px-3 py-1 rounded-lg text-gray-500 hover:bg-gray-200 font-bold"
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 text-lg font-bold"
                   >
                     ✕
                   </button>
                 </div>
 
                 {/* Modal Sub-Tabs */}
-                <div className="flex border-b border-gray-200 px-6 gap-6 text-xs font-bold bg-white">
+                <div className="px-6 border-b border-gray-200 flex items-center gap-6 text-sm font-semibold bg-white">
                   {["Deliveries", "Customer & Address", "Order Items"].map((t) => (
                     <button
                       key={t}
@@ -2344,151 +2459,82 @@
                   ))}
                 </div>
 
-                {/* Modal Body */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-6 text-sm">
-                  {/* Top Customer & Vendor Summary Cards */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/40 space-y-2">
-                      <div className="text-xs font-bold uppercase tracking-wider text-blue-800">
-                        بيانات العميل (Customer Details)
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 text-xs">
-                        <div>
-                          <span className="text-gray-500">الاسم:</span>{" "}
-                          <strong className="text-gray-900">{selectedOrderFullView.customerName}</strong>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-gray-500">الهاتف:</span>{" "}
-                          <strong className="text-emerald-700 font-mono">
-                            {selectedOrderFullView.customerPhone || "جاري الجلب..."}
-                          </strong>
-                          {selectedOrderFullView.customerPhone && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                copyToClipboard("phone", selectedOrderFullView.customerPhone)
-                              }
-                              className="px-1.5 py-0.5 rounded bg-white border border-gray-300 text-[10px] hover:bg-gray-100"
-                            >
-                              {copiedText === "phone" ? "✓" : "نسخ"}
-                            </button>
-                          )}
-                        </div>
-                        <div>
-                          <span className="text-gray-500">العمارة:</span>{" "}
-                          <strong>{selectedOrderFullView.building}</strong>
-                        </div>
-                        <div>
-                          <span className="text-gray-500">الدور:</span>{" "}
-                          <strong>{selectedOrderFullView.floor}</strong>
-                        </div>
-                        <div>
-                          <span className="text-gray-500">الشقة:</span>{" "}
-                          <strong>{selectedOrderFullView.apartment}</strong>
-                        </div>
-                        <div>
-                          <span className="text-gray-500">المدخل / Intercom:</span>{" "}
-                          <strong>
-                            {selectedOrderFullView.entrance} / {selectedOrderFullView.intercom}
-                          </strong>
-                        </div>
-                      </div>
-                      <div className="text-xs text-gray-700 pt-1 border-t border-blue-100">
-                        <span className="text-gray-500">العنوان:</span> {selectedOrderFullView.dropoffAddress}
-                      </div>
-                    </div>
-
-                    <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/70 space-y-2">
-                      <div className="text-xs font-bold uppercase tracking-wider text-gray-700">
-                        بيانات المطعم / الفرع (Vendor &amp; Value)
-                      </div>
-                      <div className="text-xs space-y-1">
-                        <div>
-                          <span className="text-gray-500">الفرع:</span>{" "}
-                          <strong className="text-gray-900">{selectedOrderFullView.vendorName}</strong> (VO #
-                          {selectedOrderFullView.vendorOrderNo})
-                        </div>
-                        <div>
-                          <span className="text-gray-500">قيمة الأوردر:</span>{" "}
-                          <strong className="text-gray-900">{selectedOrderFullView.orderValue}</strong> •{" "}
-                          <span className="text-gray-500">المسافة:</span>{" "}
-                          <strong>{selectedOrderFullView.distance}</strong>
-                        </div>
-                        <div>
-                          <span className="text-gray-500">عنوان الاستلام:</span>{" "}
-                          <span className="text-gray-700">{selectedOrderFullView.pickupAddress}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
+                {/* Modal Scrollable Body */}
+                <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-white text-sm">
                   {detailModalTab === "Deliveries" && (
-                    <>
-                      {/* Riders Assignment & Acceptance History */}
-                      <div className="border border-gray-200 rounded-xl overflow-hidden">
-                        <div className="px-4 py-2.5 bg-gray-50 border-b border-gray-200 text-xs font-bold text-gray-700">
-                          سجل الطيارين وحالة القبول (Rider Assignment &amp; Acceptance History)
+                    <div className="space-y-5">
+                      {/* Accepted & Assigned Couriers Summary */}
+                      <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/70 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold uppercase tracking-wider text-gray-700">
+                            سجل الطيارين على الأوردر (Riders Assignment &amp; Acceptance)
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            الطيار الحالي: <strong className="text-blue-700">{selectedOrderFullView.courier}</strong>
+                          </span>
                         </div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left text-xs whitespace-nowrap">
-                            <thead>
-                              <tr className="border-b border-gray-200 text-gray-500 bg-white">
-                                <th className="py-2.5 px-4">COURIER</th>
-                                <th className="py-2.5 px-3">STATUS</th>
-                                <th className="py-2.5 px-3">DISPATCHED AT</th>
-                                <th className="py-2.5 px-3">ACCEPTED AT</th>
-                                <th className="py-2.5 px-3">PICKED UP AT</th>
-                                <th className="py-2.5 px-3">UNDISPATCHED / REMOVED</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                              {selectedOrderFullView.ridersHistory.length === 0 ? (
-                                <tr>
-                                  <td colSpan={6} className="py-4 px-4 text-gray-500">
-                                    الطيار الحالي: <strong>{selectedOrderFullView.courier}</strong> (جاري تحميل سجل التحركات...)
-                                  </td>
+
+                        {selectedOrderFullView.ridersHistory.length === 0 ? (
+                          <div className="text-xs text-gray-500">
+                            {selectedOrderFullView.isLoadedFromApi
+                              ? "لا يوجد سجل تبديل طيارين إضافي لهذا الأوردر."
+                              : "⏳ جاري تحميل سجل الطيارين وحركات التوصيل..."}
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto bg-white rounded-lg border border-gray-200">
+                            <table className="w-full text-left text-xs">
+                              <thead>
+                                <tr className="border-b border-gray-200 text-gray-500 bg-gray-50">
+                                  <th className="py-2 px-3">COURIER</th>
+                                  <th className="py-2 px-3">STATUS</th>
+                                  <th className="py-2 px-3">DISPATCHED</th>
+                                  <th className="py-2 px-3">ACCEPTED</th>
+                                  <th className="py-2 px-3">PICKED UP</th>
+                                  <th className="py-2 px-3">REMOVED</th>
                                 </tr>
-                              ) : (
-                                selectedOrderFullView.ridersHistory.map((r, idx) => (
-                                  <tr key={idx} className="hover:bg-gray-50">
-                                    <td className="py-2.5 px-4 font-semibold text-gray-900">{r.courierName}</td>
-                                    <td className="py-2.5 px-3">
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {selectedOrderFullView.ridersHistory.map((r, i) => (
+                                  <tr key={i}>
+                                    <td className="py-2 px-3 font-semibold text-gray-800">{r.courierName}</td>
+                                    <td className="py-2 px-3">
                                       {r.accepted ? (
-                                        <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold">
-                                          Accepted ✓
+                                        <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                                          Accepted
                                         </span>
                                       ) : (
-                                        <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold">
+                                        <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200 font-semibold">
                                           Assigned Only
                                         </span>
                                       )}
                                     </td>
-                                    <td className="py-2.5 px-3 font-mono">{r.dispatchedAt}</td>
-                                    <td className="py-2.5 px-3 font-mono text-emerald-700 font-bold">{r.acceptedAt}</td>
-                                    <td className="py-2.5 px-3 font-mono">{r.pickedUpAt}</td>
-                                    <td className="py-2.5 px-3 font-mono text-red-600">{r.removedAt}</td>
+                                    <td className="py-2 px-3 font-mono">{r.dispatchedAt}</td>
+                                    <td className="py-2 px-3 font-mono text-emerald-700 font-semibold">{r.acceptedAt}</td>
+                                    <td className="py-2 px-3 font-mono">{r.pickedUpAt}</td>
+                                    <td className="py-2 px-3 font-mono text-red-600">{r.removedAt}</td>
                                   </tr>
-                                ))
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </div>
 
-                      {/* Timeline Events */}
-                      <div className="border border-gray-200 rounded-xl p-4 space-y-3">
-                        <div className="text-xs font-bold text-gray-700">
-                          التسلسل الزمني للأحداث بالثواني (Delivery Transitions Timeline)
+                      {/* Chronological Transitions Timeline */}
+                      <div className="p-4 rounded-xl border border-gray-200 bg-white space-y-3">
+                        <div className="text-xs font-bold uppercase tracking-wider text-gray-700">
+                          حركات التوصيل بالثواني (Delivery Transitions Timeline)
                         </div>
                         {selectedOrderFullView.allEvents.length === 0 ? (
-                          <div className="text-xs text-gray-500">لا توجد أحداث مسجلة بعد.</div>
+                          <div className="text-xs text-gray-500 py-4 text-center">
+                            {selectedOrderFullView.isLoadedFromApi
+                              ? "لا توجد حركات مسجلة لهذا الأوردر."
+                              : "⏳ جاري سحب الحركات من Hurrier..."}
+                          </div>
                         ) : (
-                          <div className="space-y-2">
+                          <div className="space-y-2.5">
                             {selectedOrderFullView.allEvents.map((ev) => (
-                              <div
-                                key={ev.key}
-                                className="timeline-row flex items-start gap-3 text-xs pl-1"
-                              >
+                              <div key={ev.key} className="timeline-row flex items-start gap-3">
                                 <div className="timeline-line pt-1">
                                   <span
                                     className={`block w-3 h-3 rounded-full ${
@@ -2500,46 +2546,152 @@
                                     }`}
                                   />
                                 </div>
-                                <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex-1 flex flex-wrap items-center justify-between gap-2 bg-gray-50 px-3 py-2 rounded-lg border border-gray-200 text-xs">
                                   <div>
                                     <span className="font-bold text-gray-900">{ev.eventLabel}</span>
                                     {ev.courierName && ev.courierName !== "-" && (
-                                      <span className="text-blue-700 font-medium ml-2">• {ev.courierName}</span>
+                                      <span className="ml-2 text-blue-700 font-medium">({ev.courierName})</span>
                                     )}
-                                    {ev.subLabel && <span className="text-gray-500 ml-2">({ev.subLabel})</span>}
+                                    {ev.subLabel && <span className="ml-2 text-gray-500">• {ev.subLabel}</span>}
                                   </div>
-                                  <span className="font-mono font-bold text-gray-700">{ev.timeSec}</span>
+                                  <span className="font-mono font-semibold text-gray-700">{ev.timeSec}</span>
                                 </div>
                               </div>
                             ))}
                           </div>
                         )}
                       </div>
-                    </>
+                    </div>
                   )}
 
                   {detailModalTab === "Customer & Address" && (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                      {selectedOrderFullView.timeChecks.map((tc) => (
-                        <div key={tc.label} className="p-3 rounded-lg bg-gray-50 border border-gray-200">
-                          <div className="text-gray-500">{tc.label}</div>
-                          <div className="font-bold text-gray-900 mt-1">{tc.value}</div>
+                    <div className="space-y-5">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Customer Card */}
+                        <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/20 space-y-2.5">
+                          <div className="text-xs font-bold text-blue-700">
+                            بيانات العميل (CUSTOMER DETAILS)
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <span className="text-gray-500">الاسم: </span>
+                              <strong className="text-gray-900">{selectedOrderFullView.customerName}</strong>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-gray-500">الهاتف: </span>
+                              {selectedOrderFullView.customerPhone ? (
+                                <>
+                                  <strong className="text-emerald-700 font-mono">
+                                    {selectedOrderFullView.customerPhone}
+                                  </strong>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyToClipboard("phone", selectedOrderFullView.customerPhone)}
+                                    className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[11px] font-bold hover:bg-emerald-200"
+                                  >
+                                    {copiedText === "phone" ? "✓" : "نسخ"}
+                                  </button>
+                                </>
+                              ) : !selectedOrderFullView.isLoadedFromApi ? (
+                                <span className="text-emerald-700 font-semibold animate-pulse">
+                                  ⏳ جاري الجلب...
+                                </span>
+                              ) : (
+                                <span className="text-gray-500 font-medium">غير متاح من Hurrier</span>
+                              )}
+                            </div>
+                            <div>
+                              <span className="text-gray-500">العمارة: </span>
+                              <strong className="text-gray-900">{selectedOrderFullView.building}</strong>
+                            </div>
+                            <div>
+                              <span className="text-gray-500">الدور: </span>
+                              <strong className="text-gray-900">{selectedOrderFullView.floor}</strong>
+                            </div>
+                            <div>
+                              <span className="text-gray-500">الشقة: </span>
+                              <strong className="text-gray-900">{selectedOrderFullView.apartment}</strong>
+                            </div>
+                            <div>
+                              <span className="text-gray-500">Intercom / المدخل: </span>
+                              <strong className="text-gray-900">
+                                {selectedOrderFullView.intercom} / {selectedOrderFullView.entrance}
+                              </strong>
+                            </div>
+                          </div>
+                          <div className="pt-2 border-t border-blue-100 text-xs space-y-1">
+                            <div>
+                              <span className="text-gray-500">العنوان: </span>
+                              <strong className="text-gray-900">{selectedOrderFullView.dropoffAddress}</strong>
+                            </div>
+                            {selectedOrderFullView.deliveryNote && selectedOrderFullView.deliveryNote !== "NA" && (
+                              <div>
+                                <span className="text-gray-500">ملاحظات العنوان: </span>
+                                <span className="text-amber-800 font-medium">{selectedOrderFullView.deliveryNote}</span>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      ))}
+
+                        {/* Vendor & Value Card */}
+                        <div className="p-4 rounded-xl border border-gray-200 bg-white space-y-2.5 text-xs">
+                          <div className="text-xs font-bold text-gray-800">
+                            بيانات المطعم / الفرع (VENDOR &amp; VALUE)
+                          </div>
+                          <div>
+                            <span className="text-gray-500">الفرع: </span>
+                            <strong className="text-gray-900">
+                              {selectedOrderFullView.vendorName} (VO #{selectedOrderFullView.vendorOrderNo})
+                            </strong>
+                          </div>
+                          <div>
+                            <span className="text-gray-500">قيمة الأوردر: </span>
+                            <strong className="text-gray-900">{selectedOrderFullView.orderValue}</strong>
+                            <span className="mx-2 text-gray-300">•</span>
+                            <span className="text-gray-500">المسافة: </span>
+                            <strong className="text-gray-900">{selectedOrderFullView.distance}</strong>
+                          </div>
+                          <div>
+                            <span className="text-gray-500">عنوان الاستلام: </span>
+                            <span className="text-gray-800 font-medium">{selectedOrderFullView.pickupAddress}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 7 Timestamps Grid */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {selectedOrderFullView.timeChecks.map((tc) => (
+                          <div key={tc.label} className="p-3 rounded-xl border border-gray-200 bg-gray-50/60">
+                            <div className="text-xs text-gray-500">{tc.label}</div>
+                            <div className="text-xs font-bold text-gray-900 mt-1">{tc.value}</div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 
                   {detailModalTab === "Order Items" && (
-                    <div className="border border-gray-200 rounded-xl divide-y divide-gray-100">
-                      {selectedOrderFullView.items.map((it, idx) => (
-                        <div key={idx} className="p-3.5 flex items-center justify-between text-xs">
-                          <div>
-                            <strong className="text-gray-900">{it.quantity || it.qty || 1}x</strong>{" "}
-                            <span>{it.name}</span>
-                          </div>
-                          <strong className="text-gray-900">{it.price}</strong>
-                        </div>
-                      ))}
+                    <div className="border border-gray-200 rounded-xl overflow-hidden">
+                      <table className="w-full text-left text-xs">
+                        <thead>
+                          <tr className="bg-gray-50 border-b border-gray-200 text-gray-500 font-semibold">
+                            <th className="py-2.5 px-4">QTY</th>
+                            <th className="py-2.5 px-4">ITEM</th>
+                            <th className="py-2.5 px-4 text-right">PRICE</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {selectedOrderFullView.items.map((it, idx) => (
+                            <tr key={idx}>
+                              <td className="py-3 px-4 font-bold text-gray-800">{it.quantity || it.qty || 1}x</td>
+                              <td className="py-3 px-4 text-gray-800">{it.name || it.title || "Item"}</td>
+                              <td className="py-3 px-4 text-right font-semibold text-gray-900">
+                                {typeof it.price === "number" ? formatMoney(it.price, "EGP") : it.price || "-"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   )}
                 </div>
@@ -2550,7 +2702,7 @@
                   <button
                     type="button"
                     onClick={() => setSelectedOrder(null)}
-                    className="px-4 py-1.5 rounded-lg bg-white border border-gray-300 font-semibold text-gray-700 hover:bg-gray-100"
+                    className="px-4 py-1.5 rounded-lg border border-gray-300 bg-white hover:bg-gray-100 font-semibold text-gray-700"
                   >
                     Close
                   </button>
