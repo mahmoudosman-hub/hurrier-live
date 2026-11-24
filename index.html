@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v6.1 — Persistent Selection + 4h Window</title>
+  <title>Hurrier Live Operations Dashboard v6.2 — Fast Completed Search + Persistent Copy</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -35,7 +35,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v6.1...
+      Loading Hurrier Live Operations Dashboard v6.2...
     </div>
   </div>
 
@@ -272,6 +272,14 @@
       return cleaned || raw;
     }
 
+    function isExactOrderIdPattern(q) {
+      const clean = String(q || "")
+        .trim()
+        .replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "")
+        .trim();
+      return /^\d{7,14}(-\d+)?$/.test(clean);
+    }
+
     function formatRelativeDeadline(isoDate, isPreorder = false) {
       if (!isoDate) return "-";
       const target = new Date(isoDate);
@@ -477,14 +485,14 @@
         orderDuration: formatCompletedTimingSeconds(timings.total_time),
         isPreorder: Boolean(order.is_preorder),
         dropoffIssue: normalizeText(order.deliveries_dropoff_issues) || "-",
-        status: "Completed",
-        deadline: "Completed",
+        status: humanizeSnakeCase(order.status || "completed"),
+        deadline: humanizeSnakeCase(order.status || "Completed"),
         orderValue: totalVal,
         instructions,
         tab: "Completed",
         rawRecord: {
           id: order.id,
-          status: "completed",
+          status: order.status || "completed",
           distance: primaryDel.delivery_distance,
           courier_id: primaryDel.courier_id,
           courier_name: primaryDel.courier_name,
@@ -778,6 +786,7 @@
       const [completedCityFilter, setCompletedCityFilter] = useState("All Cities");
       const [completedZoneScope, setCompletedZoneScope] = useState("selected");
       const [completedSpecificZoneId, setCompletedSpecificZoneId] = useState("");
+      const [completedSearchInput, setCompletedSearchInput] = useState("");
       const [completedSearchQuery, setCompletedSearchQuery] = useState("");
       const [completedPage, setCompletedPage] = useState(1);
       const [completedJumpPage, setCompletedJumpPage] = useState("");
@@ -819,6 +828,16 @@
       useEffect(() => {
         writeSessionStorageJson("hurrier_emp_active_tab", activeTab);
       }, [activeTab]);
+
+      useEffect(() => {
+        const trimmed = completedSearchInput.trim();
+        if (trimmed === completedSearchQuery) return;
+        const timer = setTimeout(() => {
+          setCompletedSearchQuery(trimmed);
+          setCompletedPage(1);
+        }, 300);
+        return () => clearTimeout(timer);
+      }, [completedSearchInput, completedSearchQuery]);
 
       const copyToClipboard = useCallback((key, text) => {
         const str = String(text || "");
@@ -1024,7 +1043,6 @@
             )
           );
 
-        // 1) Check local memory cache first
         for (const it of assignedItems) {
           const keys = getKeysForItem(it);
           const cachedPhone = keys.map((k) => courierPhoneCacheRef.current.get(k)).find(Boolean);
@@ -1037,7 +1055,6 @@
 
         if (missingItems.length === 0) return resolvedMap;
 
-        // 2) Check Firebase courier_details directly for missing riders
         const stillMissing = [];
         await Promise.all(
           missingItems.map(async (it) => {
@@ -1062,7 +1079,6 @@
 
         if (stillMissing.length === 0) return resolvedMap;
 
-        // 3) Request missing riders from Tampermonkey fast-poller and poll until resolved
         try {
           const tokens = Array.from(
             new Set(
@@ -1227,7 +1243,10 @@
                 date: completedDate || getTodayCairoDateInput(),
                 page: completedPage,
                 per_page: 50,
-                hours_window: completedDate === getTodayCairoDateInput() ? Number(completedHoursWindow) : 0,
+                hours_window:
+                  !completedSearchQuery.trim() && completedDate === getTodayCairoDateInput()
+                    ? Number(completedHoursWindow)
+                    : 0,
                 zone_scope: completedZoneScope,
                 specific_zone_id: completedZoneScope === "single" ? Number(completedSpecificZoneId || 0) : null,
                 city_id: cityIdMap[completedCityFilter] || "",
@@ -1287,6 +1306,16 @@
         completedPage,
         registerOrHeartbeatSession
       ]);
+
+      const handleJumpToCompletedOrderSearch = useCallback((orderQuery) => {
+        const clean = String(orderQuery || "").trim();
+        if (!clean) return;
+        setActiveTab("Completed");
+        setCompletedSearchInput(clean);
+        setCompletedSearchQuery(clean);
+        setCompletedPage(1);
+        setIsCompletedLoading(true);
+      }, []);
 
       const handleConfirmZoneSelection = useCallback(() => {
         if (selectedZoneIds.length === 0) return;
@@ -2000,10 +2029,12 @@
       }, [selectedZoneIds, discoveredZonesFromBundle]);
 
       const visibleCompletedOrders = useMemo(() => {
-        const q = completedSearchQuery.trim().toLowerCase();
+        const rawQ = (completedSearchInput || completedSearchQuery).trim();
+        const q = rawQ.toLowerCase();
+        const isOrderIdSearch = isExactOrderIdPattern(rawQ);
         const isTodaySelected = completedDate === getTodayCairoDateInput();
         const cutoffMs =
-          isTodaySelected && Number(completedHoursWindow) > 0
+          !q && isTodaySelected && Number(completedHoursWindow) > 0
             ? Date.now() - Number(completedHoursWindow) * 3600 * 1000
             : 0;
 
@@ -2011,19 +2042,22 @@
           if (cutoffMs > 0 && item.placedTimestamp > 0 && item.placedTimestamp < cutoffMs) {
             return false;
           }
-          if (completedCityFilter !== "All Cities" && item.city.toLowerCase() !== completedCityFilter.toLowerCase()) {
-            return false;
-          }
-          if (completedZoneScope === "selected") {
-            if (!matchesZoneFilter(item)) return false;
-          } else if (completedZoneScope === "single" && completedSpecificZoneId) {
-            const targetId = Number(completedSpecificZoneId);
-            const hasId = (item.zoneObjects || []).some((zo) => Number(zo.id) === targetId);
-            if (!hasId) return false;
+          if (!isOrderIdSearch) {
+            if (completedCityFilter !== "All Cities" && item.city.toLowerCase() !== completedCityFilter.toLowerCase()) {
+              return false;
+            }
+            if (completedZoneScope === "selected") {
+              if (!matchesZoneFilter(item)) return false;
+            } else if (completedZoneScope === "single" && completedSpecificZoneId) {
+              const targetId = Number(completedSpecificZoneId);
+              const hasId = (item.zoneObjects || []).some((zo) => Number(zo.id) === targetId);
+              if (!hasId) return false;
+            }
           }
           if (!q) return true;
           return (
             item.id.toLowerCase().includes(q) ||
+            item.orderCode.toLowerCase().includes(q) ||
             item.courier.toLowerCase().includes(q) ||
             item.vendor.toLowerCase().includes(q) ||
             item.zone.toLowerCase().includes(q)
@@ -2037,6 +2071,7 @@
         completedOrders,
         completedDate,
         completedHoursWindow,
+        completedSearchInput,
         completedSearchQuery,
         completedCityFilter,
         completedZoneScope,
@@ -2336,8 +2371,14 @@
             <div className="flex flex-col">
               <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Time Window</label>
               <select
-                value={completedDate === getTodayCairoDateInput() ? completedHoursWindow : 0}
-                disabled={completedDate !== getTodayCairoDateInput()}
+                value={
+                  completedSearchInput.trim()
+                    ? 0
+                    : completedDate === getTodayCairoDateInput()
+                    ? completedHoursWindow
+                    : 0
+                }
+                disabled={completedDate !== getTodayCairoDateInput() || Boolean(completedSearchInput.trim())}
                 onChange={(e) => {
                   setCompletedHoursWindow(Number(e.target.value));
                   setCompletedPage(1);
@@ -2396,24 +2437,35 @@
               </select>
             </div>
 
-            {/* Search order/courier */}
-            <div className="flex flex-col flex-1 min-w-[220px] max-w-xs">
-              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Search</label>
+            {/* Search order/courier (Instant local filter + 300ms debounced direct lookup) */}
+            <div className="flex flex-col flex-1 min-w-[240px] max-w-sm">
+              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">
+                Search (Order ID فوري &lt;0.5s أو Courier)
+              </label>
               <div className="relative">
                 <input
                   type="text"
-                  value={completedSearchQuery}
+                  value={completedSearchInput}
                   onChange={(e) => {
-                    setCompletedSearchQuery(e.target.value);
-                    setCompletedPage(1);
+                    setCompletedSearchInput(e.target.value);
                   }}
-                  placeholder="Search order/courier"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      const trimmed = completedSearchInput.trim();
+                      setCompletedSearchQuery(trimmed);
+                      setCompletedPage(1);
+                      setIsCompletedLoading(true);
+                    }
+                  }}
+                  placeholder="اكتب رقم الأوردر أو اسم الرايدر..."
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 focus:outline-none focus:border-blue-500"
                 />
-                {completedSearchQuery && (
+                {completedSearchInput && (
                   <button
                     type="button"
                     onClick={() => {
+                      setCompletedSearchInput("");
                       setCompletedSearchQuery("");
                       setCompletedPage(1);
                     }}
@@ -2426,11 +2478,18 @@
             </div>
 
             <div className="ml-auto self-end flex flex-col items-end gap-1 text-xs text-gray-500 pb-0.5">
-              {completedDate === getTodayCairoDateInput() && completedHoursWindow > 0 && (
-                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[11px]">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  LIVE • من {formatShortTimeOnly(new Date(Date.now() - completedHoursWindow * 3600 * 1000).toISOString())} حتى الآن ({completedHoursWindow}h ↑)
+              {completedSearchInput.trim() ? (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-bold text-[11px]">
+                  ⚡ بحث مباشر في اليوم بالكامل (تجاوز حد الـ 4 ساعات)
                 </span>
+              ) : (
+                completedDate === getTodayCairoDateInput() &&
+                completedHoursWindow > 0 && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[11px]">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    LIVE • من {formatShortTimeOnly(new Date(Date.now() - completedHoursWindow * 3600 * 1000).toISOString())} حتى الآن ({completedHoursWindow}h ↑)
+                  </span>
+                )
               )}
               <div>
                 Page <strong className="text-gray-800">{completedPage}</strong> of{" "}
@@ -2473,7 +2532,9 @@
                 {isCompletedLoading && visibleCompletedOrders.length === 0 ? (
                   <tr>
                     <td colSpan={16} className="py-12 text-center text-blue-600 font-semibold text-sm">
-                      ⏳ جاري سحب Completed Orders ليوم {completedDate} (صفحة {completedPage} • 50 أوردر)...
+                      {isExactOrderIdPattern(completedSearchInput)
+                        ? `⚡ جاري البحث المباشر السريع عن الأوردر #${completedSearchInput.trim()}...`
+                        : `⏳ جاري سحب Completed Orders ليوم ${completedDate} (صفحة ${completedPage} • 50 أوردر)...`}
                     </td>
                   </tr>
                 ) : visibleCompletedOrders.length === 0 ? (
@@ -2890,9 +2951,20 @@
                             جاري سحب أوردرات الزونات المختارة من Hurrier...
                           </span>
                         ) : (
-                          <>
-                            لا توجد أوردرات في قسم <span className="font-semibold">{activeTab}</span> للزونات المختارة حالياً.
-                          </>
+                          <div className="space-y-2.5">
+                            <div>
+                              لا توجد أوردرات في قسم <span className="font-semibold">{activeTab}</span> للزونات المختارة حالياً.
+                            </div>
+                            {searchQuery.trim() && (
+                              <button
+                                type="button"
+                                onClick={() => handleJumpToCompletedOrderSearch(searchQuery)}
+                                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm transition-colors"
+                              >
+                                ⚡ بحث سريع عن "{searchQuery.trim()}" في Completed Orders
+                              </button>
+                            )}
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -3174,7 +3246,7 @@
                         تحديد زونات الموظف قبل بدء السحب (Independent Zone Gate)
                       </h1>
                       <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v6.1 • Persistent Selection + 4h Window (50/Page)
+                        ★ v6.2 • Fast Completed Search (&lt;0.5s) + Persistent Copy
                       </span>
                     </div>
                     <p className="text-xs text-slate-300 mt-0.5">
@@ -3348,7 +3420,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v6.1 (Persistent Copy + 4h ↑)</span>
+                <span className="font-bold text-emerald-700">★ v6.2 (Fast Search &lt;0.5s)</span>
                 <span className="font-mono text-gray-400">#{sessionId.slice(-5)}</span>
               </div>
               {employeeName && (
@@ -3432,6 +3504,11 @@
                       setSearchQuery(e.target.value);
                       setCurrentPage(1);
                     }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && searchQuery.trim() && filteredDeliveries.length === 0) {
+                        handleJumpToCompletedOrderSearch(searchQuery);
+                      }
+                    }}
                     placeholder="Search Order ID, VO, Courier, Zone..."
                     className="pl-3.5 pr-7 py-1.5 border border-gray-300 rounded-lg text-xs sm:text-sm w-56 sm:w-64 focus:outline-none focus:border-blue-500"
                   />
@@ -3445,6 +3522,17 @@
                     </button>
                   )}
                 </div>
+
+                {searchQuery.trim() && activeTab !== "Completed" && (
+                  <button
+                    type="button"
+                    onClick={() => handleJumpToCompletedOrderSearch(searchQuery)}
+                    className="px-2.5 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold transition-colors"
+                    title="بحث سريع مباشر في الأوردرات المكتملة (Completed Orders)"
+                  >
+                    ⚡ بحث في Completed
+                  </button>
+                )}
 
                 <select
                   value={selectedCity}
