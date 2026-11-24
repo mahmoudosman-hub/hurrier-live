@@ -22,6 +22,7 @@
     const { useState, useMemo, useEffect, useCallback, useRef } = React;
 
     // --- PRE-CONFIGURED PUBLIC GIST ID (READ-ONLY VIEW FOR EMPLOYEES) ---
+    const DEFAULT_GIST_OWNER = "mahmoudosman-hub";
     const DEFAULT_GIST_ID = "cccb6283d24d991ae2656411758acb72";
 
     // --- CRISP INLINE SVG ICONS (ZERO EXTERNAL ICON DEPENDENCIES) ---
@@ -446,8 +447,8 @@
       const lastGistEtagRef = useRef('');
       const [syncMode, setSyncMode] = useState('live');
       const [isAutoRefresh, setIsAutoRefresh] = useState(true);
-      const [refreshIntervalSec, setRefreshIntervalSec] = useState(6);
-      const [countdown, setCountdown] = useState(6);
+      const [refreshIntervalSec, setRefreshIntervalSec] = useState(10);
+      const [countdown, setCountdown] = useState(10);
       const [syncStatus, setSyncStatus] = useState('idle');
       const [syncError, setSyncError] = useState('');
       const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
@@ -609,8 +610,11 @@
               cachedGistRawUrlRef.current = fileEntry.raw_url.replace(/\/raw\/[a-f0-9]{40}\//, '/raw/');
             }
             data = JSON.parse(fileEntry.content);
-          } else if ((apiRes.status === 403 || apiRes.status === 429) && cachedGistRawUrlRef.current) {
-            const rawRes = await fetch(`${cachedGistRawUrlRef.current}?t=${Date.now()}`, { cache: 'no-store' });
+          } else if (apiRes.status === 403 || apiRes.status === 429) {
+            const fallbackUrl =
+              cachedGistRawUrlRef.current ||
+              `https://gist.githubusercontent.com/${DEFAULT_GIST_OWNER}/${cleanId}/raw/hurrier-live.json`;
+            const rawRes = await fetch(`${fallbackUrl}?t=${Date.now()}`, { cache: 'no-store' });
             if (!rawRes.ok) throw new Error(`GitHub Fallback HTTP ${rawRes.status}`);
             data = await rawRes.json();
           } else {
@@ -1131,7 +1135,9 @@
                 <div className="relative flex items-center">
                   <SearchIcon size={16} className="absolute left-3 text-gray-400" />
                   <input
-                    type="text"
+                    type="search"
+                    name="hurrier-order-filter"
+                    autoComplete="off"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search by Order ID or Courier"
