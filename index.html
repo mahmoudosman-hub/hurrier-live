@@ -278,11 +278,11 @@
       const opts = { credentials: "include", headers: { "Accept": "application/json" } };
       const [stats, active, queued, dispatched, actionable, preorder, dispatchers] = await Promise.all([
         fetch(\`\${BASE}/dispatcher-dashboard/stats?\${ZONES}\`, opts).then(r => r.json()),
-        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/active?\${ZONES}&page=1&per_page=50\`, opts).then(r => r.json()),
-        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/queued?\${ZONES}&page=1&per_page=50\`, opts).then(r => r.json()),
-        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/dispatched?\${ZONES}&page=1&per_page=50\`, opts).then(r => r.json()),
-        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/actionable?\${ZONES}&page=1&per_page=50\`, opts).then(r => r.json()),
-        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/preorder?\${ZONES}&page=1&per_page=50\`, opts).then(r => r.json()),
+        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/active?\${ZONES}&page=1&per_page=100\`, opts).then(r => r.json()),
+        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/queued?\${ZONES}&page=1&per_page=100\`, opts).then(r => r.json()),
+        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/dispatched?\${ZONES}&page=1&per_page=100\`, opts).then(r => r.json()),
+        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/actionable?\${ZONES}&page=1&per_page=100\`, opts).then(r => r.json()),
+        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/preorder?\${ZONES}&page=1&per_page=100\`, opts).then(r => r.json()),
         fetch(\`\${BASE}/issue-service/dispatcher_dashboard\`, opts).then(r => r.json()).catch(() => [])
       ]);
 
@@ -314,7 +314,7 @@
 
   syncToGitHub();
   window.__hurrierGitHubTimer && clearInterval(window.__hurrierGitHubTimer);
-  window.__hurrierGitHubTimer = setInterval(syncToGitHub, 15000);
+  window.__hurrierGitHubTimer = setInterval(syncToGitHub, 12000);
 })();`;
     }
 
@@ -443,10 +443,11 @@
       const [gistId, setGistId] = useState(initialGistId);
       const [gistToken, setGistToken] = useState('');
       const cachedGistRawUrlRef = useRef('');
+      const lastGistEtagRef = useRef('');
       const [syncMode, setSyncMode] = useState('live');
       const [isAutoRefresh, setIsAutoRefresh] = useState(true);
-      const [refreshIntervalSec, setRefreshIntervalSec] = useState(15);
-      const [countdown, setCountdown] = useState(15);
+      const [refreshIntervalSec, setRefreshIntervalSec] = useState(6);
+      const [countdown, setCountdown] = useState(6);
       const [syncStatus, setSyncStatus] = useState('idle');
       const [syncError, setSyncError] = useState('');
       const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
@@ -579,22 +580,25 @@
           const cleanId = gistId.trim();
           if (!cleanId) throw new Error('أدخل Gist ID أولاً');
 
-          let data = null;
-          if (cachedGistRawUrlRef.current) {
-            const rawRes = await fetch(`${cachedGistRawUrlRef.current}?t=${Date.now()}`, { cache: 'no-store' });
-            if (rawRes.ok) {
-              data = await rawRes.json();
-            } else {
-              cachedGistRawUrlRef.current = '';
-            }
+          const reqHeaders = { Accept: 'application/vnd.github+json' };
+          if (lastGistEtagRef.current) {
+            reqHeaders['If-None-Match'] = lastGistEtagRef.current;
           }
 
-          if (!data) {
-            const apiRes = await fetch(`https://api.github.com/gists/${cleanId}`, {
-              headers: { Accept: 'application/vnd.github+json' },
-              cache: 'no-store'
-            });
-            if (!apiRes.ok) throw new Error(`GitHub Gist HTTP ${apiRes.status}`);
+          const apiRes = await fetch(`https://api.github.com/gists/${cleanId}`, {
+            headers: reqHeaders,
+            cache: 'no-store'
+          });
+
+          if (apiRes.status === 304) {
+            setSyncStatus('connected');
+            return;
+          }
+
+          let data = null;
+          if (apiRes.ok) {
+            const newEtag = apiRes.headers.get('ETag');
+            if (newEtag) lastGistEtagRef.current = newEtag;
             const gistMeta = await apiRes.json();
             const fileEntry =
               gistMeta.files?.['hurrier-live.json'] || Object.values(gistMeta.files || {})[0];
@@ -605,6 +609,12 @@
               cachedGistRawUrlRef.current = fileEntry.raw_url.replace(/\/raw\/[a-f0-9]{40}\//, '/raw/');
             }
             data = JSON.parse(fileEntry.content);
+          } else if ((apiRes.status === 403 || apiRes.status === 429) && cachedGistRawUrlRef.current) {
+            const rawRes = await fetch(`${cachedGistRawUrlRef.current}?t=${Date.now()}`, { cache: 'no-store' });
+            if (!rawRes.ok) throw new Error(`GitHub Fallback HTTP ${rawRes.status}`);
+            data = await rawRes.json();
+          } else {
+            throw new Error(`GitHub Gist HTTP ${apiRes.status}`);
           }
 
           applyHurrierBundle(data);
@@ -1409,6 +1419,7 @@
                             onChange={(e) => {
                               setGistId(e.target.value);
                               cachedGistRawUrlRef.current = '';
+                              lastGistEtagRef.current = '';
                             }}
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-mono focus:outline-none focus:border-blue-500"
                           />
