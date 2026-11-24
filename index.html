@@ -548,7 +548,7 @@
     function App() {
       const [activeTab, setActiveTab] = useState("Active");
       const [searchQuery, setSearchQuery] = useState("");
-      const [selectedCity, setSelectedCity] = useState("All Cities");
+      const [selectedCity, setSelectedCity] = useState("Cairo");
       const [cityFilterMode, setCityFilterMode] = useState("all");
       const [selectedMultiCities, setSelectedMultiCities] = useState(["Cairo"]);
       const [selectedZoneIds, setSelectedZoneIds] = useState([]);
@@ -1390,9 +1390,10 @@
           return !isDs && (d.instructions.includes("Restaurants") || d.instructions.includes("Supermarket"));
         }).length;
         const splitCount = baseTabDeliveries.filter((d) => d.isSplit).length;
+        const tabExactTotal = effectiveTabCounts[activeTab] ?? baseTabDeliveries.length;
 
         const quickFilters = [
-          { id: "All", label: `All (${baseTabDeliveries.length})` },
+          { id: "All", label: `All (${tabExactTotal})` },
           { id: "Delayed", label: `Delayed (${lateCount})` },
           { id: "Cash", label: `Cash (${cashCount})` },
           { id: "Card", label: `Card (${cardCount})` },
@@ -1428,7 +1429,10 @@
               </div>
 
               <div className="text-xs text-gray-500">
-                Showing: <strong className="text-gray-800">{filteredDeliveries.length}</strong>
+                Showing: <strong className="text-gray-800">{filteredDeliveries.length}</strong>{" "}
+                <span className="text-gray-400">
+                  (loaded {baseTabDeliveries.length} of {tabExactTotal})
+                </span>
               </div>
             </div>
 
