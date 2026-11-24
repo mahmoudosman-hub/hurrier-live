@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier - Live Operations Dashboard (View Only)</title>
+  <title>Hurrier - Full Live Operations Dashboard (View Only)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -24,7 +24,7 @@
     // --- PRE-CONFIGURED FIREBASE REALTIME DATABASE (READ-ONLY VIEW FOR EMPLOYEES) ---
     const DEFAULT_FIREBASE_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
 
-    // --- CRISP INLINE SVG ICONS ---
+    // --- INLINE SVG ICON SYSTEM ---
     const IconSvg = ({ children, size = 16, className = "" }) => (
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -69,6 +69,9 @@
     const UploadIcon = (p) => <IconSvg {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></IconSvg>;
     const Link2Icon = (p) => <IconSvg {...p}><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></IconSvg>;
     const WifiIcon = (p) => <IconSvg {...p}><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" x2="12.01" y1="20" y2="20"/></IconSvg>;
+    const TagIcon = (p) => <IconSvg {...p}><path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2Z"/><path d="M7 7h.01"/></IconSvg>;
+    const TruckIcon = (p) => <IconSvg {...p}><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></IconSvg>;
+    const RotateCcwIcon = (p) => <IconSvg {...p}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></IconSvg>;
 
     // --- INITIAL SNAPSHOT DATA ---
     const MOCK_DELIVERIES = [
@@ -78,19 +81,39 @@
         vendor: "المخبز اللبناني الأصلي, فيصل - المطبعة",
         vo: "3507",
         deadline: "-172h 18min",
+        isLate: true,
         courier: "Ahmed Abdelaziz Zaki Abdelaziz _EL ABTAL(Blacklist)",
         courierId: 3138000,
         status: "Left Pickup",
         time_in: "-172h 18min",
         time_at: "November 16, 9:59 pm",
         zone: "Haram sp, Haram nesting sp, Haram sp 2",
+        allZones: ["Haram sp", "Haram nesting sp", "Haram sp 2", "Haram nesting pt", "Haram pt", "Haram pt 2"],
         city: "Cairo",
         instructions: ["Cash", "Restaurants"],
         tab: "Active",
         distance: "2.49 km",
         orderValue: "166.00 EGP",
+        valueLimit: "850.00 EGP",
+        capacity: 28,
+        utilizationText: "166.00 EGP (Price)",
+        isCash: true,
+        isCard: false,
+        isCorporate: false,
+        isReviewed: true,
+        isHighUtil: false,
+        isReturning: false,
+        verticalType: "restaurants",
+        restrictions: [],
+        tags: ["external_address_id:120798550", "proof_of_pickup", "signature_proof", "proof_of_return"],
+        sentToVendorAt: "November 16, 9:47 pm",
+        confirmedAt: "November 16, 9:47 pm",
+        scheduledPickupAt: "November 16, 10:06 pm",
+        scheduledDropoffAt: "November 16, 9:59 pm",
         pickupAddress: "فيصل شارع ٢٨٢ الملك فيصل عمارات الإسكان والتعمير",
+        pickupCoords: "30.00137, 31.16727",
         dropoffAddress: "Tersa ٨ فرقان - شقة ٢ - الدور ١٠",
+        dropoffCoords: "29.98703, 31.15300",
         customerName: "Youssef Ashraaf",
         items: [{ name: "منقوشة ميكس جبن", qty: 2, price: "244.00 EGP" }],
         transitions: [
@@ -100,108 +123,54 @@
         ]
       },
       {
-        id: "4737058883",
-        orderCode: "HF_EG4737058883",
-        vendor: "ريماس لاند, الهرم - الطالبيه - 3",
-        vo: "3793",
-        deadline: "-51h 47min",
-        courier: "Youssef Rabie Mabrouk Mahmoud _READY",
-        courierId: 2483300,
-        status: "Left Pickup",
-        time_in: "-51h 47min",
-        time_at: "November 21, 10:29 pm",
-        zone: "Haram sp, Haram nesting sp, Haram sp 2",
-        city: "Cairo",
-        instructions: ["Cash", "Dairy Products"],
-        tab: "Active",
-        distance: "4.74 km",
-        orderValue: "378.00 EGP",
-        pickupAddress: "ش ترسا الرئيسي بجوار طلبات مارت",
-        dropoffAddress: "مهدى البطران بيت خاص",
-        customerName: "Customer #218658342",
-        items: [{ name: "Dairy & Grocery Assortment", qty: 1, price: "378.00 EGP" }],
-        transitions: [
-          { state: "queued", time: "21:53:14", by: "system" },
-          { state: "left_pickup", time: "22:15:00", by: "courier_app" }
-        ]
-      },
-      {
         id: "4741714149",
         orderCode: "HF_EG4741714149",
         vendor: "بلبن، المنيل",
         vo: "9084",
         deadline: "-51min",
+        isLate: true,
         courier: "Hassan Moustafa Abdelnaem Amin _EL EZZ",
         courierId: 2314203,
         status: "Near Dropoff",
         time_in: "-51min",
         time_at: "November 24, 1:26 am",
         zone: "Manial nesting, Tahrir nesting",
+        allZones: ["Manial nesting", "Tahrir nesting", "Manial sp", "Tahrir"],
         city: "Cairo",
         instructions: ["Restaurants"],
         tab: "Active",
         distance: "3.88 km",
         orderValue: "197.99 EGP",
+        valueLimit: "850.00 EGP",
+        capacity: 18,
+        utilizationText: "197.99 EGP (Price)",
+        isCash: false,
+        isCard: false,
+        isCorporate: false,
+        isReviewed: true,
+        isHighUtil: false,
+        isReturning: false,
+        verticalType: "restaurants",
+        restrictions: ["Bike-Standard box"],
+        tags: ["external_address_id:178203258", "proof_of_pickup", "signature_proof", "stv_4mins"],
+        sentToVendorAt: "November 24, 1:02 am",
+        confirmedAt: "November 24, 1:02 am",
+        scheduledPickupAt: "November 24, 1:18 am",
+        scheduledDropoffAt: "November 24, 1:26 am",
         pickupAddress: "المنيل الرئيسي",
+        pickupCoords: "30.02338, 31.22592",
         dropoffAddress: "مستشفى الطلبة جامعة القاهرة",
+        dropoffCoords: "29.99424, 31.21202",
         customerName: "Customer #178203258",
         items: [{ name: "قشطوطة مانجو", qty: 2, price: "197.99 EGP" }],
         transitions: [
           { state: "queued", time: "01:02:11", by: "system" },
           { state: "near_dropoff", time: "01:24:30", by: "gps_geofence" }
         ]
-      },
-      {
-        id: "4741747871",
-        orderCode: "HF_EG4741747871",
-        vendor: "صاج و شاورما، المنيل تي جو",
-        vo: "2754",
-        deadline: "15min",
-        courier: "Pending Acceptance",
-        status: "Queued",
-        time_in: "2m",
-        time_at: "November 24, 2:24 am",
-        zone: "Manial sp, Tahrir, Manial nesting",
-        city: "Cairo",
-        instructions: ["Restaurants"],
-        tab: "Queued",
-        distance: "0.52 km",
-        orderValue: "201.60 EGP",
-        pickupAddress: "85 محطة الغمراوي شارع المنيل الرئيسي امام بنك القاهرة",
-        dropoffAddress: "حافظ بهجت 10",
-        customerName: "Customer #239985286",
-        items: [{ name: "ساندوتش شاورما سوري", qty: 2, price: "201.60 EGP" }],
-        transitions: [{ state: "queued", time: "02:06:30", by: "system" }]
-      },
-      {
-        id: "4741742564",
-        orderCode: "HF_EG4741742564",
-        vendor: "بيتزا الروضة, المنيل",
-        vo: "9927",
-        deadline: "10min",
-        courier: "Alhusseini Abdeen Bakri Hassan _TOP DELIVERY",
-        courierId: 3194100,
-        status: "Courier Notified",
-        time_in: "1m",
-        time_at: "November 24, 2:23 am",
-        zone: "Manial sp, Tahrir, Manial nesting",
-        city: "Cairo",
-        instructions: ["Cash", "Restaurants"],
-        tab: "Dispatched",
-        distance: "2.48 km",
-        orderValue: "153.74 EGP",
-        pickupAddress: "مصر القديمة 17 ش المماليك منيل الروضة",
-        dropoffAddress: "شارع القصر العيني ٧٣",
-        customerName: "Customer #508808299",
-        items: [{ name: "بيتزا مارجريتا وسط", qty: 1, price: "153.74 EGP" }],
-        transitions: [
-          { state: "queued", time: "01:54:06", by: "system" },
-          { state: "courier_notified", time: "02:15:30", by: "auto_dispatching" }
-        ]
       }
     ];
 
-    const MOCK_COURIERS = [
+    const MOCK_ZONES = [
       { id: 10162, zone: "Manial nesting", city: "Cairo", starting: 0, working: 11, ending: 17, break: 4, tempBreak: 0, delay: "9.7m", queued: 4, dispatched: 2, active: 8, puPercent: 50, doPercent: 50, zeroDel: 9, lowDel: 6, medDel: 2, highDel: 0 },
       { id: 10004, zone: "Manial sp", city: "Cairo", starting: 0, working: 62, ending: 40, break: 2, tempBreak: 2, delay: "9.7m", queued: 3, dispatched: 17, active: 45, puPercent: 40, doPercent: 60, zeroDel: 2, lowDel: 22, medDel: 16, highDel: 2 },
       { id: 10022, zone: "Tahrir", city: "Cairo", starting: 0, working: 83, ending: 60, break: 4, tempBreak: 1, delay: "9.7m", queued: 5, dispatched: 19, active: 68, puPercent: 30, doPercent: 70, zeroDel: 2, lowDel: 35, medDel: 26, highDel: 0 },
@@ -249,7 +218,7 @@
 
     const SIDEBAR_ITEMS = [
       { label: 'Dashboard', id: 'Dashboard' },
-      { label: 'Issues', id: 'Issues' },
+      { label: 'Issues', count: 0, id: 'Issues' },
       { label: 'Active Couriers', id: 'Active Couriers' },
       { label: 'Actionable', count: 23, id: 'Actionable' },
       { label: 'Pre-order', count: 6, id: 'Pre-order' },
@@ -257,9 +226,9 @@
       { label: 'Queued', count: 37, id: 'Queued' },
       { label: 'Dispatched', count: 78, id: 'Dispatched' },
       { label: 'Active', count: 458, id: 'Active' },
-      { label: 'Upcoming Orders', id: 'Upcoming' },
-      { label: 'Cancelled Orders', id: 'Cancelled' },
-      { label: 'Completed Orders', id: 'Completed' },
+      { label: 'Upcoming Orders', count: 0, id: 'Upcoming' },
+      { label: 'Cancelled Orders', count: 0, id: 'Cancelled' },
+      { label: 'Completed Orders', count: 0, id: 'Completed' },
       { label: 'Dispatcher Dashboard', id: 'Dispatcher Dashboard', className: 'mt-6' },
     ];
 
@@ -286,12 +255,20 @@
       const d = new Date(isoDate);
       if (Number.isNaN(d.getTime())) return '-';
       return d.toLocaleString('en-US', {
-        month: 'long',
+        month: 'short',
         day: 'numeric',
         hour: 'numeric',
         minute: '2-digit',
         hour12: true
       });
+    }
+
+    function formatUtilization(util) {
+      if (!util || util.value == null) return '-';
+      if (util.type === 'price') return `${(util.value / 100).toFixed(2)} EGP`;
+      if (util.type === 'volume') return `${Number(util.value).toFixed(2)} L`;
+      if (util.type === 'weight') return `${Number(util.value).toFixed(2)} kg`;
+      return String(util.value);
     }
 
     function mapHurrierRecordToDelivery(rec, tabName) {
@@ -301,10 +278,13 @@
         darkstores: 'Darkstores',
         dairy_products: 'Dairy Products',
         convenience: 'Convenience',
-        courier_business: 'Courier Business'
+        courier_business: 'Courier Business',
+        nuts_and_dried_fruits: 'Nuts & Sweets'
       };
       const instructions = [];
       if (order.is_cash_collection) instructions.push('Cash');
+      if (order.is_card_on_delivery) instructions.push('Card');
+      if (rec.is_returning) instructions.push('Return');
       const vLabel = verticalMap[order.vertical_type] || (order.vertical_type ? order.vertical_type : 'Restaurants');
       instructions.push(vLabel);
 
@@ -313,9 +293,15 @@
         .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
         .join(' ');
 
-      const deadlineStr = formatRelativeDeadline(order.scheduled_dropoff_at, tabName === 'Pre-order');
+      const isPreorderLike = tabName === 'Pre-order' || tabName === 'Upcoming';
+      const deadlineStr = formatRelativeDeadline(order.scheduled_dropoff_at, isPreorderLike);
       const distKm = typeof rec.distance === 'number' ? `${(rec.distance / 1000).toFixed(2)} km` : '-';
       const valEgp = typeof order.order_value === 'number' ? `${(order.order_value / 100).toFixed(2)} EGP` : '-';
+      const valLimit = typeof order.value_limit === 'number' ? `${(order.value_limit / 100).toFixed(2)} EGP` : '-';
+      const restrictions = typeof rec.business_restricted_vehicles === 'string' && rec.business_restricted_vehicles.trim()
+        ? rec.business_restricted_vehicles.split(',').map((s) => s.trim()).filter(Boolean)
+        : [];
+      const allZones = Array.isArray(rec.starting_points) ? rec.starting_points : [];
 
       return {
         id: String(order.code || rec.id),
@@ -323,20 +309,51 @@
         vendor: order.vendor_name || 'Unknown Vendor',
         vo: order.vendor_order_number || '-',
         deadline: deadlineStr,
+        isLate: deadlineStr.startsWith('-'),
         courier: rec.courier_name || (tabName === 'Queued' ? 'Assigning...' : '-'),
         courierId: rec.courier_id || null,
         status: statusLabel,
         time_in: deadlineStr.startsWith('-') ? deadlineStr : '-',
         time_at: formatReadableTimestamp(order.scheduled_dropoff_at),
-        zone: Array.isArray(rec.starting_points) ? rec.starting_points.slice(0, 3).join(', ') : 'Cairo',
+        zone: allZones.length > 0 ? allZones.slice(0, 3).join(', ') : 'Cairo',
+        allZones,
         city: 'Cairo',
         instructions,
         tab: tabName,
         distance: distKm,
         orderValue: valEgp,
+        valueLimit: valLimit,
+        capacity: rec.capacity ?? '-',
+        utilizationText: formatUtilization(order.utilization_value),
+        isCash: Boolean(order.is_cash_collection),
+        isCard: Boolean(order.is_card_on_delivery),
+        isCorporate: Boolean(order.is_corporate),
+        isReviewed: order.is_order_reviewed !== false,
+        isHighUtil: Boolean(order.is_high_utilization),
+        isReturning: Boolean(rec.is_returning),
+        verticalType: order.vertical_type || 'restaurants',
+        restrictions,
+        tags: Array.isArray(order.tags) ? order.tags : [],
+        placedAt: formatReadableTimestamp(order.placed_at || order.send_to_restaurant_at),
+        sentToVendorAt: formatReadableTimestamp(order.send_to_restaurant_at),
+        confirmedAt: formatReadableTimestamp(order.restaurant_confirmed_at),
+        scheduledPickupAt: formatReadableTimestamp(order.scheduled_pickup_at),
+        originalPickupAt: formatReadableTimestamp(order.original_scheduled_pickup_at),
+        scheduledDropoffAt: formatReadableTimestamp(order.scheduled_dropoff_at),
+        completedAt: formatReadableTimestamp(rec.completed_at),
+        cancelledAt: formatReadableTimestamp(rec.cancelled_at),
+        cancellationReason: rec.cancellation_reason || '-',
+        cancelledBy: rec.cancelled_by || '-',
+        metrics: rec.metrics || {},
         pickupAddress: order.pickup_address?.street_address || '-',
+        pickupCoords: order.pickup_address?.latitude && order.pickup_address?.longitude
+          ? `${Number(order.pickup_address.latitude).toFixed(5)}, ${Number(order.pickup_address.longitude).toFixed(5)}`
+          : null,
         dropoffAddress: order.dropoff_address?.street_address || '-',
-        customerName: order.tags?.find((t) => t.startsWith('external_address_id:'))?.replace('external_address_id:', 'Customer #') || 'Customer',
+        dropoffCoords: order.dropoff_address?.latitude && order.dropoff_address?.longitude
+          ? `${Number(order.dropoff_address.latitude).toFixed(5)}, ${Number(order.dropoff_address.longitude).toFixed(5)}`
+          : null,
+        customerName: order.tags?.find((t) => typeof t === 'string' && t.startsWith('external_address_id:'))?.replace('external_address_id:', 'Customer #') || 'Customer',
         items: [{ name: `${order.vendor_name || 'Order'} #${order.vendor_order_number || ''}`, qty: 1, price: valEgp }],
         transitions: [
           { state: rec.status || 'queued', time: formatReadableTimestamp(order.restaurant_confirmed_at || order.send_to_restaurant_at), by: 'hurrier_live' }
@@ -346,13 +363,25 @@
 
     const InstructionPill = ({ type }) => {
       let Icon = BoxIcon;
-      if (type === 'Cash') Icon = BanknoteIcon;
-      if (type === 'Restaurants') Icon = UtensilsIcon;
-      if (type === 'Darkstores') Icon = StoreIcon;
+      let style = "border-gray-300 text-gray-700 bg-white";
+      if (type === 'Cash') {
+        Icon = BanknoteIcon;
+        style = "border-emerald-300 text-emerald-800 bg-emerald-50/70";
+      } else if (type === 'Card') {
+        Icon = BanknoteIcon;
+        style = "border-indigo-300 text-indigo-800 bg-indigo-50/70";
+      } else if (type === 'Return') {
+        Icon = RotateCcwIcon;
+        style = "border-amber-300 text-amber-800 bg-amber-50/70";
+      } else if (type === 'Restaurants') {
+        Icon = UtensilsIcon;
+      } else if (type === 'Darkstores') {
+        Icon = StoreIcon;
+      }
 
       return (
-        <div className="inline-flex items-center gap-1.5 px-3 py-1 border border-gray-300 rounded-full text-xs font-medium text-gray-700 bg-white shadow-sm">
-          <Icon size={13} className="text-gray-600" />
+        <div className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 border rounded-full text-xs font-medium shadow-sm ${style}`}>
+          <Icon size={12} />
           <span>{type}</span>
         </div>
       );
@@ -367,22 +396,32 @@
       const [activeTab, setActiveTab] = useState('Active');
       const [searchQuery, setSearchQuery] = useState('');
       const [selectedCity, setSelectedCity] = useState('All Cities');
+      const [selectedZoneFilter, setSelectedZoneFilter] = useState('All Zones');
+      const [quickFilter, setQuickFilter] = useState('all'); // 'all' | 'late' | 'cash' | 'card' | 'restaurants' | 'darkstores' | 'high_util' | 'returning' | 'not_reviewed'
+      const [issueStatusFilter, setIssueStatusFilter] = useState('all'); // 'all' | 'open' | 'picked'
+      const [issueTypeFilter, setIssueTypeFilter] = useState('all');
       const [expandedZoneId, setExpandedZoneId] = useState(null);
       const [selectedOrder, setSelectedOrder] = useState(null);
       const [copiedId, setCopiedId] = useState(null);
       const [lastRefreshed, setLastRefreshed] = useState('Waiting for first sync...');
 
       const [deliveries, setDeliveries] = useState(MOCK_DELIVERIES);
-      const [couriers, setCouriers] = useState(MOCK_COURIERS);
+      const [zonesList, setZonesList] = useState(MOCK_ZONES);
+      const [individualCouriers, setIndividualCouriers] = useState([]);
+      const [issuesList, setIssuesList] = useState([]);
       const [citySummary, setCitySummary] = useState(CITY_KPI_SUMMARY);
       const [dispatcherStats, setDispatcherStats] = useState(DISPATCHER_STATS);
       const [tabCounts, setTabCounts] = useState({
+        Issues: 0,
         Actionable: 23,
         'Pre-order': 6,
         'Waiting for Assembly': 0,
         Queued: 37,
         Dispatched: 78,
-        Active: 458
+        Active: 458,
+        Upcoming: 0,
+        Cancelled: 0,
+        Completed: 0
       });
 
       const [firebaseUrl, setFirebaseUrl] = useState(initialFirebaseUrl);
@@ -407,6 +446,18 @@
         );
       }, [tabCounts]);
 
+      const availableCities = useMemo(() => {
+        const set = new Set(['All Cities', 'Cairo', 'Alexandria']);
+        citySummary.forEach((c) => { if (c.city) set.add(c.city); });
+        return Array.from(set);
+      }, [citySummary]);
+
+      const availableZones = useMemo(() => {
+        const set = new Set(['All Zones']);
+        zonesList.forEach((z) => { if (z.zone) set.add(z.zone); });
+        return Array.from(set);
+      }, [zonesList]);
+
       const applyHurrierBundle = useCallback((bundle) => {
         if (!bundle || bundle.empty || Object.keys(bundle).length === 0) return;
 
@@ -415,7 +466,11 @@
           { key: 'queued', tab: 'Queued' },
           { key: 'dispatched', tab: 'Dispatched' },
           { key: 'actionable', tab: 'Actionable' },
-          { key: 'preorder', tab: 'Pre-order' }
+          { key: 'waiting_for_assembly', tab: 'Waiting for Assembly' },
+          { key: 'preorder', tab: 'Pre-order' },
+          { key: 'upcoming', tab: 'Upcoming' },
+          { key: 'cancelled', tab: 'Cancelled' },
+          { key: 'completed', tab: 'Completed' }
         ];
 
         let hasAnyDelivery = false;
@@ -439,6 +494,15 @@
             return [...incoming, ...preserved];
           });
           setTabCounts((prev) => ({ ...prev, ...nextCounts }));
+        }
+
+        if (Array.isArray(bundle.couriers)) {
+          setIndividualCouriers(bundle.couriers);
+        }
+
+        if (Array.isArray(bundle.issues)) {
+          setIssuesList(bundle.issues);
+          setTabCounts((prev) => ({ ...prev, Issues: bundle.issues.length }));
         }
 
         if (bundle.stats && Array.isArray(bundle.stats.cities)) {
@@ -476,6 +540,7 @@
                 newZoneRows.push({
                   id: sp.id,
                   zone: sp.name,
+                  parentZone: z.zone_name,
                   city: c.city_name,
                   starting: st.couriers_in_starting ?? 0,
                   working: st.couriers_in_working ?? 0,
@@ -498,7 +563,7 @@
           });
 
           if (newSummaries.length > 0) setCitySummary(newSummaries);
-          if (newZoneRows.length > 0) setCouriers(newZoneRows);
+          if (newZoneRows.length > 0) setZonesList(newZoneRows);
         }
 
         if (Array.isArray(bundle.dispatchers) && bundle.dispatchers.length > 0) {
@@ -522,7 +587,6 @@
           const cleanBaseUrl = firebaseUrl.trim().replace(/\/+$/, '');
           if (!cleanBaseUrl) throw new Error('أدخل رابط Firebase Realtime Database أولاً');
 
-          // فحص بصمة التحديث (28 بايت فقط) كل ثانيتين لتجنب تحميل البيانات كاملة إلا عند وجود جديد
           if (!forceFull && lastSyncedAtRef.current) {
             const checkRes = await fetch(`${cleanBaseUrl}/hurrier_live/syncedAt.json`, { cache: 'no-store' });
             if (checkRes.ok) {
@@ -540,7 +604,7 @@
           const data = await res.json();
 
           if (!data || Object.keys(data).length === 0) {
-            throw new Error('قاعدة البيانات فارغة حالياً — في انتظار إرسال أول تحديث من صفحة Hurrier');
+            throw new Error('في انتظار إرسال أول تحديث من صفحة Hurrier...');
           }
 
           if (data.syncedAt) {
@@ -591,11 +655,9 @@
       };
 
       const employeeShareLink = useMemo(() => {
-        const base =
-          window.location.origin && window.location.origin !== 'null'
-            ? `${window.location.origin}${window.location.pathname}`
-            : 'https://mahmoudosman-hub.github.io/hurrier-live/';
-        return base;
+        return window.location.origin && window.location.origin !== 'null'
+          ? `${window.location.origin}${window.location.pathname}`
+          : 'https://mahmoudosman-hub.github.io/hurrier-live/';
       }, []);
 
       const handleApplyPastedJson = () => {
@@ -604,7 +666,7 @@
           if (parsed.cities) {
             applyHurrierBundle({ stats: parsed });
           } else if (Array.isArray(parsed.records)) {
-            applyHurrierBundle({ [pasteTargetTab.toLowerCase().replace('-', '')]: parsed });
+            applyHurrierBundle({ [pasteTargetTab.toLowerCase().replace(/[\s-]/g, '_')]: parsed });
           } else if (parsed.active || parsed.queued || parsed.stats) {
             applyHurrierBundle(parsed);
           } else if (Array.isArray(parsed)) {
@@ -622,45 +684,140 @@
         setCountdown(refreshIntervalSec);
       };
 
-      const filteredCouriers = useMemo(() => {
-        return couriers.filter((c) => {
+      // Filtered zones for Active Couriers & Dashboard
+      const filteredZones = useMemo(() => {
+        return zonesList.filter((c) => {
           const matchesCity = selectedCity === 'All Cities' || c.city === selectedCity;
+          const matchesZone = selectedZoneFilter === 'All Zones' || c.zone === selectedZoneFilter;
+          const q = searchQuery.trim().toLowerCase();
           const matchesSearch =
-            !searchQuery.trim() ||
-            c.zone.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            String(c.id).includes(searchQuery.trim());
-          return matchesCity && matchesSearch;
+            !q ||
+            c.zone.toLowerCase().includes(q) ||
+            (c.parentZone && c.parentZone.toLowerCase().includes(q)) ||
+            String(c.id).includes(q);
+          return matchesCity && matchesZone && matchesSearch;
         });
-      }, [couriers, selectedCity, searchQuery]);
+      }, [zonesList, selectedCity, selectedZoneFilter, searchQuery]);
 
+      // Filtered deliveries for delivery tabs
       const filteredDeliveries = useMemo(() => {
         return deliveries.filter((d) => {
           const matchesTab = d.tab === activeTab;
           const matchesCity = selectedCity === 'All Cities' || d.city === selectedCity;
+          const matchesZone =
+            selectedZoneFilter === 'All Zones' ||
+            (Array.isArray(d.allZones) && d.allZones.some((z) => z.toLowerCase() === selectedZoneFilter.toLowerCase())) ||
+            d.zone.toLowerCase().includes(selectedZoneFilter.toLowerCase());
+
+          let matchesQuick = true;
+          if (quickFilter === 'late') matchesQuick = d.isLate;
+          else if (quickFilter === 'cash') matchesQuick = d.isCash;
+          else if (quickFilter === 'card') matchesQuick = d.isCard;
+          else if (quickFilter === 'restaurants') matchesQuick = d.verticalType === 'restaurants';
+          else if (quickFilter === 'darkstores') matchesQuick = d.verticalType === 'darkstores';
+          else if (quickFilter === 'high_util') matchesQuick = d.isHighUtil;
+          else if (quickFilter === 'returning') matchesQuick = d.isReturning;
+          else if (quickFilter === 'not_reviewed') matchesQuick = !d.isReviewed;
+
           const q = searchQuery.trim().toLowerCase();
           const matchesSearch =
             !q ||
             d.id.toLowerCase().includes(q) ||
+            d.orderCode.toLowerCase().includes(q) ||
             d.vendor.toLowerCase().includes(q) ||
+            String(d.vo).toLowerCase().includes(q) ||
             d.courier.toLowerCase().includes(q) ||
+            String(d.courierId || '').includes(q) ||
             d.zone.toLowerCase().includes(q);
-          return matchesTab && matchesCity && matchesSearch;
+
+          return matchesTab && matchesCity && matchesZone && matchesQuick && matchesSearch;
         });
-      }, [deliveries, activeTab, selectedCity, searchQuery]);
+      }, [deliveries, activeTab, selectedCity, selectedZoneFilter, quickFilter, searchQuery]);
+
+      // Filtered Issues
+      const filteredIssues = useMemo(() => {
+        return issuesList.filter((iss) => {
+          const matchesStatus =
+            issueStatusFilter === 'all' ||
+            (issueStatusFilter === 'open' && !iss.picked_by) ||
+            (issueStatusFilter === 'picked' && Boolean(iss.picked_by));
+          const matchesType =
+            issueTypeFilter === 'all' ||
+            String(iss.type).toLowerCase().includes(issueTypeFilter.toLowerCase());
+          const q = searchQuery.trim().toLowerCase();
+          const matchesSearch =
+            !q ||
+            String(iss.order_code).toLowerCase().includes(q) ||
+            String(iss.courier_name).toLowerCase().includes(q) ||
+            String(iss.title).toLowerCase().includes(q) ||
+            String(iss.picked_by || '').toLowerCase().includes(q);
+          return matchesStatus && matchesType && matchesSearch;
+        });
+      }, [issuesList, issueStatusFilter, issueTypeFilter, searchQuery]);
+
+      // Top KPI summary computed for current delivery tab
+      const currentTabMetrics = useMemo(() => {
+        const total = filteredDeliveries.length;
+        const late = filteredDeliveries.filter((d) => d.isLate).length;
+        const cash = filteredDeliveries.filter((d) => d.isCash).length;
+        const returns = filteredDeliveries.filter((d) => d.isReturning).length;
+        return { total, late, cash, returns };
+      }, [filteredDeliveries]);
 
       const renderDashboardOverview = () => {
         const visibleCities = citySummary.filter(
           (c) => selectedCity === 'All Cities' || c.city === selectedCity
         );
 
+        const totals = visibleCities.reduce(
+          (acc, c) => ({
+            queued: acc.queued + (c.queued || 0),
+            dispatched: acc.dispatched + (c.dispatched || 0),
+            active: acc.active + (c.active || 0),
+            working: acc.working + (c.working || 0),
+            ending: acc.ending + (c.ending || 0),
+            break: acc.break + (c.break || 0)
+          }),
+          { queued: 0, dispatched: 0, active: 0, working: 0, ending: 0, break: 0 }
+        );
+
         return (
           <div className="mt-6 space-y-6">
+            {/* Top Summary KPI Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                <div className="text-xs font-semibold text-gray-500 uppercase">Total Queued</div>
+                <div className="text-2xl font-bold text-gray-900 mt-1">{totals.queued}</div>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                <div className="text-xs font-semibold text-gray-500 uppercase">Total Dispatched</div>
+                <div className="text-2xl font-bold text-amber-600 mt-1">{totals.dispatched}</div>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                <div className="text-xs font-semibold text-gray-500 uppercase">Total Active</div>
+                <div className="text-2xl font-bold text-blue-600 mt-1">{totals.active}</div>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                <div className="text-xs font-semibold text-gray-500 uppercase">Riders Working</div>
+                <div className="text-2xl font-bold text-emerald-600 mt-1">{totals.working}</div>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                <div className="text-xs font-semibold text-gray-500 uppercase">Riders Ending</div>
+                <div className="text-2xl font-bold text-orange-600 mt-1">{totals.ending}</div>
+              </div>
+              <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+                <div className="text-xs font-semibold text-gray-500 uppercase">Riders On Break</div>
+                <div className="text-2xl font-bold text-gray-700 mt-1">{totals.break}</div>
+              </div>
+            </div>
+
+            {/* Region Performance Table */}
             <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
               <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
                   Region Performance &amp; Rider Shifts
                 </span>
-                <span className="text-xs text-gray-500">Read-Only Live View</span>
+                <span className="text-xs text-gray-500">Live Synced Stats</span>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs whitespace-nowrap">
@@ -715,10 +872,11 @@
               </div>
             </div>
 
+            {/* Starting Points Breakdown */}
             <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
               <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
                 <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
-                  Starting Points Breakdown ({filteredCouriers.length} Zones)
+                  Starting Points Breakdown ({filteredZones.length} Zones)
                 </span>
               </div>
               <div className="overflow-x-auto">
@@ -726,20 +884,23 @@
                   <thead>
                     <tr className="border-b border-gray-200 text-gray-500 font-semibold">
                       <th className="py-3 px-4">STARTING POINT</th>
+                      <th className="py-3 px-3">PARENT ZONE</th>
                       <th className="py-3 px-3">QUEUED</th>
                       <th className="py-3 px-3">DISP</th>
                       <th className="py-3 px-3">ACTIVE</th>
                       <th className="py-3 px-3">DELAY</th>
                       <th className="py-3 px-3">PU / DO</th>
+                      <th className="py-3 px-3">0 / 1 / 2 / 3+</th>
                       <th className="py-3 px-3">WORK</th>
                       <th className="py-3 px-3">END</th>
                       <th className="py-3 px-3">BREAK</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 text-sm">
-                    {filteredCouriers.map((sp) => (
+                    {filteredZones.map((sp) => (
                       <tr key={sp.id} className="hover:bg-gray-50">
                         <td className="py-3 px-4 font-medium text-gray-900">{sp.zone}</td>
+                        <td className="py-3 px-3 text-xs text-gray-500">{sp.parentZone || '-'}</td>
                         <td className="py-3 px-3">{sp.queued}</td>
                         <td className="py-3 px-3">{sp.dispatched}</td>
                         <td className="py-3 px-3 font-medium text-blue-600">{sp.active}</td>
@@ -747,8 +908,11 @@
                           {sp.delay}
                         </td>
                         <td className="py-3 px-3 text-gray-600">{sp.puPercent}% / {sp.doPercent}%</td>
-                        <td className="py-3 px-3 font-medium text-gray-800">{sp.working}</td>
-                        <td className="py-3 px-3 text-gray-600">{sp.ending}</td>
+                        <td className="py-3 px-3 text-xs font-mono text-gray-500">
+                          {sp.zeroDel}/{sp.lowDel}/{sp.medDel}/{sp.highDel}
+                        </td>
+                        <td className="py-3 px-3 font-medium text-emerald-700">{sp.working}</td>
+                        <td className="py-3 px-3 text-amber-700">{sp.ending}</td>
                         <td className="py-3 px-3 text-gray-600">{sp.break}</td>
                       </tr>
                     ))}
@@ -759,6 +923,107 @@
           </div>
         );
       };
+
+      const renderIssuesWatchlist = () => (
+        <div className="mt-6 space-y-4">
+          {/* Issue Status & Type Filters */}
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-50 p-3 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              {[
+                { id: 'all', label: `All Issues (${issuesList.length})` },
+                { id: 'open', label: `Open Issues (${issuesList.filter((i) => !i.picked_by).length})` },
+                { id: 'picked', label: `Picked Issues (${issuesList.filter((i) => Boolean(i.picked_by)).length})` }
+              ].map((st) => (
+                <button
+                  key={st.id}
+                  type="button"
+                  onClick={() => setIssueStatusFilter(st.id)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
+                    issueStatusFilter === st.id
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-100'
+                  }`}
+                >
+                  {st.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-gray-500 font-medium mr-1">Type:</span>
+              {['all', 'pickup', 'dropoff', 'dispatch', 'courier'].map((tp) => (
+                <button
+                  key={tp}
+                  type="button"
+                  onClick={() => setIssueTypeFilter(tp)}
+                  className={`px-2.5 py-1 rounded-full capitalize font-medium ${
+                    issueTypeFilter === tp
+                      ? 'bg-gray-900 text-white'
+                      : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
+                  }`}
+                >
+                  {tp}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead>
+                  <tr className="border-b border-gray-200 text-gray-500 font-semibold text-xs bg-gray-50">
+                    <th className="py-3.5 px-4">TYPE</th>
+                    <th className="py-3.5 px-4">ISSUE</th>
+                    <th className="py-3.5 px-4">ORDER</th>
+                    <th className="py-3.5 px-4">COURIER</th>
+                    <th className="py-3.5 px-4">DEADLINE</th>
+                    <th className="py-3.5 px-4">OPEN FOR</th>
+                    <th className="py-3.5 px-4">PICKED BY</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredIssues.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-gray-500">
+                        No active issues matching current filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredIssues.map((iss, idx) => (
+                      <tr key={iss.id || idx} className="hover:bg-gray-50">
+                        <td className="py-3.5 px-4">
+                          <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase bg-amber-50 text-amber-800 border border-amber-200">
+                            {iss.type}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 font-medium text-gray-900">{iss.title}</td>
+                        <td className="py-3.5 px-4 text-blue-600 font-mono text-xs">{iss.order_code}</td>
+                        <td className="py-3.5 px-4 text-gray-700">{iss.courier_name}</td>
+                        <td className="py-3.5 px-4 text-xs font-semibold text-[#e53935]">
+                          {iss.deadline ? formatRelativeDeadline(iss.deadline) : '-'}
+                        </td>
+                        <td className="py-3.5 px-4 text-xs text-gray-500 font-mono">
+                          {iss.created_at ? formatRelativeDeadline(iss.created_at).replace('-', '') : '-'}
+                        </td>
+                        <td className="py-3.5 px-4 text-xs">
+                          {iss.picked_by ? (
+                            <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-medium">
+                              {iss.picked_by}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">Unassigned</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
 
       const renderDispatcherDashboard = () => (
         <div className="mt-6 bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
@@ -789,184 +1054,426 @@
         </div>
       );
 
-      const renderContent = () => {
-        if (activeTab === 'Dashboard') return renderDashboardOverview();
-        if (activeTab === 'Dispatcher Dashboard') return renderDispatcherDashboard();
+      const renderActiveCouriersView = () => (
+        <div className="mt-6 w-full border-t border-gray-200">
+          {filteredZones.map((item) => {
+            const isHighDelay = parseFloat(item.delay) > 5;
+            const isExpanded = expandedZoneId === item.id;
 
-        if (activeTab === 'Active Couriers') {
-          return (
-            <div className="mt-6 w-full border-t border-gray-200">
-              {filteredCouriers.map((item) => {
-                const isHighDelay = parseFloat(item.delay) > 5;
-                const isExpanded = expandedZoneId === item.id;
+            // Match individual couriers belonging to this starting point (or inferred from active deliveries)
+            const zoneCouriersFromApi = individualCouriers.filter(
+              (c) => String(c.starting_point_id) === String(item.id) ||
+                     (c.starting_point_name && c.starting_point_name.toLowerCase() === item.zone.toLowerCase())
+            );
 
-                return (
-                  <div key={item.id} className="border-b border-gray-200">
-                    <div
-                      onClick={() => setExpandedZoneId(isExpanded ? null : item.id)}
-                      className="flex justify-between items-center py-4 cursor-pointer hover:bg-gray-50 px-3 transition-colors"
-                    >
-                      <div className="text-[15px] text-gray-800">
-                        <span className="font-medium">{item.zone}</span>
-                        <span className="text-gray-600 ml-1.5">
-                          ({item.working} / {item.ending} / {item.break})
-                        </span>
-                        <span className={`ml-2 font-medium ${isHighDelay ? 'text-[#d32f2f]' : 'text-gray-600'}`}>
-                          {item.delay}
-                        </span>
+            // Also extract active couriers currently delivering in this zone from live deliveries
+            const activeRidersInZone = [];
+            const seenRiderIds = new Set();
+            deliveries.forEach((d) => {
+              if (
+                d.courierId &&
+                !seenRiderIds.has(d.courierId) &&
+                (d.zone.toLowerCase().includes(item.zone.toLowerCase()) ||
+                  (Array.isArray(d.allZones) && d.allZones.some((z) => z.toLowerCase() === item.zone.toLowerCase())))
+              ) {
+                seenRiderIds.add(d.courierId);
+                activeRidersInZone.push({
+                  id: d.courierId,
+                  name: d.courier,
+                  status: d.status,
+                  orderId: d.id,
+                  vendor: d.vendor
+                });
+              }
+            });
+
+            return (
+              <div key={item.id} className="border-b border-gray-200">
+                <div
+                  onClick={() => setExpandedZoneId(isExpanded ? null : item.id)}
+                  className="flex justify-between items-center py-4 cursor-pointer hover:bg-gray-50 px-3 transition-colors"
+                >
+                  <div className="text-[15px] text-gray-800">
+                    <span className="font-medium">{item.zone}</span>
+                    <span className="text-gray-600 ml-1.5">
+                      ({item.working} / {item.ending} / {item.break})
+                    </span>
+                    <span className={`ml-2 font-medium ${isHighDelay ? 'text-[#d32f2f]' : 'text-gray-600'}`}>
+                      {item.delay}
+                    </span>
+                  </div>
+                  {isExpanded ? (
+                    <ChevronUpIcon size={20} className="text-gray-500" />
+                  ) : (
+                    <ChevronDownIcon size={20} className="text-gray-400" />
+                  )}
+                </div>
+
+                {isExpanded && (
+                  <div className="bg-gray-50/80 px-4 py-4 border-t border-gray-100 space-y-4">
+                    {/* Shift Breakdown Cards */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 text-xs">
+                      <div className="bg-white p-3 rounded border border-gray-200">
+                        <div className="text-gray-400 uppercase font-semibold">Starting</div>
+                        <div className="text-lg font-bold text-blue-600 mt-0.5">{item.starting}</div>
                       </div>
-                      {isExpanded ? (
-                        <ChevronUpIcon size={20} className="text-gray-500" />
-                      ) : (
-                        <ChevronDownIcon size={20} className="text-gray-400" />
-                      )}
+                      <div className="bg-white p-3 rounded border border-gray-200">
+                        <div className="text-gray-400 uppercase font-semibold">Working</div>
+                        <div className="text-lg font-bold text-emerald-600 mt-0.5">{item.working}</div>
+                      </div>
+                      <div className="bg-white p-3 rounded border border-gray-200">
+                        <div className="text-gray-400 uppercase font-semibold">Ending Shift</div>
+                        <div className="text-lg font-bold text-amber-600 mt-0.5">{item.ending}</div>
+                      </div>
+                      <div className="bg-white p-3 rounded border border-gray-200">
+                        <div className="text-gray-400 uppercase font-semibold">Break / Temp</div>
+                        <div className="text-lg font-bold text-gray-700 mt-0.5">
+                          {item.break} <span className="text-xs font-normal text-gray-400">/ {item.tempBreak}</span>
+                        </div>
+                      </div>
+                      <div className="bg-white p-3 rounded border border-gray-200">
+                        <div className="text-gray-400 uppercase font-semibold">Q / Disp / Act</div>
+                        <div className="text-base font-bold text-gray-800 mt-0.5">
+                          {item.queued} / {item.dispatched} / <span className="text-blue-600">{item.active}</span>
+                        </div>
+                      </div>
+                      <div className="bg-white p-3 rounded border border-gray-200">
+                        <div className="text-gray-400 uppercase font-semibold">Orders / Rider</div>
+                        <div className="text-xs font-semibold text-gray-700 mt-1.5 font-mono">
+                          0:{item.zeroDel} | 1:{item.lowDel} | 2:{item.medDel} | 3+:{item.highDel}
+                        </div>
+                      </div>
                     </div>
 
-                    {isExpanded && (
-                      <div className="bg-gray-50/80 px-4 py-4 border-t border-gray-100 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4 text-xs">
-                        <div className="bg-white p-3 rounded border border-gray-200">
-                          <div className="text-gray-400 uppercase font-semibold">Working</div>
-                          <div className="text-lg font-bold text-emerald-600 mt-0.5">{item.working}</div>
+                    {/* Couriers Table inside Zone */}
+                    {zoneCouriersFromApi.length > 0 ? (
+                      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                        <div className="px-3 py-2 bg-gray-100/70 border-b border-gray-200 text-xs font-bold text-gray-600">
+                          Couriers in {item.zone} ({zoneCouriersFromApi.length})
                         </div>
-                        <div className="bg-white p-3 rounded border border-gray-200">
-                          <div className="text-gray-400 uppercase font-semibold">Ending Shift</div>
-                          <div className="text-lg font-bold text-amber-600 mt-0.5">{item.ending}</div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs whitespace-nowrap">
+                            <thead>
+                              <tr className="border-b border-gray-200 text-gray-500">
+                                <th className="py-2 px-3">ID</th>
+                                <th className="py-2 px-3">COURIER NAME</th>
+                                <th className="py-2 px-3">SHIFT STATUS</th>
+                                <th className="py-2 px-3">VEHICLE</th>
+                                <th className="py-2 px-3">ACTIVE ORDERS</th>
+                                <th className="py-2 px-3">SHIFT WINDOW</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {zoneCouriersFromApi.map((c) => (
+                                <tr key={c.id} className="hover:bg-gray-50">
+                                  <td className="py-2 px-3 font-mono text-gray-500">{c.id}</td>
+                                  <td className="py-2 px-3 font-medium text-blue-600">{c.name}</td>
+                                  <td className="py-2 px-3">
+                                    <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold capitalize">
+                                      {c.status}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-3 text-gray-600">{c.vehicle}</td>
+                                  <td className="py-2 px-3 font-bold text-gray-800">{c.active_deliveries}</td>
+                                  <td className="py-2 px-3 text-gray-500">
+                                    {c.shift_start ? formatReadableTimestamp(c.shift_start) : '-'} → {c.shift_end ? formatReadableTimestamp(c.shift_end) : '-'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
-                        <div className="bg-white p-3 rounded border border-gray-200">
-                          <div className="text-gray-400 uppercase font-semibold">On Break / Temp</div>
-                          <div className="text-lg font-bold text-gray-700 mt-0.5">
-                            {item.break} <span className="text-xs font-normal text-gray-400">/ {item.tempBreak}</span>
-                          </div>
+                      </div>
+                    ) : activeRidersInZone.length > 0 && (
+                      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+                        <div className="px-3 py-2 bg-gray-100/70 border-b border-gray-200 text-xs font-bold text-gray-600">
+                          Active Couriers Currently On Orders in {item.zone} ({activeRidersInZone.length})
                         </div>
-                        <div className="bg-white p-3 rounded border border-gray-200">
-                          <div className="text-gray-400 uppercase font-semibold">Queued / Disp</div>
-                          <div className="text-lg font-bold text-gray-800 mt-0.5">
-                            {item.queued} / {item.dispatched}
-                          </div>
-                        </div>
-                        <div className="bg-white p-3 rounded border border-gray-200">
-                          <div className="text-gray-400 uppercase font-semibold">Active Orders</div>
-                          <div className="text-lg font-bold text-blue-600 mt-0.5">{item.active}</div>
-                        </div>
-                        <div className="bg-white p-3 rounded border border-gray-200">
-                          <div className="text-gray-400 uppercase font-semibold">Deliveries / Rider</div>
-                          <div className="text-sm font-semibold text-gray-700 mt-1.5 font-mono">
-                            0:{item.zeroDel} | 1:{item.lowDel} | 2:{item.medDel}
-                          </div>
+                        <div className="divide-y divide-gray-100 text-xs">
+                          {activeRidersInZone.map((r) => (
+                            <div key={r.id} className="px-3 py-2 flex items-center justify-between hover:bg-gray-50">
+                              <div>
+                                <span className="font-mono text-gray-400 mr-2">#{r.id}</span>
+                                <span className="font-medium text-blue-600">{r.name}</span>
+                              </div>
+                              <div className="text-gray-500">
+                                Order <span className="font-mono font-semibold text-gray-700">{r.orderId}</span> ({r.status})
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
                   </div>
-                );
-              })}
-            </div>
-          );
-        }
+                )}
+              </div>
+            );
+          })}
+        </div>
+      );
 
-        return (
-          <div className="mt-6 w-full overflow-x-auto">
-            <table className="w-full text-left text-sm whitespace-nowrap">
-              <thead>
-                <tr className="border-b border-gray-200 text-gray-500 font-semibold tracking-wide text-xs">
-                  <th className="pb-3 px-2 w-1/4">ORDER</th>
-                  <th className="pb-3 px-2">DEADLINE</th>
-                  <th className="pb-3 px-2 w-1/4">COURIER</th>
-                  <th className="pb-3 px-2">STATUS</th>
-                  <th className="pb-3 px-2">ZONE</th>
-                  <th className="pb-3 px-2">DELIVERY INSTRUCTION</th>
+      const renderCompletedOrdersView = () => (
+        <div className="mt-6 w-full overflow-x-auto">
+          <table className="w-full text-left text-xs whitespace-nowrap">
+            <thead>
+              <tr className="border-b border-gray-200 text-gray-500 font-semibold tracking-wide bg-gray-50">
+                <th className="py-3 px-3">PLACED AT</th>
+                <th className="py-3 px-3">ORDER</th>
+                <th className="py-3 px-3">ZONES</th>
+                <th className="py-3 px-3">COURIER</th>
+                <th className="py-3 px-3">BUSINESS</th>
+                <th className="py-3 px-3">KM</th>
+                <th className="py-3 px-3">VALUE</th>
+                <th className="py-3 px-3">STATUS / COMPLETED</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 text-sm">
+              {filteredDeliveries.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="py-12 text-center text-gray-500">
+                    No completed orders synced yet for the selected zones.
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {filteredDeliveries.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="py-12 text-center text-gray-500">
-                      No deliveries found for <span className="font-semibold">{activeTab}</span>.
+              ) : (
+                filteredDeliveries.map((item) => (
+                  <tr
+                    key={item.id}
+                    onClick={() => setSelectedOrder(item)}
+                    className="hover:bg-gray-50 cursor-pointer"
+                  >
+                    <td className="py-3.5 px-3 text-xs text-gray-500">{item.placedAt}</td>
+                    <td className="py-3.5 px-3 font-medium text-blue-600">{item.id}</td>
+                    <td className="py-3.5 px-3 text-xs text-gray-600 max-w-[160px] truncate">{item.zone}</td>
+                    <td className="py-3.5 px-3 text-gray-800 max-w-[200px] truncate">{item.courier}</td>
+                    <td className="py-3.5 px-3 text-gray-700 max-w-[200px] truncate">{item.vendor}</td>
+                    <td className="py-3.5 px-3 text-gray-600">{item.distance}</td>
+                    <td className="py-3.5 px-3 font-medium text-gray-800">{item.orderValue}</td>
+                    <td className="py-3.5 px-3 text-xs text-emerald-700 font-semibold">
+                      {item.status} {item.completedAt !== '-' ? `(${item.completedAt})` : ''}
                     </td>
                   </tr>
-                ) : (
-                  filteredDeliveries.map((item) => {
-                    const isNegative = item.deadline.includes('-') || item.deadline === 'Late';
-                    const deadlineColor = isNegative ? 'bg-[#e53935] text-white' : 'bg-gray-100 text-gray-800';
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      );
 
-                    return (
-                      <tr
-                        key={item.id}
-                        onClick={() => setSelectedOrder(item)}
-                        className="border-b border-gray-100 hover:bg-gray-50/80 transition-colors cursor-pointer"
-                      >
-                        <td className="py-4 px-2 align-top">
-                          <div className="flex flex-col gap-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-blue-600 hover:underline font-medium text-[15px]">
-                                {item.id}
-                              </span>
-                              <InfoIcon size={14} className="text-gray-400 hover:text-blue-600" />
-                              <button
-                                type="button"
-                                onClick={(e) => handleCopyId(e, item.id)}
-                                className="text-gray-400 hover:text-gray-700 p-0.5 rounded"
-                                title="Copy Order ID"
-                              >
-                                {copiedId === item.id ? (
-                                  <CheckIcon size={14} className="text-emerald-600" />
-                                ) : (
-                                  <CopyIcon size={14} />
+      const renderCancelledOrdersView = () => (
+        <div className="mt-6 w-full overflow-x-auto">
+          <table className="w-full text-left text-xs whitespace-nowrap">
+            <thead>
+              <tr className="border-b border-gray-200 text-gray-500 font-semibold tracking-wide bg-gray-50">
+                <th className="py-3 px-3">ORDER</th>
+                <th className="py-3 px-3">BUSINESS</th>
+                <th className="py-3 px-3">COURIER</th>
+                <th className="py-3 px-3">CANCELLATION REASON</th>
+                <th className="py-3 px-3">CANCELLED BY</th>
+                <th className="py-3 px-3">ZONE</th>
+                <th className="py-3 px-3">VALUE</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 text-sm">
+              {filteredDeliveries.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-gray-500">
+                    No cancelled orders synced yet for the selected zones.
+                  </td>
+                </tr>
+              ) : (
+                filteredDeliveries.map((item) => (
+                  <tr
+                    key={item.id}
+                    onClick={() => setSelectedOrder(item)}
+                    className="hover:bg-gray-50 cursor-pointer"
+                  >
+                    <td className="py-3.5 px-3 font-medium text-blue-600">{item.id}</td>
+                    <td className="py-3.5 px-3 text-gray-700 max-w-[200px] truncate">{item.vendor}</td>
+                    <td className="py-3.5 px-3 text-gray-700 max-w-[180px] truncate">{item.courier}</td>
+                    <td className="py-3.5 px-3">
+                      <span className="px-2 py-0.5 rounded bg-red-50 text-red-700 text-xs font-medium">
+                        {item.cancellationReason}
+                      </span>
+                    </td>
+                    <td className="py-3.5 px-3 text-xs text-gray-600">{item.cancelledBy}</td>
+                    <td className="py-3.5 px-3 text-xs text-gray-600 max-w-[160px] truncate">{item.zone}</td>
+                    <td className="py-3.5 px-3 font-medium text-gray-800">{item.orderValue}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      );
+
+      const renderContent = () => {
+        if (activeTab === 'Dashboard') return renderDashboardOverview();
+        if (activeTab === 'Issues') return renderIssuesWatchlist();
+        if (activeTab === 'Dispatcher Dashboard') return renderDispatcherDashboard();
+        if (activeTab === 'Active Couriers') return renderActiveCouriersView();
+        if (activeTab === 'Completed') return renderCompletedOrdersView();
+        if (activeTab === 'Cancelled') return renderCancelledOrdersView();
+
+        return (
+          <div className="mt-4 space-y-4">
+            {/* Quick Slice & Filter Bar for Delivery Tables */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-50 px-4 py-2.5 rounded-lg border border-gray-200">
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                {[
+                  { id: 'all', label: 'All' },
+                  { id: 'late', label: `Delayed (${deliveries.filter((d) => d.tab === activeTab && d.isLate).length})` },
+                  { id: 'cash', label: 'Cash Collection' },
+                  { id: 'card', label: 'Card on Delivery' },
+                  { id: 'restaurants', label: 'Restaurants' },
+                  { id: 'darkstores', label: 'Darkstores' },
+                  { id: 'high_util', label: 'High Utilization' },
+                  { id: 'returning', label: 'Return Orders' },
+                  { id: 'not_reviewed', label: 'Not Reviewed' }
+                ].map((chip) => (
+                  <button
+                    key={chip.id}
+                    type="button"
+                    onClick={() => setQuickFilter(chip.id)}
+                    className={`px-2.5 py-1 rounded-full font-medium transition-colors ${
+                      quickFilter === chip.id
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-100'
+                    }`}
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-3 text-xs text-gray-500">
+                <span>Showing: <strong className="text-gray-800">{currentTabMetrics.total}</strong></span>
+                <span>Late: <strong className="text-[#e53935]">{currentTabMetrics.late}</strong></span>
+                <span>Cash: <strong className="text-emerald-700">{currentTabMetrics.cash}</strong></span>
+              </div>
+            </div>
+
+            {/* Deliveries Table */}
+            <div className="w-full overflow-x-auto">
+              <table className="w-full text-left text-sm whitespace-nowrap">
+                <thead>
+                  <tr className="border-b border-gray-200 text-gray-500 font-semibold tracking-wide text-xs">
+                    <th className="pb-3 px-2 w-1/4">ORDER</th>
+                    <th className="pb-3 px-2">DEADLINE</th>
+                    <th className="pb-3 px-2 w-1/4">COURIER</th>
+                    <th className="pb-3 px-2">STATUS</th>
+                    <th className="pb-3 px-2">ZONE / DISTANCE</th>
+                    <th className="pb-3 px-2">DELIVERY INSTRUCTION</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredDeliveries.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-12 text-center text-gray-500">
+                        No deliveries found for <span className="font-semibold">{activeTab}</span> with current filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredDeliveries.map((item) => {
+                      const deadlineColor = item.isLate ? 'bg-[#e53935] text-white' : 'bg-gray-100 text-gray-800';
+
+                      return (
+                        <tr
+                          key={item.id}
+                          onClick={() => setSelectedOrder(item)}
+                          className="border-b border-gray-100 hover:bg-gray-50/80 transition-colors cursor-pointer"
+                        >
+                          <td className="py-4 px-2 align-top">
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-blue-600 hover:underline font-medium text-[15px]">
+                                  {item.id}
+                                </span>
+                                <InfoIcon size={14} className="text-gray-400 hover:text-blue-600" />
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleCopyId(e, item.id)}
+                                  className="text-gray-400 hover:text-gray-700 p-0.5 rounded"
+                                  title="Copy Order ID"
+                                >
+                                  {copiedId === item.id ? (
+                                    <CheckIcon size={14} className="text-emerald-600" />
+                                  ) : (
+                                    <CopyIcon size={14} />
+                                  )}
+                                </button>
+                                {!item.isReviewed && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-700 font-semibold border border-red-200">
+                                    Not Reviewed
+                                  </span>
                                 )}
-                              </button>
+                                {item.isHighUtil && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 font-semibold border border-purple-200">
+                                    High Util
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-xs text-gray-500">
+                                VO #{item.vo} - {item.vendor}
+                              </span>
                             </div>
-                            <span className="text-xs text-gray-500">
-                              VO #{item.vo} - {item.vendor}
+                          </td>
+                          <td className="py-4 px-2 align-top">
+                            <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-semibold ${deadlineColor}`}>
+                              {item.deadline}
                             </span>
-                          </div>
-                        </td>
-                        <td className="py-4 px-2 align-top">
-                          <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-semibold ${deadlineColor}`}>
-                            {item.deadline}
-                          </span>
-                        </td>
-                        <td className="py-4 px-2 align-top text-[15px] max-w-[240px] whitespace-normal">
-                          {item.courier === '-' || item.courier === 'Assigning...' || item.courier === 'Pending Acceptance' ? (
-                            <span className="text-gray-500">{item.courier}</span>
-                          ) : (
-                            <span className="text-blue-600 hover:underline font-normal leading-snug block">
-                              {item.courier}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-4 px-2 align-top">
-                          <div className="font-semibold text-gray-800 text-[15px]">{item.status}</div>
-                          {item.time_in !== '-' && (
-                            <div className="text-xs text-gray-500 mt-0.5">In: {item.time_in}</div>
-                          )}
-                          {item.time_at !== '-' && (
-                            <div className="text-xs text-gray-500">At: {item.time_at}</div>
-                          )}
-                        </td>
-                        <td className="py-4 px-2 align-top text-gray-600 max-w-[200px]">
-                          <div className="flex items-center gap-1.5">
-                            <span className="truncate">{item.zone}</span>
-                            <InfoIcon size={14} className="text-gray-400 flex-shrink-0" />
-                          </div>
-                        </td>
-                        <td className="py-4 px-2 align-top">
-                          <div className="flex gap-2 flex-wrap">
-                            {item.instructions.map((inst, i) => (
-                              <InstructionPill key={i} type={inst} />
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+                          </td>
+                          <td className="py-4 px-2 align-top text-[15px] max-w-[240px] whitespace-normal">
+                            {item.courier === '-' || item.courier === 'Assigning...' || item.courier === 'Pending Acceptance' ? (
+                              <span className="text-gray-500">{item.courier}</span>
+                            ) : (
+                              <span className="text-blue-600 hover:underline font-normal leading-snug block">
+                                {item.courier}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-4 px-2 align-top">
+                            <div className="font-semibold text-gray-800 text-[15px]">{item.status}</div>
+                            {item.time_in !== '-' && (
+                              <div className="text-xs text-gray-500 mt-0.5">In: {item.time_in}</div>
+                            )}
+                            {item.time_at !== '-' && (
+                              <div className="text-xs text-gray-500">At: {item.time_at}</div>
+                            )}
+                          </td>
+                          <td className="py-4 px-2 align-top text-gray-600 max-w-[210px]">
+                            <div className="flex items-center gap-1.5">
+                              <span className="truncate">{item.zone}</span>
+                              {item.allZones?.length > 3 && (
+                                <span className="text-[10px] px-1.5 py-0.2 rounded bg-gray-100 text-gray-600 font-semibold">
+                                  +{item.allZones.length - 3}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs text-gray-400 mt-0.5">
+                              {item.distance} • {item.orderValue}
+                            </div>
+                          </td>
+                          <td className="py-4 px-2 align-top">
+                            <div className="flex gap-1.5 flex-wrap">
+                              {item.instructions.map((inst, i) => (
+                                <InstructionPill key={i} type={inst} />
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         );
       };
 
       return (
         <div className="flex h-screen w-full bg-white font-sans overflow-hidden text-gray-800">
+          {/* Left Navigation Sidebar */}
           <aside className="w-[240px] flex-shrink-0 border-r border-gray-200 flex flex-col h-full bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.02)]">
             <div className="h-14 flex items-center justify-between px-4 border-b border-gray-200">
               <div className="flex items-center gap-2 font-semibold text-lg tracking-tight text-gray-900">
@@ -978,14 +1485,17 @@
               </span>
             </div>
 
-            <nav className="flex-1 overflow-y-auto py-4 flex flex-col">
+            <nav className="flex-1 overflow-y-auto py-3 flex flex-col">
               {sidebarItemsWithCounts.map((item) => {
                 const isActive = activeTab === item.id;
                 return (
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => setActiveTab(item.id)}
+                    onClick={() => {
+                      setActiveTab(item.id);
+                      setQuickFilter('all');
+                    }}
                     className={`
                       flex items-center justify-between px-6 py-2.5 text-sm font-medium w-full text-left transition-colors
                       ${isActive
@@ -1004,8 +1514,10 @@
             </nav>
           </aside>
 
+          {/* Main Content Area */}
           <div className="flex-1 flex flex-col min-w-0 bg-white">
-            <header className="h-14 flex items-center justify-between px-6 border-b border-gray-200 bg-white gap-4">
+            {/* Top Header */}
+            <header className="h-14 flex items-center justify-between px-6 border-b border-gray-200 bg-white gap-3">
               <div className="flex items-center gap-3 text-xs text-gray-500">
                 <button
                   type="button"
@@ -1026,7 +1538,7 @@
                     : `READY (${countdown}s)`}
                 </button>
 
-                <span className="hidden sm:inline">Last Sync: {lastRefreshed}</span>
+                <span className="hidden xl:inline">Last Sync: {lastRefreshed}</span>
 
                 <button
                   type="button"
@@ -1038,7 +1550,7 @@
                 </button>
               </div>
 
-              <div className="flex items-center gap-3 text-gray-600">
+              <div className="flex items-center gap-2.5 text-gray-600">
                 <button
                   type="button"
                   onClick={() => setIsSyncModalOpen(true)}
@@ -1048,28 +1560,29 @@
                   <span>Live Sync</span>
                 </button>
 
-                <div className="bg-gray-100 text-gray-500 text-xs px-2 py-1 rounded border border-gray-200 font-mono">
+                <div className="hidden md:block bg-gray-100 text-gray-500 text-xs px-2 py-1 rounded border border-gray-200 font-mono">
                   0.31.0
                 </div>
 
+                {/* Global Search */}
                 <div className="relative flex items-center">
-                  <SearchIcon size={16} className="absolute left-3 text-gray-400" />
+                  <SearchIcon size={15} className="absolute left-3 text-gray-400" />
                   <input
                     type="search"
-                    name="hurrier-order-filter"
+                    name="hurrier-global-search"
                     autoComplete="off"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search by Order ID or Courier"
-                    className="pl-9 pr-4 py-1.5 border border-gray-300 rounded text-sm w-64 focus:outline-none focus:border-blue-500 placeholder-gray-400"
+                    placeholder="Search Order, VO, Vendor, Courier..."
+                    className="pl-8 pr-7 py-1.5 border border-gray-300 rounded text-xs w-56 lg:w-64 focus:outline-none focus:border-blue-500 placeholder-gray-400"
                   />
                   {searchQuery && (
                     <button
                       type="button"
                       onClick={() => setSearchQuery('')}
-                      className="absolute right-2.5 text-gray-400 hover:text-gray-600"
+                      className="absolute right-2 text-gray-400 hover:text-gray-600"
                     >
-                      <XIcon size={14} />
+                      <XIcon size={13} />
                     </button>
                   )}
                 </div>
@@ -1078,43 +1591,62 @@
                   type="button"
                   onClick={() => setActiveTab('Active Couriers')}
                   title="Active Couriers"
-                  className="p-1.5 text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
+                  className={`p-1.5 rounded transition-colors ${activeTab === 'Active Couriers' ? 'text-blue-600 bg-blue-50' : 'text-gray-500 hover:bg-gray-100'}`}
                 >
-                  <UserIcon size={18} />
+                  <UserIcon size={17} />
                 </button>
                 <button
                   type="button"
                   onClick={() => setActiveTab('Dashboard')}
                   title="Region Shift Overview"
-                  className="p-1.5 hover:bg-gray-100 rounded transition-colors text-gray-500"
+                  className={`p-1.5 rounded transition-colors ${activeTab === 'Dashboard' ? 'text-blue-600 bg-blue-50' : 'text-gray-500 hover:bg-gray-100'}`}
                 >
-                  <CoffeeIcon size={18} />
+                  <CoffeeIcon size={17} />
                 </button>
 
-                <div className="border-l border-gray-200 pl-3">
+                {/* Zone Filter Dropdown */}
+                <div className="border-l border-gray-200 pl-2.5">
+                  <select
+                    value={selectedZoneFilter}
+                    onChange={(e) => setSelectedZoneFilter(e.target.value)}
+                    className="bg-transparent text-xs font-medium text-gray-700 cursor-pointer focus:outline-none max-w-[140px] py-1"
+                    title="Filter by Starting Point / Zone"
+                  >
+                    {availableZones.map((z) => (
+                      <option key={z} value={z}>{z}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* City Filter Dropdown */}
+                <div className="border-l border-gray-200 pl-2.5">
                   <select
                     value={selectedCity}
                     onChange={(e) => setSelectedCity(e.target.value)}
-                    className="bg-transparent text-sm font-medium text-gray-700 cursor-pointer focus:outline-none pr-2 py-1"
+                    className="bg-transparent text-xs font-medium text-gray-700 cursor-pointer focus:outline-none py-1"
+                    title="Filter by City"
                   >
-                    <option value="All Cities">All Cities</option>
-                    <option value="Cairo">Cairo</option>
-                    <option value="Alexandria">Alexandria</option>
+                    {availableCities.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
                   </select>
                 </div>
 
                 <div className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center ml-1">
-                  <UserIcon size={15} />
+                  <UserIcon size={14} />
                 </div>
               </div>
             </header>
 
-            <main className="flex-1 overflow-auto p-8">
-              <div className="max-w-[1400px] mx-auto">
+            {/* Dynamic View Container */}
+            <main className="flex-1 overflow-auto p-6 lg:p-8">
+              <div className="max-w-[1500px] mx-auto">
                 <div className="flex items-center justify-between mb-2">
                   <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
                     {activeTab === 'Active Couriers'
                       ? 'Active Couriers'
+                      : activeTab === 'Issues'
+                      ? `Issue Watchlist (${filteredIssues.length})`
                       : activeTab === 'Dashboard' || activeTab === 'Dispatcher Dashboard'
                       ? activeTab
                       : `${activeTab} Deliveries ${
@@ -1138,24 +1670,36 @@
             </main>
           </div>
 
+          {/* Comprehensive Read-Only Order Inspection Drawer */}
           {selectedOrder && (
             <div
-              className="fixed inset-0 bg-black/30 z-50 flex justify-end"
+              className="fixed inset-0 bg-black/35 z-50 flex justify-end"
               onClick={() => setSelectedOrder(null)}
             >
               <div
-                className="w-full max-w-lg bg-white h-full shadow-2xl border-l border-gray-200 flex flex-col overflow-hidden"
+                className="w-full max-w-xl bg-white h-full shadow-2xl border-l border-gray-200 flex flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-lg font-bold text-gray-900">{selectedOrder.orderCode}</span>
                       <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold">
                         {selectedOrder.status}
                       </span>
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded font-semibold ${
+                          selectedOrder.isReviewed
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-red-100 text-red-800'
+                        }`}
+                      >
+                        {selectedOrder.isReviewed ? 'Reviewed' : 'Not Reviewed'}
+                      </span>
                     </div>
-                    <p className="text-xs text-gray-500 mt-0.5">Read-Only Order Inspection</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Order ID: {selectedOrder.id} • Vertical: <span className="capitalize font-medium">{selectedOrder.verticalType}</span>
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -1166,22 +1710,52 @@
                   </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-6 space-y-6 text-sm">
-                  <div className="grid grid-cols-3 gap-3">
+                <div className="flex-1 overflow-y-auto p-6 space-y-5 text-sm">
+                  {/* Top Financial & Logistics Metrics */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
-                      <div className="text-xs text-gray-500">Order Value</div>
+                      <div className="text-[11px] text-gray-500">Order Value</div>
                       <div className="font-bold text-gray-900 mt-1">{selectedOrder.orderValue}</div>
                     </div>
                     <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
-                      <div className="text-xs text-gray-500">Distance</div>
+                      <div className="text-[11px] text-gray-500">Distance</div>
                       <div className="font-bold text-gray-900 mt-1">{selectedOrder.distance}</div>
                     </div>
                     <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
-                      <div className="text-xs text-gray-500">Deadline</div>
-                      <div className="font-bold text-[#e53935] mt-1">{selectedOrder.deadline}</div>
+                      <div className="text-[11px] text-gray-500">Deadline</div>
+                      <div className={`font-bold mt-1 ${selectedOrder.isLate ? 'text-[#e53935]' : 'text-gray-900'}`}>
+                        {selectedOrder.deadline}
+                      </div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
+                      <div className="text-[11px] text-gray-500">Capacity / Util</div>
+                      <div className="font-bold text-gray-900 mt-1 text-xs">
+                        {selectedOrder.capacity} • {selectedOrder.utilizationText}
+                      </div>
                     </div>
                   </div>
 
+                  {/* Timestamps Schedule */}
+                  <div className="bg-gray-50/70 p-3.5 rounded-lg border border-gray-200 grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <span className="text-gray-400 block">Sent to Vendor:</span>
+                      <span className="font-semibold text-gray-800">{selectedOrder.sentToVendorAt || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-400 block">Vendor Confirmed:</span>
+                      <span className="font-semibold text-gray-800">{selectedOrder.confirmedAt || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-400 block">Scheduled Pickup:</span>
+                      <span className="font-semibold text-gray-800">{selectedOrder.scheduledPickupAt || '-'}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-400 block">Scheduled Dropoff:</span>
+                      <span className="font-semibold text-gray-800">{selectedOrder.scheduledDropoffAt || '-'}</span>
+                    </div>
+                  </div>
+
+                  {/* Courier & Customer */}
                   <div className="space-y-3 border-t border-gray-100 pt-4">
                     <div className="flex items-start gap-2.5">
                       <UsersIcon size={16} className="text-gray-400 mt-0.5" />
@@ -1199,33 +1773,105 @@
                     <div className="flex items-start gap-2.5">
                       <UserIcon size={16} className="text-gray-400 mt-0.5" />
                       <div>
-                        <div className="text-xs text-gray-500">Customer</div>
+                        <div className="text-xs text-gray-500">Customer Reference</div>
                         <div className="font-medium text-gray-900">{selectedOrder.customerName}</div>
                       </div>
                     </div>
                   </div>
 
+                  {/* Pickup & Dropoff Addresses */}
                   <div className="space-y-3 border-t border-gray-100 pt-4">
                     <div className="flex items-start gap-2.5">
                       <StoreIcon size={16} className="text-blue-600 mt-0.5" />
-                      <div>
-                        <div className="text-xs text-gray-500">Pickup ({selectedOrder.vendor} - VO #{selectedOrder.vo})</div>
+                      <div className="flex-1">
+                        <div className="text-xs text-gray-500">
+                          Pickup ({selectedOrder.vendor} - VO #{selectedOrder.vo})
+                        </div>
                         <div className="text-gray-800 mt-0.5">{selectedOrder.pickupAddress}</div>
+                        {selectedOrder.pickupCoords && (
+                          <a
+                            href={`https://maps.google.com/?q=${selectedOrder.pickupCoords.replace(/\s/g, '')}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-block text-[11px] text-blue-600 hover:underline font-mono mt-0.5"
+                          >
+                            📍 {selectedOrder.pickupCoords} (View Map)
+                          </a>
+                        )}
                       </div>
                     </div>
 
                     <div className="flex items-start gap-2.5">
                       <MapPinIcon size={16} className="text-emerald-600 mt-0.5" />
-                      <div>
+                      <div className="flex-1">
                         <div className="text-xs text-gray-500">Drop-off Address</div>
                         <div className="text-gray-800 mt-0.5">{selectedOrder.dropoffAddress}</div>
+                        {selectedOrder.dropoffCoords && (
+                          <a
+                            href={`https://maps.google.com/?q=${selectedOrder.dropoffCoords.replace(/\s/g, '')}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-block text-[11px] text-emerald-700 hover:underline font-mono mt-0.5"
+                          >
+                            📍 {selectedOrder.dropoffCoords} (View Map)
+                          </a>
+                        )}
                       </div>
                     </div>
                   </div>
 
+                  {/* Eligible Starting Points */}
+                  {selectedOrder.allZones?.length > 0 && (
+                    <div className="border-t border-gray-100 pt-4">
+                      <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
+                        Eligible Starting Points ({selectedOrder.allZones.length})
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedOrder.allZones.map((sp, i) => (
+                          <span key={i} className="px-2 py-0.5 rounded bg-blue-50 text-blue-800 text-xs border border-blue-100">
+                            {sp}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Vehicle Restrictions */}
+                  {selectedOrder.restrictions?.length > 0 && (
+                    <div className="border-t border-gray-100 pt-4">
+                      <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 flex items-center gap-1.5">
+                        <TruckIcon size={14} /> Allowed Vehicle Restrictions
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedOrder.restrictions.map((r, i) => (
+                          <span key={i} className="px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-[11px] border border-gray-200">
+                            {r}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Order Tags */}
+                  {selectedOrder.tags?.length > 0 && (
+                    <div className="border-t border-gray-100 pt-4">
+                      <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 flex items-center gap-1.5">
+                        <TagIcon size={14} /> Order Tags &amp; Skills
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedOrder.tags.map((t, i) => (
+                          <span key={i} className="px-2 py-0.5 rounded bg-amber-50/70 text-amber-900 font-mono text-[11px] border border-amber-200">
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Items */}
                   <div className="border-t border-gray-100 pt-4">
                     <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 flex items-center gap-1.5">
-                      <FileTextIcon size={14} /> Order Items
+                      <FileTextIcon size={14} /> Order Summary
                     </div>
                     <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
                       {selectedOrder.items?.map((it, idx) => (
@@ -1239,30 +1885,11 @@
                       ))}
                     </div>
                   </div>
-
-                  <div className="border-t border-gray-100 pt-4">
-                    <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3 flex items-center gap-1.5">
-                      <ActivityIcon size={14} /> Delivery State Transitions
-                    </div>
-                    <div className="space-y-2.5">
-                      {selectedOrder.transitions?.map((tr, idx) => (
-                        <div key={idx} className="flex items-center justify-between text-xs bg-gray-50 p-2.5 rounded border border-gray-200">
-                          <div>
-                            <span className="font-semibold text-gray-900 uppercase">{tr.state}</span>
-                            <span className="text-gray-500 ml-2">by {tr.by}</span>
-                          </div>
-                          <span className="font-mono text-gray-600 flex items-center gap-1">
-                            <ClockIcon size={12} /> {tr.time}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
                 </div>
 
                 <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
                   <span className="flex items-center gap-1">
-                    <AlertCircleIcon size={14} className="text-amber-600" /> Actions disabled (Read-Only View)
+                    <AlertCircleIcon size={14} className="text-amber-600" /> Read-Only Mode (All actions disabled)
                   </span>
                   <button
                     type="button"
@@ -1276,6 +1903,7 @@
             </div>
           )}
 
+          {/* Live Sync Configuration Modal */}
           {isSyncModalOpen && (
             <div
               className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
@@ -1290,10 +1918,10 @@
                     <ShieldCheckIcon size={20} className="text-emerald-600" />
                     <div>
                       <h2 className="text-base font-bold text-gray-900">
-                        البث اللحظي عبر Firebase (تحديث كل ثانيتين)
+                        البث اللحظي الشامل عبر Firebase (تحديث كل ثانيتين)
                       </h2>
                       <p className="text-xs text-gray-500">
-                        مربوط بقاعدة بيانات Firebase للقراءة فقط للموظفين بدون قيود سرعة
+                        ينقل جميع أقسام Hurrier للموظفين للقراءة فقط بدون قيود سرعة
                       </p>
                     </div>
                   </div>
@@ -1335,7 +1963,7 @@
                   {modalTab === 'firebase' && (
                     <div className="space-y-4">
                       <div className="p-3.5 rounded-lg bg-emerald-50/70 border border-emerald-200 text-xs text-emerald-900 leading-relaxed">
-                        <strong>متصل بالبث اللحظي (2s):</strong> الداشبورد تفحص التغييرات كل <strong>ثانيتين</strong> من Firebase Realtime Database بصلاحية القراءة فقط للموظفين.
+                        <strong>متصل بالبث اللحظي الشامل (2s):</strong> الداشبورد تفحص التغييرات كل <strong>ثانيتين</strong> من Firebase Realtime Database بصلاحية القراءة فقط للموظفين.
                       </div>
 
                       <div>
@@ -1408,7 +2036,11 @@
                           <option value="Queued">Queued Deliveries</option>
                           <option value="Dispatched">Dispatched Deliveries</option>
                           <option value="Actionable">Actionable Deliveries</option>
+                          <option value="Waiting for Assembly">Waiting for Assembly</option>
                           <option value="Pre-order">Pre-order Deliveries</option>
+                          <option value="Upcoming">Upcoming Orders</option>
+                          <option value="Cancelled">Cancelled Orders</option>
+                          <option value="Completed">Completed Orders</option>
                         </select>
                       </div>
 
@@ -1416,7 +2048,7 @@
                         rows={6}
                         value={rawJsonInput}
                         onChange={(e) => setRawJsonInput(e.target.value)}
-                        placeholder='الصق هنا الـ JSON Response القادم من /deliveries/active أو /stats ...'
+                        placeholder='الصق هنا الـ JSON Response القادم من أي API في Hurrier ...'
                         className="w-full p-3 border border-gray-300 rounded-lg font-mono text-xs focus:outline-none focus:border-blue-500"
                       />
 
