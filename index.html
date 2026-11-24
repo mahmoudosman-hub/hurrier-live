@@ -1054,9 +1054,13 @@
 
       const filteredZonesForModal = useMemo(() => {
         const q = zoneSearchQuery.trim().toLowerCase();
-        return availableZones.filter(
-          (z) => !q || z.name.toLowerCase().includes(q) || String(z.id).includes(q) || z.city.toLowerCase().includes(q)
-        );
+        return availableZones.filter((z) => {
+          const nameClean = normalizeText(z.name);
+          if (!nameClean) return false;
+          if (/^(vo\s*#|hf_eg|\d{6,})/i.test(nameClean)) return false;
+          if (/\b(vo\s*#|talabat\s*mart|طلبات\s*مارت)\b/i.test(nameClean)) return false;
+          return !q || nameClean.toLowerCase().includes(q) || String(z.id).includes(q) || z.city.toLowerCase().includes(q);
+        });
       }, [availableZones, zoneSearchQuery]);
 
       const renderDashboardView = () => (
