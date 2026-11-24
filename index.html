@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v5.3 — التجربة الناجحة رقم 2</title>
+  <title>Hurrier Live Operations Dashboard v5.4</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -35,7 +35,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard — التجربة الناجحة رقم 2...
+      Loading Hurrier Live Operations Dashboard v5.4...
     </div>
   </div>
 
@@ -43,7 +43,7 @@
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
-    const PAGE_SIZE = 100;
+    const PAGE_SIZE = 50;
 
     const ALL_ZONES_CATALOG = [
       { id: 10231, name: "Hybrid fleet mokattam easy sports", city: "Cairo" },
@@ -2017,7 +2017,13 @@
                   ) : (
                     paginatedDeliveries.map((item) => {
                       const isNegative = item.deadline.includes("-") || item.deadline === "Late";
-                      const deadlineColor = isNegative ? "bg-[#e53935] text-white" : "bg-gray-100 text-gray-800";
+                      const posMinsMatch = !isNegative ? /^(\d+)min$/.exec(item.deadline) : null;
+                      const posMins = posMinsMatch ? Number(posMinsMatch[1]) : 0;
+                      const deadlineColor = isNegative
+                        ? "bg-[#e53935] text-white"
+                        : posMins > 5 && posMins <= 20
+                        ? "bg-[#f59e0b] text-white"
+                        : "bg-gray-100 text-gray-800";
 
                       const prioritizedZones = [...(item.zonesList || [])].sort((a, b) => {
                         const aMatch = selectedZoneNames.some((s) => normalizeText(a).toLowerCase().includes(s));
@@ -2249,7 +2255,7 @@
                         تحديد زونات الموظف قبل بدء السحب (Independent Zone Gate)
                       </h1>
                       <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v5.3 • التجربة الناجحة رقم 2
+                        v5.4 • All Zone Pages (50/Page)
                       </span>
                     </div>
                     <p className="text-xs text-slate-300 mt-0.5">
@@ -2423,7 +2429,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v5.3 • التجربة الناجحة رقم 2</span>
+                <span className="font-bold text-emerald-700">v5.4 • 50 Orders/Page</span>
                 <span className="font-mono text-gray-400">#{sessionId.slice(-5)}</span>
               </div>
               {employeeName && (
