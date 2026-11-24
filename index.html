@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v5.5 — Completed Orders (50/Page) + Live Sync</title>
+  <title>Hurrier Live Operations Dashboard v5.6 — Zone-Filtered Completed Orders (50/Page)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -35,7 +35,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v5.5...
+      Loading Hurrier Live Operations Dashboard v5.6...
     </div>
   </div>
 
@@ -1082,6 +1082,9 @@
         if (selectedZoneIds.length === 0) return;
         setConnectionStatus("waiting");
         setCurrentPage(1);
+        setCompletedZoneScope("selected");
+        setCompletedSpecificZoneId("");
+        setCompletedPage(1);
         setIsZoneSetupConfirmed(true);
       }, [selectedZoneIds]);
 
@@ -1092,6 +1095,8 @@
         setSelectedOrder(null);
         setSelectedCourier(null);
         setCurrentPage(1);
+        setCompletedZoneScope("selected");
+        setCompletedSpecificZoneId("");
         setCompletedPage(1);
         try {
           await Promise.all([
@@ -2022,7 +2027,9 @@
           if (completedCityFilter !== "All Cities" && item.city.toLowerCase() !== completedCityFilter.toLowerCase()) {
             return false;
           }
-          if (completedZoneScope === "single" && completedSpecificZoneId) {
+          if (completedZoneScope === "selected") {
+            if (!matchesZoneFilter(item)) return false;
+          } else if (completedZoneScope === "single" && completedSpecificZoneId) {
             const targetId = Number(completedSpecificZoneId);
             const hasZone = (item.zoneObjects || []).some((zo) => Number(zo.id) === targetId);
             if (!hasZone) return false;
@@ -2046,6 +2053,7 @@
         completedCityFilter,
         completedZoneScope,
         completedSpecificZoneId,
+        matchesZoneFilter,
         completedSortAsc
       ]);
 
@@ -2109,8 +2117,8 @@
             </div>
 
             {/* Zone Scope Dropdown */}
-            <div className="flex flex-col min-w-[220px]">
-              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Zone</label>
+            <div className="flex flex-col min-w-[230px]">
+              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Zone (مرتبط بفلتر الداشبورد)</label>
               <select
                 value={completedZoneScope === "single" ? `zone:${completedSpecificZoneId}` : completedZoneScope}
                 onChange={(e) => {
@@ -2123,16 +2131,17 @@
                     setCompletedSpecificZoneId("");
                   }
                   setCompletedPage(1);
+                  setIsCompletedLoading(true);
                 }}
-                className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-800 bg-white focus:outline-none focus:border-blue-500"
+                className="px-3 py-1.5 border border-blue-300 rounded-md text-sm font-medium text-gray-800 bg-blue-50/40 focus:outline-none focus:border-blue-500"
               >
-                <option value="selected">زوناتي المختارة ({selectedZoneIds.length} Zones)</option>
-                <option value="all">All Zones (كل المناطق)</option>
+                <option value="selected">زونات الداشبورد المختارة ({selectedZoneIds.length} Zones)</option>
                 {selectedZonesDisplayList.map((z) => (
                   <option key={z.id} value={`zone:${z.id}`}>
-                    {z.name} ({z.id})
+                    زون محددة: {z.name} ({z.id})
                   </option>
                 ))}
+                <option value="all">All Zones (كل المناطق)</option>
               </select>
             </div>
 
@@ -2779,8 +2788,18 @@
 
       const selectedZonesDisplayList = useMemo(() => {
         const idSet = new Set(selectedZoneIds.map(Number));
-        return ALL_ZONES_CATALOG.filter((z) => idSet.has(Number(z.id)));
-      }, [selectedZoneIds]);
+        const map = new Map();
+        ALL_ZONES_CATALOG.forEach((z) => {
+          if (idSet.has(Number(z.id))) map.set(Number(z.id), z);
+        });
+        discoveredZonesFromBundle.forEach((z) => {
+          const nid = Number(z?.id);
+          if (idSet.has(nid) && !map.has(nid)) {
+            map.set(nid, { id: nid, name: z.name, city: z.city || "Cairo" });
+          }
+        });
+        return Array.from(map.values());
+      }, [selectedZoneIds, discoveredZonesFromBundle]);
 
       // --- 1) MANDATORY ZONE SELECTION GATE SCREEN ---
       if (!isZoneSetupConfirmed) {
@@ -2796,7 +2815,7 @@
                         تحديد زونات الموظف قبل بدء السحب (Independent Zone Gate)
                       </h1>
                       <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v5.5 • Completed Orders (50/Page) + Live Sync
+                        ★ v5.6 • Zone-Filtered Completed Orders (50/Page)
                       </span>
                     </div>
                     <p className="text-xs text-slate-300 mt-0.5">
@@ -2970,7 +2989,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v5.5 (50/Page • Completed)</span>
+                <span className="font-bold text-emerald-700">★ v5.6 (Zone Completed 50/Page)</span>
                 <span className="font-mono text-gray-400">#{sessionId.slice(-5)}</span>
               </div>
               {employeeName && (
