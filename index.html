@@ -558,6 +558,12 @@
 
       const [activeQuickFilter, setActiveQuickFilter] = useState("All");
       const [selectedMartBranch, setSelectedMartBranch] = useState("ALL");
+      const [orderSortMode, setOrderSortMode] = useState("hurrier_order");
+      const PAGE_SIZE = 100;
+      const [currentPage, setCurrentPage] = useState(1);
+      const [jumpPageInput, setJumpPageInput] = useState("");
+      const [serverPageData, setServerPageData] = useState(null);
+      const [isLoadingPage, setIsLoadingPage] = useState(false);
 
       const [deliveries, setDeliveries] = useState([]);
       const [couriers, setCouriers] = useState([]);
@@ -577,7 +583,7 @@
 
       const selectedOrderRef = useRef(null);
       selectedOrderRef.current = selectedOrder;
-
+      const mainContainerRef = useRef(null);
       const copyToClipboard = useCallback((label, text) => {
         if (!text) return;
         if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -592,6 +598,23 @@
           await fetch(`${FIREBASE_DB_URL}/config/selected_zones.json`, {
             method: "PUT",
             body: JSON.stringify({
+              zone_ids: shouldSyncHurrier ? zoneIds : [],
+              updated_at: new Date().toISOString()
+            })
+          });
+        } catch {
+          // تجاهل
+        }
+      }, []);
+
+      const pushViewFilterToFirebase = useCallback(async (tabName, pageNum, quickFilter, zoneIds, shouldSyncHurrier) => {
+        try {
+          await fetch(`${FIREBASE_DB_URL}/config/view_filter.json`, {
+            method: "PUT",
+            body: JSON.stringify({
+              tab: tabName || "Active",
+              page: Number(pageNum) || 1,
+              quick_filter: quickFilter || "All",
               zone_ids: shouldSyncHurrier ? zoneIds : [],
               updated_at: new Date().toISOString()
             })
@@ -685,6 +708,19 @@
 
         setDeliveries(nextDeliveries);
         setTabCounts(nextCounts);
+
+        if (bundle.requestedPageData && Array.isArray(bundle.requestedPageData.records)) {
+          setServerPageData({
+            tab: bundle.requestedPageData.tab || "Active",
+            page: Number(bundle.requestedPageData.page) || 1,
+            quickFilter: bundle.requestedPageData.quickFilter || "All",
+            totalCount: bundle.requestedPageData.totalCount,
+            deliveries: bundle.requestedPageData.records.map((r) =>
+              mapHurrierRecordToDelivery(r, bundle.requestedPageData.tab || "Active")
+            )
+          });
+          setIsLoadingPage(false);
+        }
 
         if (bundle.stats && Array.isArray(bundle.stats.cities)) {
           const summaries = [];
@@ -900,7 +936,18 @@
 
       const baseTabDeliveries = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();
-        return deliveries.filter((d) => {
+        const useServerExactPage =
+          cityFilterMode !== "zones" &&
+          !q &&
+          serverPageData &&
+          serverPageData.tab === activeTab &&
+          Number(serverPageData.page) === Number(currentPage) &&
+          Array.isArray(serverPageData.deliveries) &&
+          serverPageData.deliveries.length > 0;
+
+        const sourceList = useServerExactPage ? serverPageData.deliveries : deliveries;
+
+        return sourceList.filter((d) => {
           const matchesTab = d.tab === activeTab;
           const matchesZone = matchesZoneFilter(d);
           const matchesSearch =
@@ -911,15 +958,14 @@
             d.zone.toLowerCase().includes(q);
           return matchesTab && matchesZone && matchesSearch;
         });
-      }, [deliveries, activeTab, matchesZoneFilter, searchQuery]);
+      }, [deliveries, serverPageData, currentPage, cityFilterMode, activeTab, matchesZoneFilter, searchQuery]);
 
       const martBranchesSummary = useMemo(() => {
         const martOrders = baseTabDeliveries.filter((d) => isTalabatMartVendor(d.vendor));
         const branchMap = new Map();
-
-        martOrders.forEach((o) => {
-          const label = extractMartBranchLabel(o.vendor);
-          const isLate = o.deadline.includes("-") || o.deadline === "Late";
+        martOrders.forEach((d) => {
+          const label = extractMartBranchLabel(d.vendor);
+          const isLate = d.deadline.includes("-") || d.deadline === "Late";
           const current = branchMap.get(label) || { label, count: 0, late: 0 };
           current.count += 1;
           if (isLate) current.late += 1;
@@ -933,7 +979,7 @@
       }, [baseTabDeliveries]);
 
       const filteredDeliveries = useMemo(() => {
-        return baseTabDeliveries.filter((d) => {
+        const list = baseTabDeliveries.filter((d) => {
           const isLate = d.deadline.includes("-") || d.deadline === "Late";
           const hasCash = d.instructions.includes("Cash");
           const hasCard = d.instructions.includes("Card");
@@ -956,7 +1002,31 @@
 
           return true;
         });
-      }, [baseTabDeliveries, activeQuickFilter, selectedMartBranch]);
+
+        const getDeadlineMinutes = (d) => {
+          const iso =
+            d.rawRecord?.order?.scheduled_dropoff_at ||
+            d.rawRecord?.scheduled_dropoff_at ||
+            d.rawRecord?.order?.promised_delivery_at;
+          if (!iso) return 0;
+          const t = new Date(iso).getTime();
+          if (Number.isNaN(t)) return 0;
+          return Math.round((t - Date.now()) / 60000);
+        };
+
+        return [...list].sort((a, b) => {
+          if (orderSortMode === "hurrier_order") return 0;
+          const ma = getDeadlineMinutes(a);
+          const mb = getDeadlineMinutes(b);
+          if (orderSortMode === "live_first") {
+            const aIsRecent = ma > -1440;
+            const bIsRecent = mb > -1440;
+            if (aIsRecent !== bIsRecent) return aIsRecent ? -1 : 1;
+            return ma - mb;
+          }
+          return ma - mb;
+        });
+      }, [baseTabDeliveries, activeQuickFilter, selectedMartBranch, orderSortMode]);
 
       const selectedOrderFullView = useMemo(() => {
         if (!selectedOrder) return null;
@@ -1143,6 +1213,24 @@
         });
       }, [availableZones, zoneSearchQuery]);
 
+      const effectiveTabCounts = useMemo(() => {
+        if (cityFilterMode === "zones" && selectedZoneIds.length > 0) {
+          const perTab = {};
+          ["Active", "Queued", "Dispatched", "Actionable", "Pre-order", "Waiting for Assembly"].forEach((t) => {
+            perTab[t] = deliveries.filter((d) => d.tab === t && matchesZoneFilter(d)).length;
+          });
+          return perTab;
+        }
+        if (cityFilterMode === "multi_cities") {
+          const perTab = {};
+          ["Active", "Queued", "Dispatched", "Actionable", "Pre-order", "Waiting for Assembly"].forEach((t) => {
+            perTab[t] = deliveries.filter((d) => d.tab === t && matchesZoneFilter(d)).length;
+          });
+          return perTab;
+        }
+        return tabCounts;
+      }, [cityFilterMode, selectedZoneIds, deliveries, matchesZoneFilter, tabCounts]);
+
       const renderDashboardView = () => (
         <div className="mt-6 space-y-6">
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
@@ -1316,67 +1404,171 @@
 
       const renderDispatcherDashboardView = () => (
         <div className="mt-6 bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead>
-              <tr className="border-b border-gray-200 text-gray-500 font-semibold text-xs bg-gray-50">
-                <th className="py-3.5 px-4">EMAIL</th>
-                <th className="py-3.5 px-4">ISSUES PICKED</th>
-                <th className="py-3.5 px-4">PROCESSING</th>
-                <th className="py-3.5 px-4">MAX PICKED FOR</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {dispatcherStats.map((disp, idx) => (
-                <tr key={idx} className="hover:bg-gray-50">
-                  <td className="py-3.5 px-4 font-medium text-gray-800">{disp.picked_by}</td>
-                  <td className="py-3.5 px-4">
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
-                      {disp.picked}
-                    </span>
-                  </td>
-                  <td className="py-3.5 px-4 text-gray-600">{disp.processing}</td>
-                  <td className="py-3.5 px-4 text-gray-600 font-mono text-xs">{disp.max_picked_for}</td>
+          <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
+              Dispatcher Performance ({dispatcherStats.length})
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm whitespace-nowrap">
+              <thead>
+                <tr className="border-b border-gray-200 text-gray-500 font-semibold text-xs bg-white">
+                  <th className="py-3.5 px-4">DISPATCHER EMAIL</th>
+                  <th className="py-3.5 px-4">ISSUES PICKED</th>
+                  <th className="py-3.5 px-4">PROCESSING</th>
+                  <th className="py-3.5 px-4">MAX PICKED FOR</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {dispatcherStats.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-10 text-center text-gray-500 text-xs">
+                      No dispatcher statistics available.
+                    </td>
+                  </tr>
+                ) : (
+                  dispatcherStats.map((disp, idx) => (
+                    <tr key={idx} className="hover:bg-gray-50">
+                      <td className="py-3.5 px-4 font-medium text-gray-800">{disp.picked_by}</td>
+                      <td className="py-3.5 px-4">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
+                          {disp.picked}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-gray-600">{disp.processing}</td>
+                      <td className="py-3.5 px-4 text-gray-600 font-mono text-xs">{disp.max_picked_for}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       );
 
       const renderIssuesView = () => (
         <div className="mt-6 bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead>
-              <tr className="border-b border-gray-200 text-gray-500 font-semibold text-xs bg-gray-50">
-                <th className="py-3 px-4">ISSUE ID</th>
-                <th className="py-3 px-4">ORDER</th>
-                <th className="py-3 px-4">TYPE / REASON</th>
-                <th className="py-3 px-4">STATUS</th>
-                <th className="py-3 px-4">PICKED BY</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {issuesList.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-10 text-center text-gray-500">
-                    No active issues in current stream.
-                  </td>
+          <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
+              Active Issues ({issuesList.length})
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm whitespace-nowrap">
+              <thead>
+                <tr className="border-b border-gray-200 text-gray-500 font-semibold text-xs bg-white">
+                  <th className="py-3.5 px-4">ISSUE / ORDER ID</th>
+                  <th className="py-3.5 px-4">TYPE / REASON</th>
+                  <th className="py-3.5 px-4">STATUS</th>
+                  <th className="py-3.5 px-4">ASSIGNED TO</th>
                 </tr>
-              ) : (
-                issuesList.map((iss, i) => (
-                  <tr key={iss.id || i} className="hover:bg-gray-50">
-                    <td className="py-3 px-4 font-mono text-xs">{iss.id || "-"}</td>
-                    <td className="py-3 px-4 font-medium text-blue-600">{iss.order_code || iss.order_id || "-"}</td>
-                    <td className="py-3 px-4 text-gray-700">{iss.reason || iss.category || iss.type || "-"}</td>
-                    <td className="py-3 px-4 text-gray-700">{iss.status || "-"}</td>
-                    <td className="py-3 px-4 text-gray-600">{iss.picked_by || "-"}</td>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {issuesList.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-10 text-center text-gray-500 text-xs">
+                      No active issues found.
+                    </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  issuesList.map((iss, idx) => (
+                    <tr key={iss.id || idx} className="hover:bg-gray-50">
+                      <td className="py-3.5 px-4 font-semibold text-blue-600">
+                        {iss.order_code || iss.order_id || iss.id || "-"}
+                      </td>
+                      <td className="py-3.5 px-4 text-gray-800">
+                        {iss.reason || iss.type || iss.title || "Issue"}
+                      </td>
+                      <td className="py-3.5 px-4">
+                        <span className="px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 text-xs font-semibold">
+                          {iss.status || "Open"}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-gray-600 text-xs">
+                        {iss.picked_by || iss.assignee || "-"}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       );
+
+      const totalItemsForPagination = useMemo(() => {
+        if (
+          cityFilterMode !== "zones" &&
+          !searchQuery.trim() &&
+          (activeQuickFilter === "All" ||
+            activeQuickFilter === "Darkstores" ||
+            activeQuickFilter === "Cash" ||
+            activeQuickFilter === "Card")
+        ) {
+          if (
+            serverPageData &&
+            serverPageData.tab === activeTab &&
+            serverPageData.quickFilter === activeQuickFilter &&
+            typeof serverPageData.totalCount === "number" &&
+            serverPageData.totalCount > 0
+          ) {
+            return serverPageData.totalCount;
+          }
+          if (activeQuickFilter === "All" && typeof effectiveTabCounts[activeTab] === "number") {
+            return effectiveTabCounts[activeTab];
+          }
+        }
+        return filteredDeliveries.length;
+      }, [cityFilterMode, searchQuery, activeQuickFilter, serverPageData, activeTab, effectiveTabCounts, filteredDeliveries.length]);
+
+      const totalPages = Math.max(1, Math.ceil(totalItemsForPagination / PAGE_SIZE));
+
+      const paginatedDeliveries = useMemo(() => {
+        const isUsingSingleServerPage =
+          cityFilterMode !== "zones" &&
+          !searchQuery.trim() &&
+          serverPageData &&
+          serverPageData.tab === activeTab &&
+          Number(serverPageData.page) === Number(currentPage) &&
+          Array.isArray(serverPageData.deliveries) &&
+          serverPageData.deliveries.length > 0 &&
+          filteredDeliveries.length <= PAGE_SIZE;
+
+        if (isUsingSingleServerPage) {
+          return filteredDeliveries;
+        }
+        const safePage = Math.min(currentPage, totalPages);
+        const startIdx = (safePage - 1) * PAGE_SIZE;
+        return filteredDeliveries.slice(startIdx, startIdx + PAGE_SIZE);
+      }, [cityFilterMode, searchQuery, serverPageData, activeTab, currentPage, filteredDeliveries, totalPages]);
+
+      const handlePageChange = useCallback(
+        (nextPage) => {
+          const clamped = Math.max(1, Math.min(totalPages, Number(nextPage) || 1));
+          setCurrentPage(clamped);
+          if (cityFilterMode !== "zones") {
+            setIsLoadingPage(true);
+            pushViewFilterToFirebase(activeTab, clamped, activeQuickFilter, selectedZoneIds, syncSelectedZonesToHurrier);
+          }
+          if (mainContainerRef.current) {
+            mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
+          }
+        },
+        [totalPages, cityFilterMode, pushViewFilterToFirebase, activeTab, activeQuickFilter, selectedZoneIds, syncSelectedZonesToHurrier]
+      );
+
+      const visiblePageNumbers = useMemo(() => {
+        if (totalPages <= 7) {
+          return Array.from({ length: totalPages }, (_, i) => i + 1);
+        }
+        if (currentPage <= 4) {
+          return [1, 2, 3, 4, 5, "...", totalPages];
+        }
+        if (currentPage >= totalPages - 3) {
+          return [1, "...", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+        }
+        return [1, "...", currentPage - 1, currentPage, currentPage + 1, "...", totalPages];
+      }, [currentPage, totalPages]);
 
       const renderDeliveriesTable = () => {
         const lateCount = baseTabDeliveries.filter((d) => d.deadline.includes("-") || d.deadline === "Late").length;
@@ -1414,7 +1606,9 @@
                       type="button"
                       onClick={() => {
                         setActiveQuickFilter(qf.id);
+                        setCurrentPage(1);
                         if (qf.id !== "Darkstores") setSelectedMartBranch("ALL");
+                        pushViewFilterToFirebase(activeTab, 1, qf.id, selectedZoneIds, syncSelectedZonesToHurrier);
                       }}
                       className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
                         active
@@ -1428,26 +1622,41 @@
                 })}
               </div>
 
-              <div className="text-xs text-gray-500">
-                Showing: <strong className="text-gray-800">{filteredDeliveries.length}</strong>{" "}
-                <span className="text-gray-400">
-                  (loaded {baseTabDeliveries.length} of {tabExactTotal})
-                </span>
+              <div className="flex items-center gap-2.5 text-xs text-gray-500">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setOrderSortMode((prev) =>
+                      prev === "hurrier_order" ? "live_first" : "hurrier_order"
+                    )
+                  }
+                  className="px-2.5 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 font-semibold"
+                  title="تبديل الترتيب بين ترتيب صفحات Hurrier الأصلية أو إظهار أوردرات النهاردة أولاً"
+                >
+                  {orderSortMode === "hurrier_order" ? "Order: Hurrier Default" : "Order: Live Today First"}
+                </button>
+                <div>
+                  Page <strong className="text-gray-800">{currentPage}</strong> of{" "}
+                  <strong className="text-gray-800">{totalPages}</strong>{" "}
+                  <span className="text-gray-400">
+                    ({paginatedDeliveries.length} rows • Total {totalItemsForPagination})
+                  </span>
+                </div>
               </div>
             </div>
 
             {activeQuickFilter === "Darkstores" && (
-              <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-lg bg-amber-50/70 border border-amber-200">
-                <span className="text-xs font-bold text-amber-900">
-                  فروع طلبات مارت ({martBranchesSummary.totalMartCount}):
+              <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-lg bg-amber-50/70 border border-amber-200 text-xs">
+                <span className="font-bold text-amber-900 px-2 py-1 rounded bg-amber-100 border border-amber-300">
+                  🏪 فروع مارت في الزون ({martBranchesSummary.branches.length})
                 </span>
                 <button
                   type="button"
                   onClick={() => setSelectedMartBranch("ALL")}
-                  className={`px-2.5 py-1 rounded-md text-xs font-semibold border ${
+                  className={`px-3 py-1 rounded-full font-semibold border transition-colors ${
                     selectedMartBranch === "ALL"
-                      ? "bg-amber-600 text-white border-amber-600"
-                      : "bg-white text-gray-700 border-amber-300 hover:bg-amber-100/50"
+                      ? "bg-gray-900 text-white border-gray-900"
+                      : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
                   }`}
                 >
                   All Marts ({martBranchesSummary.totalMartCount})
@@ -1459,16 +1668,22 @@
                       key={br.label}
                       type="button"
                       onClick={() => setSelectedMartBranch(br.label)}
-                      className={`px-2.5 py-1 rounded-md text-xs font-semibold border flex items-center gap-1.5 ${
+                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-semibold border transition-colors ${
                         isSelected
-                          ? "bg-amber-700 text-white border-amber-700"
-                          : "bg-white text-gray-800 border-amber-300 hover:bg-amber-100/50"
+                          ? "bg-amber-600 text-white border-amber-600"
+                          : "bg-white text-gray-800 border-amber-300 hover:bg-amber-100/60"
                       }`}
                     >
-                      <span>{br.label}</span>
-                      <span className="px-1.5 py-0.2 rounded bg-black/10 text-[11px]">{br.count}</span>
+                      <span>🏪 {br.label}</span>
+                      <span
+                        className={`px-1.5 py-0.2 rounded text-[11px] font-bold ${
+                          isSelected ? "bg-white/20 text-white" : "bg-gray-100 text-gray-800"
+                        }`}
+                      >
+                        {br.count}
+                      </span>
                       {br.late > 0 && (
-                        <span className="px-1.5 py-0.2 rounded bg-red-600 text-white text-[10px]">
+                        <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-red-600 text-white">
                           {br.late} late
                         </span>
                       )}
@@ -1478,77 +1693,95 @@
               </div>
             )}
 
-            <div className="w-full overflow-x-auto">
+            <div className="w-full overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm">
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead>
-                  <tr className="border-b border-gray-200 text-gray-500 font-semibold text-xs">
-                    <th className="pb-3 px-2 w-1/4">ORDER</th>
-                    <th className="pb-3 px-2">DEADLINE</th>
-                    <th className="pb-3 px-2 w-1/4">COURIER</th>
-                    <th className="pb-3 px-2">STATUS</th>
-                    <th className="pb-3 px-2">ZONE</th>
-                    <th className="pb-3 px-2">DELIVERY INSTRUCTION</th>
+                  <tr className="border-b border-gray-200 text-gray-500 font-semibold tracking-wide text-xs bg-gray-50/70">
+                    <th className="py-3 px-4 w-1/4">ORDER</th>
+                    <th className="py-3 px-3">DEADLINE</th>
+                    <th className="py-3 px-3 w-1/4">COURIER</th>
+                    <th className="py-3 px-3">STATUS</th>
+                    <th className="py-3 px-3">ZONE / DISTANCE</th>
+                    <th className="py-3 px-4">DELIVERY INSTRUCTION</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {filteredDeliveries.length === 0 ? (
+                <tbody className="divide-y divide-gray-100">
+                  {paginatedDeliveries.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="py-12 text-center text-gray-500">
-                        No deliveries found for <span className="font-semibold">{activeTab}</span>.
+                        {isLoadingPage ? (
+                          <span className="text-blue-600 font-semibold">
+                            Loading page {currentPage} from Hurrier...
+                          </span>
+                        ) : (
+                          <>
+                            No deliveries found for <span className="font-semibold">{activeTab}</span>.
+                          </>
+                        )}
                       </td>
                     </tr>
                   ) : (
-                    filteredDeliveries.map((item) => {
+                    paginatedDeliveries.map((item) => {
                       const isNegative = item.deadline.includes("-") || item.deadline === "Late";
                       const deadlineColor = isNegative ? "bg-[#e53935] text-white" : "bg-gray-100 text-gray-800";
+
+                      const prioritizedZones = [...(item.zonesList || [])].sort((a, b) => {
+                        const aMatch = selectedZoneNames.some((s) => normalizeText(a).toLowerCase().includes(s));
+                        const bMatch = selectedZoneNames.some((s) => normalizeText(b).toLowerCase().includes(s));
+                        if (aMatch === bMatch) return 0;
+                        return aMatch ? -1 : 1;
+                      });
+                      const shownZones = prioritizedZones.slice(0, 2);
+                      const extraZonesCount = Math.max(0, prioritizedZones.length - shownZones.length);
 
                       return (
                         <tr
                           key={item.uid}
                           onClick={() => setSelectedOrder(item)}
-                          className="border-b border-gray-100 hover:bg-gray-50/80 transition-colors cursor-pointer"
+                          className="hover:bg-blue-50/30 transition-colors cursor-pointer"
                         >
-                          <td className="py-3.5 px-2 align-top">
-                            <div className="flex flex-col gap-1">
+                          <td className="py-3.5 px-4 align-top">
+                            <div className="flex flex-col gap-0.5">
                               <div className="flex items-center gap-2">
-                                <span className="text-blue-600 hover:underline font-medium text-[15px]">
+                                <span className="text-blue-600 hover:underline font-semibold text-[15px]">
                                   {item.id}
                                 </span>
-                                {item.isSplit && (
-                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 font-semibold">
-                                    Split
-                                  </span>
-                                )}
                                 <button
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    copyToClipboard(`id-${item.uid}`, item.id);
+                                    copyToClipboard(item.id, item.id);
                                   }}
-                                  className="text-gray-400 hover:text-gray-700 p-0.5 rounded text-xs"
+                                  className="text-gray-400 hover:text-gray-700 px-1 py-0.5 rounded text-xs"
+                                  title="Copy Order ID"
                                 >
-                                  {copiedText === `id-${item.uid}` ? "✓" : "⧉"}
+                                  {copiedText === item.id ? "✓" : "⧉"}
                                 </button>
                               </div>
-                              <span className="text-xs text-gray-500">
+                              <span className="text-xs text-gray-500 truncate max-w-[260px]" title={`VO #${item.vo} - ${item.vendor}`}>
                                 VO #{item.vo} - {item.vendor}
                               </span>
                             </div>
                           </td>
-                          <td className="py-3.5 px-2 align-top">
-                            <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-semibold ${deadlineColor}`}>
+
+                          <td className="py-3.5 px-3 align-top">
+                            <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-bold ${deadlineColor}`}>
                               {item.deadline}
                             </span>
                           </td>
-                          <td className="py-3.5 px-2 align-top text-[15px] max-w-[240px] whitespace-normal">
+
+                          <td className="py-3.5 px-3 align-top text-[14px] max-w-[240px] whitespace-normal">
                             {item.courier === "-" || item.courier === "Assigning..." || item.courier === "Pending Acceptance" ? (
                               <span className="text-gray-500">{item.courier}</span>
                             ) : (
-                              <span className="text-blue-600 font-normal leading-snug block">{item.courier}</span>
+                              <span className="text-blue-600 font-medium leading-snug block">
+                                {item.courier}
+                              </span>
                             )}
                           </td>
-                          <td className="py-3.5 px-2 align-top">
-                            <div className="font-semibold text-gray-800 text-[15px]">{item.status}</div>
+
+                          <td className="py-3.5 px-3 align-top">
+                            <div className="font-semibold text-gray-900 text-[14px]">{item.status}</div>
                             {item.time_in !== "-" && (
                               <div className="text-xs text-gray-500 mt-0.5">In: {item.time_in}</div>
                             )}
@@ -1556,21 +1789,48 @@
                               <div className="text-xs text-gray-500">At: {item.time_at}</div>
                             )}
                           </td>
-                          <td className="py-3.5 px-2 align-top text-gray-600 max-w-[220px]">
-                            <span className="truncate block" title={item.zone}>
-                              {item.zone}
-                            </span>
+
+                          <td className="py-3.5 px-3 align-top max-w-[230px]" title={item.zone}>
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`truncate text-xs font-medium ${
+                                  selectedZoneNames.length > 0 ? "text-blue-700 font-semibold" : "text-gray-700"
+                                }`}
+                              >
+                                {shownZones.join(", ") || item.zone}
+                              </span>
+                              {extraZonesCount > 0 && (
+                                <span className="px-1.5 py-0.5 rounded bg-gray-100 border border-gray-200 text-[11px] font-semibold text-gray-600 flex-shrink-0">
+                                  +{extraZonesCount}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-xs text-gray-400 mt-0.5">
+                              {item.distance} • {item.orderValue}
+                            </div>
                           </td>
-                          <td className="py-3.5 px-2 align-top">
+
+                          <td className="py-3.5 px-4 align-top">
                             <div className="flex gap-1.5 flex-wrap">
                               {item.instructions.map((inst, idx) => (
                                 <span
                                   key={idx}
-                                  className="inline-flex items-center px-2.5 py-0.5 border border-gray-300 rounded-full text-xs font-medium text-gray-700 bg-white"
+                                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium border ${
+                                    inst === "Cash"
+                                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                      : inst === "Card"
+                                      ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+                                      : "bg-white text-gray-700 border-gray-300"
+                                  }`}
                                 >
                                   {inst}
                                 </span>
                               ))}
+                              {item.isSplit && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                                  Split
+                                </span>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1580,77 +1840,143 @@
                 </tbody>
               </table>
             </div>
+
+            {/* Hurrier-Style Bottom Pagination Bar */}
+            <div className="pt-3 pb-6 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-xs text-gray-500">
+                {isLoadingPage ? (
+                  <span className="text-blue-600 font-semibold">Syncing page {currentPage}...</span>
+                ) : (
+                  <span>
+                    Showing <strong>{(currentPage - 1) * PAGE_SIZE + (paginatedDeliveries.length > 0 ? 1 : 0)}</strong>–
+                    <strong>{(currentPage - 1) * PAGE_SIZE + paginatedDeliveries.length}</strong> of{" "}
+                    <strong>{totalItemsForPagination}</strong>
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1 select-none">
+                <button
+                  type="button"
+                  disabled={currentPage <= 1}
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
+                    currentPage <= 1
+                      ? "text-gray-300 cursor-not-allowed"
+                      : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                  title="Previous Page"
+                >
+                  ‹
+                </button>
+
+                {visiblePageNumbers.map((p, idx) =>
+                  p === "..." ? (
+                    <span key={`dots-${idx}`} className="px-2 text-gray-400 text-sm">
+                      ...
+                    </span>
+                  ) : (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => handlePageChange(p)}
+                      className={`min-w-[36px] h-9 px-2.5 flex items-center justify-center text-sm transition-colors ${
+                        Number(currentPage) === Number(p)
+                          ? "border-b-2 border-blue-600 text-blue-600 font-bold"
+                          : "text-gray-700 hover:bg-gray-100 rounded font-medium"
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  )
+                )}
+
+                <button
+                  type="button"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
+                    currentPage >= totalPages
+                      ? "text-gray-300 cursor-not-allowed"
+                      : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                  title="Next Page"
+                >
+                  ›
+                </button>
+              </div>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const num = Number(jumpPageInput);
+                  if (num >= 1 && num <= totalPages) {
+                    handlePageChange(num);
+                    setJumpPageInput("");
+                  }
+                }}
+                className="flex items-center gap-1.5 text-xs"
+              >
+                <span className="text-gray-500">Go to:</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={totalPages}
+                  value={jumpPageInput}
+                  onChange={(e) => setJumpPageInput(e.target.value)}
+                  placeholder={`1-${totalPages}`}
+                  className="w-16 px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:border-blue-500"
+                />
+                <button
+                  type="submit"
+                  className="px-2.5 py-1 rounded border border-gray-300 bg-white hover:bg-gray-50 font-semibold text-gray-700"
+                >
+                  Go
+                </button>
+              </form>
+            </div>
           </div>
         );
       };
 
-      const citySelectorLabel = useMemo(() => {
-        if (cityFilterMode === "zones" && selectedZoneIds.length > 0) {
-          return `Multiple Zones (${selectedZoneIds.length})`;
-        }
-        if (cityFilterMode === "multi_cities") {
-          return `Multiple Cities (${selectedMultiCities.length})`;
-        }
-        return selectedCity;
-      }, [cityFilterMode, selectedZoneIds, selectedMultiCities, selectedCity]);
-
-      const effectiveTabCounts = useMemo(() => {
-        if (cityFilterMode === "zones" && selectedZoneIds.length > 0) {
-          const byTab = { ...tabCounts };
-          ["Actionable", "Pre-order", "Waiting for Assembly", "Queued", "Dispatched", "Active"].forEach((t) => {
-            const matching = deliveries.filter((d) => d.tab === t && matchesZoneFilter(d));
-            if (matching.length > 0 || !byTab[t]) {
-              byTab[t] = matching.length;
-            }
-          });
-          return byTab;
-        }
-        if (cityFilterMode === "all" && selectedCity !== "All Cities" && citySummary.length > 0) {
-          const cityRow = citySummary.find(
-            (c) => normalizeText(c.city).toLowerCase() === normalizeText(selectedCity).toLowerCase()
-          );
-          if (cityRow) {
-            return {
-              ...tabCounts,
-              Active: cityRow.active ?? tabCounts.Active,
-              Queued: cityRow.queued ?? tabCounts.Queued,
-              Dispatched: cityRow.dispatched ?? tabCounts.Dispatched
-            };
-          }
-        }
-        return tabCounts;
-      }, [cityFilterMode, selectedZoneIds, selectedCity, citySummary, tabCounts, deliveries, matchesZoneFilter]);
+      const activeHeaderCount = effectiveTabCounts[activeTab];
 
       return (
-        <div className="flex h-screen w-full bg-white overflow-hidden text-gray-800">
+        <div className="flex h-screen w-full bg-white font-sans overflow-hidden text-gray-800">
           {/* Left Navigation Sidebar */}
-          <aside className="w-[240px] flex-shrink-0 border-r border-gray-200 flex flex-col h-full bg-white z-10">
+          <aside className="w-[230px] flex-shrink-0 border-r border-gray-200 flex flex-col h-full bg-white z-10">
             <div className="h-14 flex items-center justify-between px-4 border-b border-gray-200">
-              <div className="flex items-center gap-2 font-semibold text-lg tracking-tight text-gray-900">
-                <span>🚴‍♂️</span>
+              <div className="flex items-center gap-2 font-bold text-lg tracking-tight text-gray-900">
+                <span className="text-xl">🚴‍♂️</span>
                 <span>Hurrier</span>
               </div>
-              <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
-                View Only
+              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                VIEW ONLY
               </span>
             </div>
 
             <nav className="flex-1 overflow-y-auto py-3 flex flex-col">
               {SIDEBAR_ITEMS.map((item) => {
                 const isActive = activeTab === item.id;
-                const countVal = effectiveTabCounts[item.id];
+                const countVal =
+                  item.id === "Issues"
+                    ? issuesList.length > 0
+                      ? issuesList.length
+                      : undefined
+                    : effectiveTabCounts[item.id];
+
                 return (
                   <button
                     key={item.id}
                     type="button"
                     onClick={() => {
                       setActiveTab(item.id);
-                      setActiveQuickFilter("All");
-                      setSelectedMartBranch("ALL");
+                      setCurrentPage(1);
+                      pushViewFilterToFirebase(item.id, 1, activeQuickFilter, selectedZoneIds, syncSelectedZonesToHurrier);
                     }}
                     className={`flex items-center justify-between px-5 py-2.5 text-sm font-medium w-full text-left transition-colors ${
                       isActive
-                        ? "border-l-4 border-blue-600 text-blue-600 bg-blue-50/50"
+                        ? "border-l-4 border-blue-600 text-blue-600 bg-blue-50/60 font-semibold"
                         : "border-l-4 border-transparent text-gray-700 hover:bg-gray-50"
                     } ${item.className || ""}`}
                   >
@@ -1665,11 +1991,10 @@
 
           {/* Main Content Area */}
           <div className="flex-1 flex flex-col min-w-0 bg-white">
-            {/* Top Header */}
-            <header className="h-14 flex items-center justify-between px-5 border-b border-gray-200 bg-white gap-3">
-              <div className="flex items-center gap-2.5 text-xs">
+            <header className="h-14 flex items-center justify-between px-6 border-b border-gray-200 bg-white gap-4">
+              <div className="flex items-center gap-3 text-xs text-gray-500">
                 <span
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold border ${
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-bold border ${
                     connectionStatus === "live"
                       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                       : connectionStatus === "error"
@@ -1686,98 +2011,104 @@
                         : "bg-amber-500"
                     }`}
                   />
-                  {connectionStatus === "live" ? "LIVE (2s)" : connectionStatus === "error" ? "Reconnecting" : "Connecting"}
+                  {connectionStatus === "live"
+                    ? "LIVE (2s)"
+                    : connectionStatus === "error"
+                    ? "Sync Error"
+                    : "Connecting..."}
                 </span>
-                <span className="text-gray-500 hidden sm:inline">Last Sync: {lastSyncTime}</span>
+                <span className="hidden sm:inline">Last Sync: {lastSyncTime}</span>
               </div>
 
-              <div className="flex items-center gap-2.5 text-gray-600">
+              <div className="flex items-center gap-3">
                 <div className="relative flex items-center">
                   <input
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search by Order ID or Courier"
-                    className="pl-3 pr-7 py-1.5 border border-gray-300 rounded text-sm w-60 focus:outline-none focus:border-blue-500"
+                    placeholder="Search by Order ID, Vendor, or Courier"
+                    className="pl-3 pr-7 py-1.5 border border-gray-300 rounded-lg text-xs sm:text-sm w-56 sm:w-64 focus:outline-none focus:border-blue-500"
                   />
                   {searchQuery && (
                     <button
                       type="button"
                       onClick={() => setSearchQuery("")}
-                      className="absolute right-2 text-gray-400 hover:text-gray-600 text-xs"
+                      className="absolute right-2 text-gray-400 hover:text-gray-700 text-xs"
                     >
                       ✕
                     </button>
                   )}
                 </div>
 
-                <div className="border-l border-gray-200 pl-2.5 flex items-center gap-1.5">
-                  <select
-                    value={cityFilterMode === "zones" ? "Multiple Zones" : cityFilterMode === "multi_cities" ? "Multiple Cities" : selectedCity}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (val === "Multiple Zones") {
-                        setCityFilterMode("zones");
-                        setIsZoneModalOpen(true);
-                      } else if (val === "Multiple Cities") {
-                        setCityFilterMode("multi_cities");
-                      } else {
-                        setCityFilterMode("all");
-                        setSelectedCity(val);
-                      }
-                    }}
-                    className="bg-transparent text-sm font-medium text-gray-700 cursor-pointer focus:outline-none pr-1 py-1"
-                  >
-                    <option value="All Cities">All Cities</option>
-                    <option value="Cairo">Cairo</option>
-                    <option value="Alexandria">Alexandria</option>
-                    <option value="Multiple Cities">Multiple Cities</option>
-                    <option value="Multiple Zones">Multiple Zones</option>
-                  </select>
+                <button
+                  type="button"
+                  onClick={() => setIsZoneModalOpen(true)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                    cityFilterMode === "zones" && selectedZoneIds.length > 0
+                      ? "bg-blue-600 text-white border-blue-600"
+                      : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                  }`}
+                >
+                  {cityFilterMode === "zones" && selectedZoneIds.length > 0
+                    ? `Zones (${selectedZoneIds.length})`
+                    : "Multiple Zones"}
+                </button>
 
-                  {cityFilterMode === "zones" && (
-                    <button
-                      type="button"
-                      onClick={() => setIsZoneModalOpen(true)}
-                      className="px-2 py-1 text-xs font-semibold rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
-                    >
-                      {citySelectorLabel}
-                    </button>
-                  )}
-                </div>
+                <select
+                  value={cityFilterMode === "zones" ? "Multiple Zones" : selectedCity}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === "Multiple Zones") {
+                      setIsZoneModalOpen(true);
+                    } else {
+                      setSelectedCity(val);
+                      setCityFilterMode("all");
+                      setSelectedZoneIds([]);
+                      setCurrentPage(1);
+                      pushSelectedZonesToFirebase([], syncSelectedZonesToHurrier);
+                      pushViewFilterToFirebase(activeTab, 1, activeQuickFilter, [], syncSelectedZonesToHurrier);
+                    }
+                  }}
+                  className="border border-gray-300 rounded-lg px-2.5 py-1.5 text-xs sm:text-sm font-medium text-gray-700 bg-white focus:outline-none focus:border-blue-500"
+                >
+                  <option value="All Cities">All Cities</option>
+                  <option value="Cairo">Cairo</option>
+                  <option value="Alexandria">Alexandria</option>
+                  <option value="Multiple Zones">Multiple Zones</option>
+                </select>
               </div>
             </header>
 
-            {/* Main View */}
-            <main className="flex-1 overflow-auto p-6">
+            <main ref={mainContainerRef} className="flex-1 overflow-auto p-6">
               <div className="max-w-[1440px] mx-auto">
                 <div className="flex items-center justify-between mb-2">
                   <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
-                    {activeTab === "Active Couriers" || activeTab === "Dashboard" || activeTab === "Dispatcher Dashboard" || activeTab === "Issues"
+                    {activeTab === "Active Couriers" ||
+                    activeTab === "Dashboard" ||
+                    activeTab === "Dispatcher Dashboard" ||
+                    activeTab === "Issues"
                       ? activeTab
-                      : `${activeTab} Deliveries ${
-                          effectiveTabCounts[activeTab] !== undefined ? `(${effectiveTabCounts[activeTab]})` : ""
-                        }`}
+                      : `${activeTab} Deliveries${activeHeaderCount !== undefined ? ` (${activeHeaderCount})` : ""}`}
                   </h1>
 
                   <button
                     type="button"
                     onClick={fetchLiveBundleFromFirebase}
-                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 rounded text-sm font-medium text-gray-700 hover:bg-gray-50 shadow-sm"
+                    className="px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-sm"
                   >
-                    <span>↻</span> Refresh
+                    ↻ Refresh
                   </button>
                 </div>
 
-                {activeTab === "Dashboard" && renderDashboardView()}
-                {activeTab === "Active Couriers" && renderActiveCouriersView()}
-                {activeTab === "Dispatcher Dashboard" && renderDispatcherDashboardView()}
-                {activeTab === "Issues" && renderIssuesView()}
-                {activeTab !== "Dashboard" &&
-                  activeTab !== "Active Couriers" &&
-                  activeTab !== "Dispatcher Dashboard" &&
-                  activeTab !== "Issues" &&
-                  renderDeliveriesTable()}
+                {activeTab === "Dashboard"
+                  ? renderDashboardView()
+                  : activeTab === "Active Couriers"
+                  ? renderActiveCouriersView()
+                  : activeTab === "Dispatcher Dashboard"
+                  ? renderDispatcherDashboardView()
+                  : activeTab === "Issues"
+                  ? renderIssuesView()
+                  : renderDeliveriesTable()}
               </div>
             </main>
           </div>
@@ -1789,7 +2120,7 @@
               onClick={() => setIsZoneModalOpen(false)}
             >
               <div
-                className="bg-white rounded-xl max-w-2xl w-full shadow-2xl border border-gray-200 overflow-hidden"
+                className="bg-white w-full max-w-3xl max-h-[85vh] rounded-xl shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
@@ -1799,6 +2130,7 @@
                       Selected: <strong className="text-blue-600">{selectedZoneIds.length}</strong> zones
                     </p>
                   </div>
+
                   <div className="flex items-center gap-3">
                     <button
                       type="button"
@@ -1810,83 +2142,90 @@
                     <button
                       type="button"
                       onClick={() => setIsZoneModalOpen(false)}
-                      className="text-gray-400 hover:text-gray-700 text-lg px-1"
+                      className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 font-bold"
                     >
                       ✕
                     </button>
                   </div>
                 </div>
 
-                <div className="p-5 space-y-4">
+                <div className="px-6 py-3 border-b border-gray-100 space-y-2.5 bg-gray-50/60">
                   <input
                     type="text"
                     value={zoneSearchQuery}
                     onChange={(e) => setZoneSearchQuery(e.target.value)}
-                    placeholder="Search zones by name, ID, or city..."
-                    className="w-full px-3.5 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-blue-500"
+                    placeholder="Search zones by name, ID, or city (e.g. Haram, Manial, Tahrir, Nasr city)..."
+                    className="w-full px-3.5 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:border-blue-500"
                   />
 
-                  <label className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer select-none">
+                  <label className="flex items-center gap-2 text-xs font-medium text-gray-700 cursor-pointer select-none">
                     <input
                       type="checkbox"
                       checked={syncSelectedZonesToHurrier}
                       onChange={(e) => setSyncSelectedZonesToHurrier(e.target.checked)}
-                      className="rounded border-gray-300 text-blue-600"
+                      className="rounded text-blue-600"
                     />
-                    <span>تحديث السحب المباشر من Hurrier لهذه الزونات المختارة</span>
+                    <span>تحديث السحب المباشر من Hurrier لهذه الزونات المختارة (Live Sync Selected Zones)</span>
                   </label>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-72 overflow-y-auto pr-1">
-                    {filteredZonesForModal.map((z) => {
-                      const checked = selectedZoneIds.includes(Number(z.id));
-                      return (
-                        <button
-                          key={z.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedZoneIds((prev) =>
-                              checked ? prev.filter((x) => x !== Number(z.id)) : [...prev, Number(z.id)]
-                            );
-                          }}
-                          className={`flex items-center justify-between px-3.5 py-2.5 rounded-lg border text-left text-sm transition-colors ${
-                            checked
-                              ? "border-blue-500 bg-blue-50/70 text-blue-900 font-semibold"
-                              : "border-gray-200 hover:bg-gray-50 text-gray-700"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <span
-                              className={`w-4 h-4 rounded border flex items-center justify-center text-[10px] ${
-                                checked ? "bg-blue-600 border-blue-600 text-white" : "border-gray-300 bg-white"
-                              }`}
-                            >
-                              {checked ? "✓" : ""}
-                            </span>
-                            <span className="truncate">{z.name}</span>
-                          </div>
-                          <span className="text-xs text-gray-400 font-mono ml-2">{z.id}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
                 </div>
 
-                <div className="px-6 py-3.5 bg-gray-50 border-t border-gray-200 flex justify-end gap-2.5">
+                <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {filteredZonesForModal.map((z) => {
+                    const checked = selectedZoneIds.includes(Number(z.id));
+                    return (
+                      <label
+                        key={z.id}
+                        className={`flex items-center justify-between px-3.5 py-2.5 rounded-lg border cursor-pointer transition-colors ${
+                          checked
+                            ? "bg-blue-50/80 border-blue-400 text-blue-700 font-semibold"
+                            : "bg-white border-gray-200 text-gray-800 hover:bg-gray-50"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              setSelectedZoneIds((prev) =>
+                                prev.includes(Number(z.id))
+                                  ? prev.filter((id) => id !== Number(z.id))
+                                  : [...prev, Number(z.id)]
+                              );
+                            }}
+                            className="rounded text-blue-600"
+                          />
+                          <span className="text-xs sm:text-sm truncate">{z.name}</span>
+                        </div>
+                        <span className="text-xs font-mono text-gray-400 ml-2">{z.id}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div className="px-6 py-3.5 border-t border-gray-200 bg-gray-50 flex items-center justify-end gap-2.5">
                   <button
                     type="button"
                     onClick={() => setIsZoneModalOpen(false)}
-                    className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-100"
+                    className="px-4 py-2 rounded-lg border border-gray-300 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-100"
                   >
                     Cancel
                   </button>
                   <button
                     type="button"
                     onClick={() => {
-                      setCityFilterMode(selectedZoneIds.length > 0 ? "zones" : "all");
-                      pushSelectedZonesToFirebase(selectedZoneIds, syncSelectedZonesToHurrier);
+                      setCurrentPage(1);
+                      if (selectedZoneIds.length > 0) {
+                        setCityFilterMode("zones");
+                        pushSelectedZonesToFirebase(selectedZoneIds, syncSelectedZonesToHurrier);
+                        pushViewFilterToFirebase(activeTab, 1, activeQuickFilter, selectedZoneIds, syncSelectedZonesToHurrier);
+                      } else {
+                        setCityFilterMode("all");
+                        pushSelectedZonesToFirebase([], syncSelectedZonesToHurrier);
+                        pushViewFilterToFirebase(activeTab, 1, activeQuickFilter, [], syncSelectedZonesToHurrier);
+                      }
                       setIsZoneModalOpen(false);
                     }}
-                    className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold"
+                    className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold"
                   >
                     Select
                   </button>
