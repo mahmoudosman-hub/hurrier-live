@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v5.9 — 4h Chronological Completed Orders (50/Page)</title>
+  <title>Hurrier Live Operations Dashboard v6.0 — Rider Follow-up Copy + 4h Window</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -35,7 +35,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v5.9...
+      Loading Hurrier Live Operations Dashboard v6.0...
     </div>
   </div>
 
@@ -579,53 +579,54 @@
         .slice(0, 80);
     }
 
-    function extractCourierProfileFromDoc(selectedCourier, doc) {
-      const base = selectedCourier || {};
-      const c = doc?.courier || {};
-      const courierId = String(c.id || doc?.courierId || base.id || "").trim();
-      const userId = String(doc?.user_id || doc?.userId || c.user_id || courierId || "").trim();
-      const resolvedName = normalizeText(c.name || doc?.courierName || base.name || "Courier");
-      const phone = normalizeText(c.phone_number || c.phone || c.mobile || "");
+    function hasValidAssignedRider(item) {
+      const c = normalizeText(item?.courier);
+      if (!c) return false;
+      const lower = c.toLowerCase();
+      return lower !== "-" && lower !== "assigning..." && lower !== "pending acceptance" && lower !== "unknown";
+    }
 
-      const contractInfo = doc?.contract_info || c.contract_info || {};
-      const contractType = contractInfo.type ? humanizeSnakeCase(contractInfo.type) : "";
-      const contractName = normalizeText(contractInfo.name);
-      const contract = contractType
-        ? contractName
-          ? `${contractType} (${contractName})`
-          : contractType
-        : contractName || "-";
+    function formatRiderFollowupBlock(item, phoneNumber) {
+      const cleanPhone = normalizeText(phoneNumber) || "-";
+      return [
+        `Order ID: ${item.id}`,
+        `Vendor: ${normalizeText(item.vendor)}`,
+        `Rider name : ${normalizeText(item.courier)}`,
+        `Mob: ${cleanPhone}`,
+        `Delay : ${item.deadline}`,
+        `STATUS: ${item.status}`
+      ].join("\n");
+    }
 
-      const vehicle = normalizeText(c.vehicle || c.vehicle_type) || "-";
-      const fleetId = normalizeText(c.fleet_id || c.city_code) || "eg-cairo";
-
-      const statusRaw = c.status || "Working";
-      const statusLabel = humanizeSnakeCase(statusRaw);
+    function extractCourierProfileFromDoc(courierStub, doc) {
+      const c = doc?.courier || doc || {};
       const statusMeta = doc?.status_meta_data || c.status_meta_data || {};
-      const performedBy = normalizeText(statusMeta.performed_by);
-      const statusReason = statusMeta.reason ? humanizeSnakeCase(statusMeta.reason) : "";
-      const statusUntil = doc?.status_until ? formatShortTimeOnly(doc.status_until) : "";
+      const contractInfo = doc?.contract_info || c.contract_info || {};
+      const contractParts = [
+        contractInfo.type ? humanizeSnakeCase(contractInfo.type) : "",
+        contractInfo.name ? normalizeText(contractInfo.name) : ""
+      ].filter(Boolean);
 
       const rawBalance = doc?.balance ?? c.balance;
       const balanceStr =
-        rawBalance !== undefined && rawBalance !== null && rawBalance !== ""
-          ? `${Number(rawBalance).toFixed(2)} EGP`
+        rawBalance !== null && rawBalance !== undefined && rawBalance !== ""
+          ? `$ ${Number(rawBalance).toFixed(2)}`
           : "";
 
       return {
-        courierId,
-        userId,
-        name: resolvedName,
-        phone,
-        contract,
-        vehicle,
-        fleetId,
-        statusLabel,
-        performedBy,
-        statusReason,
-        statusUntil,
+        name: normalizeText(c.name || courierStub?.name || "Courier"),
+        courierId: String(c.id || doc?.courierId || courierStub?.id || ""),
+        userId: String(doc?.user_id || c.user_id || doc?.userId || c.id || courierStub?.id || ""),
+        statusLabel: humanizeSnakeCase(c.status || "working"),
+        statusUntil: doc?.status_until ? formatShortTimeOnly(doc.status_until) : "",
+        performedBy: normalizeText(statusMeta.performed_by || ""),
+        statusReason: normalizeText(statusMeta.reason || statusMeta.comment || ""),
         balanceStr,
-        isLoadedFromApi: Boolean(doc?.fetchedFromApi)
+        contract: contractParts.join(" • ") || "-",
+        vehicle: normalizeText(c.vehicle || "-"),
+        phone: normalizeText(c.phone_number || c.phone || c.mobile || ""),
+        fleetId: normalizeText(c.fleet_id || "-"),
+        isLoadedFromApi: Boolean(doc && doc.fetchedFromApi)
       };
     }
 
@@ -765,7 +766,10 @@
       const [liveCourierDetailDoc, setLiveCourierDetailDoc] = useState(null);
       const prewarmedCourierKeysRef = useRef(new Set());
       const courierHoverTimerRef = useRef(null);
+      const courierPhoneCacheRef = useRef(new Map());
 
+      const [selectedOrderUids, setSelectedOrderUids] = useState(() => new Set());
+      const [copyingFollowupState, setCopyingFollowupState] = useState(null);
       const [deliveries, setDeliveries] = useState([]);
       const [completedOrders, setCompletedOrders] = useState([]);
       const [completedTotalCount, setCompletedTotalCount] = useState(0);
@@ -819,18 +823,24 @@
       const copyToClipboard = useCallback((key, text) => {
         const str = String(text || "");
         if (!str) return;
+        let copiedViaExec = false;
         try {
           const ta = document.createElement("textarea");
           ta.value = str;
           ta.style.position = "fixed";
+          ta.style.left = "-9999px";
           ta.style.opacity = "0";
           document.body.appendChild(ta);
+          ta.focus();
           ta.select();
-          document.execCommand("copy");
+          copiedViaExec = document.execCommand("copy");
           document.body.removeChild(ta);
         } catch {}
+        if (!copiedViaExec && typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+          navigator.clipboard.writeText(str).catch(() => {});
+        }
         setCopiedText(key);
-        setTimeout(() => setCopiedText(null), 1500);
+        setTimeout(() => setCopiedText(null), 1800);
       }, []);
 
       const requestOrderDetailsFromHurrier = useCallback(async (orderId, deliveryId = "") => {
@@ -856,14 +866,37 @@
         (item) => {
           const orderId = item?.id;
           const delId = item?.rawRecord?.id || item?.rawRecord?.delivery_id || "";
-          if (!orderId) return;
-          const cleanId = String(orderId).replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "").trim();
-          if (!cleanId || prewarmedOrderIdsRef.current.has(cleanId)) return;
-          if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-          hoverTimerRef.current = setTimeout(() => {
-            prewarmedOrderIdsRef.current.add(cleanId);
-            requestOrderDetailsFromHurrier(cleanId, delId);
-          }, 180);
+          if (orderId) {
+            const cleanId = String(orderId).replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "").trim();
+            if (cleanId && !prewarmedOrderIdsRef.current.has(cleanId)) {
+              if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+              hoverTimerRef.current = setTimeout(() => {
+                prewarmedOrderIdsRef.current.add(cleanId);
+                requestOrderDetailsFromHurrier(cleanId, delId);
+              }, 180);
+            }
+          }
+          if (hasValidAssignedRider(item)) {
+            const cName = normalizeText(item.courier);
+            const cId = item.courierId ? String(item.courierId) : "";
+            const cKey = sanitizeCourierKey(cId || cName.toLowerCase());
+            if (cKey && !prewarmedCourierKeysRef.current.has(cKey)) {
+              prewarmedCourierKeysRef.current.add(cKey);
+              const token = `${cId}|${cName}`;
+              fetch(`${FIREBASE_DB_URL}/config/requested_courier_details.json`, { cache: "no-store" })
+                .then((r) => (r.ok ? r.json() : []))
+                .then((curList) => {
+                  const nextList = Array.from(
+                    new Set([token, ...(Array.isArray(curList) ? curList.map(String) : [])])
+                  ).slice(0, 30);
+                  return fetch(`${FIREBASE_DB_URL}/config/requested_courier_details.json`, {
+                    method: "PUT",
+                    body: JSON.stringify(nextList)
+                  });
+                })
+                .catch(() => {});
+            }
+          }
         },
         [requestOrderDetailsFromHurrier]
       );
@@ -962,12 +995,171 @@
             if (res.ok) {
               const doc = await res.json();
               if (doc && typeof doc === "object") {
+                const ph = normalizeText(doc?.courier?.phone_number || doc?.courier?.phone || doc?.courier?.mobile || "");
+                if (ph) {
+                  keys.forEach((ck) => courierPhoneCacheRef.current.set(ck, ph));
+                }
                 setLiveCourierDetailDoc(doc);
                 return;
               }
             }
           } catch {}
         }
+      }, []);
+
+      const resolveCourierPhonesForItems = useCallback(async (itemsList) => {
+        const assignedItems = (Array.isArray(itemsList) ? itemsList : []).filter(hasValidAssignedRider);
+        if (assignedItems.length === 0) return new Map();
+
+        const resolvedMap = new Map();
+        const missingItems = [];
+
+        const getKeysForItem = (it) =>
+          Array.from(
+            new Set(
+              [
+                it.courierId ? sanitizeCourierKey(it.courierId) : "",
+                it.courier ? sanitizeCourierKey(normalizeText(it.courier).toLowerCase()) : ""
+              ].filter(Boolean)
+            )
+          );
+
+        // 1) Check local memory cache first
+        for (const it of assignedItems) {
+          const keys = getKeysForItem(it);
+          const cachedPhone = keys.map((k) => courierPhoneCacheRef.current.get(k)).find(Boolean);
+          if (cachedPhone) {
+            resolvedMap.set(it.uid, cachedPhone);
+          } else {
+            missingItems.push(it);
+          }
+        }
+
+        if (missingItems.length === 0) return resolvedMap;
+
+        // 2) Check Firebase courier_details directly for missing riders
+        const stillMissing = [];
+        await Promise.all(
+          missingItems.map(async (it) => {
+            const keys = getKeysForItem(it);
+            for (const k of keys) {
+              try {
+                const res = await fetch(`${FIREBASE_DB_URL}/courier_details/${k}.json`, { cache: "no-store" });
+                if (res.ok) {
+                  const doc = await res.json();
+                  const ph = normalizeText(doc?.courier?.phone_number || doc?.courier?.phone || doc?.courier?.mobile || "");
+                  if (ph) {
+                    keys.forEach((ck) => courierPhoneCacheRef.current.set(ck, ph));
+                    resolvedMap.set(it.uid, ph);
+                    return;
+                  }
+                }
+              } catch {}
+            }
+            stillMissing.push(it);
+          })
+        );
+
+        if (stillMissing.length === 0) return resolvedMap;
+
+        // 3) Request missing riders from Tampermonkey fast-poller and poll until resolved
+        try {
+          const tokens = Array.from(
+            new Set(
+              stillMissing.map((it) => `${it.courierId ? String(it.courierId).trim() : ""}|${normalizeText(it.courier)}`)
+            )
+          );
+          const curRes = await fetch(`${FIREBASE_DB_URL}/config/requested_courier_details.json`, { cache: "no-store" });
+          const curList = curRes.ok ? await curRes.json() : [];
+          const nextList = Array.from(
+            new Set([...tokens, ...(Array.isArray(curList) ? curList.map(String) : [])])
+          ).slice(0, 30);
+          await fetch(`${FIREBASE_DB_URL}/config/requested_courier_details.json`, {
+            method: "PUT",
+            body: JSON.stringify(nextList)
+          });
+        } catch {}
+
+        for (let attempt = 0; attempt < 9; attempt++) {
+          await new Promise((r) => setTimeout(r, 380));
+          const remaining = stillMissing.filter((it) => !resolvedMap.has(it.uid));
+          if (remaining.length === 0) break;
+
+          await Promise.all(
+            remaining.map(async (it) => {
+              const keys = getKeysForItem(it);
+              for (const k of keys) {
+                try {
+                  const res = await fetch(`${FIREBASE_DB_URL}/courier_details/${k}.json`, { cache: "no-store" });
+                  if (res.ok) {
+                    const doc = await res.json();
+                    const ph = normalizeText(doc?.courier?.phone_number || doc?.courier?.phone || doc?.courier?.mobile || "");
+                    if (ph) {
+                      keys.forEach((ck) => courierPhoneCacheRef.current.set(ck, ph));
+                      resolvedMap.set(it.uid, ph);
+                      return;
+                    }
+                  }
+                } catch {}
+              }
+            })
+          );
+        }
+
+        return resolvedMap;
+      }, []);
+
+      const handleCopySingleFollowup = useCallback(
+        async (e, item) => {
+          if (e) e.stopPropagation();
+          if (!hasValidAssignedRider(item)) return;
+          setCopyingFollowupState(`single:${item.uid}`);
+          try {
+            const phoneMap = await resolveCourierPhonesForItems([item]);
+            const phone = phoneMap.get(item.uid) || "-";
+            const formatted = formatRiderFollowupBlock(item, phone);
+            copyToClipboard(`followup:${item.uid}`, formatted);
+          } finally {
+            setCopyingFollowupState(null);
+          }
+        },
+        [resolveCourierPhonesForItems, copyToClipboard]
+      );
+
+      const handleCopyBulkFollowup = useCallback(
+        async (mode, candidateItems) => {
+          const validItems = (Array.isArray(candidateItems) ? candidateItems : []).filter(hasValidAssignedRider);
+          if (validItems.length === 0) {
+            setCopyingFollowupState("empty");
+            setTimeout(() => setCopyingFollowupState(null), 1800);
+            return;
+          }
+          setCopyingFollowupState(`loading:${mode}`);
+          try {
+            const phoneMap = await resolveCourierPhonesForItems(validItems);
+            const blocks = validItems.map((it) => formatRiderFollowupBlock(it, phoneMap.get(it.uid) || "-"));
+            copyToClipboard(`bulk:${mode}`, blocks.join("\n\n"));
+            setCopyingFollowupState(`done:${mode}:${validItems.length}`);
+            setTimeout(() => setCopyingFollowupState(null), 2200);
+          } catch {
+            setCopyingFollowupState(null);
+          }
+        },
+        [resolveCourierPhonesForItems, copyToClipboard]
+      );
+
+      const toggleOrderSelection = useCallback((e, item) => {
+        if (e) e.stopPropagation();
+        if (!hasValidAssignedRider(item)) return;
+        setSelectedOrderUids((prev) => {
+          const next = new Set(prev);
+          if (next.has(item.uid)) {
+            next.delete(item.uid);
+          } else {
+            next.add(item.uid);
+          }
+          return next;
+        });
       }, []);
 
       useEffect(() => {
@@ -2491,6 +2683,16 @@
         const splitCount = baseTabDeliveries.filter((d) => d.isSplit).length;
         const tabExactTotal = effectiveTabCounts[activeTab] ?? baseTabDeliveries.length;
 
+        const delayedWithRiderList = filteredDeliveries.filter(
+          (d) => (d.deadline.includes("-") || d.deadline === "Late") && hasValidAssignedRider(d)
+        );
+        const selectedWithRiderList = filteredDeliveries.filter(
+          (d) => selectedOrderUids.has(d.uid) && hasValidAssignedRider(d)
+        );
+        const pageSelectableItems = paginatedDeliveries.filter(hasValidAssignedRider);
+        const allPageSelected =
+          pageSelectableItems.length > 0 && pageSelectableItems.every((d) => selectedOrderUids.has(d.uid));
+
         const quickFilters = [
           { id: "All", label: `All (${tabExactTotal})` },
           { id: "Delayed", label: `Delayed (${lateCount})` },
@@ -2528,7 +2730,49 @@
                 })}
               </div>
 
-              <div className="flex items-center gap-2.5 text-xs text-gray-500">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                {selectedWithRiderList.length > 0 && (
+                  <div className="inline-flex items-center gap-1">
+                    <button
+                      type="button"
+                      disabled={copyingFollowupState === "loading:selected"}
+                      onClick={() => handleCopyBulkFollowup("selected", selectedWithRiderList)}
+                      className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-sm transition-colors flex items-center gap-1.5"
+                      title="نسخ كليشة متابعة الرايدر للأوردرات المحددة فقط"
+                    >
+                      {copyingFollowupState === "loading:selected"
+                        ? "⏳ جاري سحب أرقام الموبايل..."
+                        : copyingFollowupState?.startsWith("done:selected:")
+                        ? `✓ تم نسخ (${selectedWithRiderList.length}) أوردر`
+                        : `📋 نسخ المحدد (${selectedWithRiderList.length})`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedOrderUids(new Set())}
+                      className="px-2 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 font-semibold"
+                      title="إلغاء تحديد الأوردرات"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+
+                {delayedWithRiderList.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={copyingFollowupState === "loading:delayed"}
+                    onClick={() => handleCopyBulkFollowup("delayed", delayedWithRiderList)}
+                    className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold shadow-sm transition-colors flex items-center gap-1.5"
+                    title="نسخ كليشة متابعة الرايدر لكل الأوردرات المتأخرة المعروضة (يستبعد الأوردرات بدون رايدر تلقائياً)"
+                  >
+                    {copyingFollowupState === "loading:delayed"
+                      ? "⏳ جاري سحب الأرقام..."
+                      : copyingFollowupState?.startsWith("done:delayed:")
+                      ? `✓ تم نسخ المتأخرات (${delayedWithRiderList.length})`
+                      : `📋 نسخ كل المتأخرات (${delayedWithRiderList.length})`}
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() =>
@@ -2601,6 +2845,26 @@
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead>
                   <tr className="border-b border-gray-200 text-gray-500 font-semibold tracking-wide text-xs bg-gray-50/70">
+                    <th className="py-3 pl-3 pr-1 w-8 text-center">
+                      <input
+                        type="checkbox"
+                        checked={allPageSelected}
+                        disabled={pageSelectableItems.length === 0}
+                        onChange={() => {
+                          setSelectedOrderUids((prev) => {
+                            const next = new Set(prev);
+                            if (allPageSelected) {
+                              pageSelectableItems.forEach((d) => next.delete(d.uid));
+                            } else {
+                              pageSelectableItems.forEach((d) => next.add(d.uid));
+                            }
+                            return next;
+                          });
+                        }}
+                        className="w-4 h-4 rounded text-blue-600 cursor-pointer"
+                        title="تحديد / إلغاء تحديد كل أوردرات الصفحة المعين لها رايدر"
+                      />
+                    </th>
                     <th className="py-3 px-4 w-1/4">ORDER</th>
                     <th className="py-3 px-3">DEADLINE</th>
                     <th className="py-3 px-3 w-1/4">COURIER</th>
@@ -2612,7 +2876,7 @@
                 <tbody className="divide-y divide-gray-100">
                   {paginatedDeliveries.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-12 text-center text-gray-500">
+                      <td colSpan={7} className="py-12 text-center text-gray-500">
                         {connectionStatus === "connecting" || connectionStatus === "waiting" ? (
                           <span className="text-blue-600 font-semibold">
                             جاري سحب أوردرات الزونات المختارة من Hurrier...
@@ -2643,17 +2907,41 @@
                       });
                       const shownZones = prioritizedZones.slice(0, 2);
                       const extraZonesCount = Math.max(0, prioritizedZones.length - shownZones.length);
+                      const canCopyFollowup = hasValidAssignedRider(item);
+                      const isRowSelected = selectedOrderUids.has(item.uid);
 
                       return (
                         <tr
                           key={item.uid}
                           onMouseEnter={() => handleOrderRowHover(item)}
                           onClick={() => setSelectedOrder(item)}
-                          className="hover:bg-blue-50/30 transition-colors cursor-pointer"
+                          className={`transition-colors cursor-pointer ${
+                            isRowSelected ? "bg-blue-50/70" : "hover:bg-blue-50/30"
+                          }`}
                         >
+                          <td
+                            className="py-3.5 pl-3 pr-1 align-top text-center"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isRowSelected}
+                              disabled={!canCopyFollowup}
+                              onChange={(e) => toggleOrderSelection(e, item)}
+                              className={`w-4 h-4 rounded text-blue-600 mt-1 ${
+                                canCopyFollowup ? "cursor-pointer" : "opacity-30 cursor-not-allowed"
+                              }`}
+                              title={
+                                canCopyFollowup
+                                  ? "تحديد الأوردر للنسخ الجماعي"
+                                  : "لا يمكن تحديد أوردر بدون رايدر معيّن"
+                              }
+                            />
+                          </td>
+
                           <td className="py-3.5 px-4 align-top">
                             <div className="flex flex-col gap-0.5">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1.5">
                                 <span className="text-blue-600 hover:underline font-semibold text-[15px]">
                                   {item.id}
                                 </span>
@@ -2664,10 +2952,28 @@
                                     copyToClipboard(item.id, item.id);
                                   }}
                                   className="text-gray-400 hover:text-gray-700 px-1 py-0.5 rounded text-xs"
-                                  title="Copy Order ID"
+                                  title="نسخ رقم الأوردر فقط"
                                 >
                                   {copiedText === item.id ? "✓" : "⧉"}
                                 </button>
+                                {canCopyFollowup && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleCopySingleFollowup(e, item)}
+                                    className={`px-1.5 py-0.5 rounded text-xs font-semibold border transition-colors ${
+                                      copiedText === `followup:${item.uid}`
+                                        ? "bg-emerald-50 text-emerald-700 border-emerald-300"
+                                        : "bg-gray-50 hover:bg-blue-50 text-gray-600 hover:text-blue-700 border-gray-200"
+                                    }`}
+                                    title="نسخ كليشة متابعة الرايدر (Order ID + Vendor + Rider + Mob + Delay + Status)"
+                                  >
+                                    {copyingFollowupState === `single:${item.uid}`
+                                      ? "⏳"
+                                      : copiedText === `followup:${item.uid}`
+                                      ? "✓ Copied"
+                                      : "📋"}
+                                  </button>
+                                )}
                               </div>
                               <span
                                 className="text-xs text-gray-500 truncate max-w-[260px]"
@@ -2860,7 +3166,7 @@
                         تحديد زونات الموظف قبل بدء السحب (Independent Zone Gate)
                       </h1>
                       <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v5.9 • 4h Chronological Completed Orders (50/Page)
+                        ★ v6.0 • Rider Follow-up Copy + 4h Window (50/Page)
                       </span>
                     </div>
                     <p className="text-xs text-slate-300 mt-0.5">
@@ -3034,7 +3340,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v5.9 (4h Window ↑ • 50/Page)</span>
+                <span className="font-bold text-emerald-700">★ v6.0 (Rider Copy + 4h ↑)</span>
                 <span className="font-mono text-gray-400">#{sessionId.slice(-5)}</span>
               </div>
               {employeeName && (
@@ -3222,6 +3528,20 @@
                     >
                       {copiedText === "orderCode" ? "✓ Copied" : "⧉ Copy ID"}
                     </button>
+                    {hasValidAssignedRider(selectedOrderFullView) && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleCopySingleFollowup(e, selectedOrderFullView)}
+                        className="text-xs px-2.5 py-1 rounded border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold"
+                        title="نسخ كليشة متابعة الرايدر بالكامل"
+                      >
+                        {copyingFollowupState === `single:${selectedOrderFullView.uid}`
+                          ? "⏳ جاري سحب الموبايل..."
+                          : copiedText === `followup:${selectedOrderFullView.uid}`
+                          ? "✓ تم نسخ الكليشة"
+                          : "📋 نسخ كليشة المتابعة"}
+                      </button>
+                    )}
                     <span className="text-xs font-semibold text-blue-600">
                       {selectedOrderFullView.orderCode}
                     </span>
