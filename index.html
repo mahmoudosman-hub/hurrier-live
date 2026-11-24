@@ -76,8 +76,10 @@
     // --- INITIAL SNAPSHOT DATA ---
     const MOCK_DELIVERIES = [
       {
+        uid: "mock_active_1",
         id: "4725665949",
         orderCode: "HF_EG4725665949",
+        isPrimary: true,
         vendor: "المخبز اللبناني الأصلي, فيصل - المطبعة",
         vo: "3507",
         deadline: "-172h 18min",
@@ -103,6 +105,7 @@
         isReviewed: true,
         isHighUtil: false,
         isReturning: false,
+        isDarkstore: false,
         verticalType: "restaurants",
         restrictions: [],
         tags: ["external_address_id:120798550", "proof_of_pickup", "signature_proof", "proof_of_return"],
@@ -123,8 +126,10 @@
         ]
       },
       {
+        uid: "mock_active_2",
         id: "4741714149",
         orderCode: "HF_EG4741714149",
+        isPrimary: true,
         vendor: "بلبن، المنيل",
         vo: "9084",
         deadline: "-51min",
@@ -150,6 +155,7 @@
         isReviewed: true,
         isHighUtil: false,
         isReturning: false,
+        isDarkstore: false,
         verticalType: "restaurants",
         restrictions: ["Bike-Standard box"],
         tags: ["external_address_id:178203258", "proof_of_pickup", "signature_proof", "stv_4mins"],
@@ -255,7 +261,7 @@
       const d = new Date(isoDate);
       if (Number.isNaN(d.getTime())) return '-';
       return d.toLocaleString('en-US', {
-        month: 'short',
+        month: 'long',
         day: 'numeric',
         hour: 'numeric',
         minute: '2-digit',
@@ -264,18 +270,31 @@
     }
 
     function formatUtilization(util) {
-      if (!util || util.value == null) return '-';
-      if (util.type === 'price') return `${(util.value / 100).toFixed(2)} EGP`;
-      if (util.type === 'volume') return `${Number(util.value).toFixed(2)} L`;
-      if (util.type === 'weight') return `${Number(util.value).toFixed(2)} kg`;
-      return String(util.value);
+      if (!util || util.value === undefined || util.value === null) return '-';
+      if (util.type === 'price') return `${(Number(util.value) / 100).toFixed(2)} EGP (Price)`;
+      if (util.type === 'volume') return `${Number(util.value).toFixed(1)} L (Volume)`;
+      if (util.type === 'weight') return `${Number(util.value).toFixed(2)} kg (Weight)`;
+      return `${util.value} (${util.type || 'Unit'})`;
     }
 
-    function mapHurrierRecordToDelivery(rec, tabName) {
+    function mapHurrierRecordToDelivery(rec, tabName, idx = 0) {
       const order = rec.order || {};
+      const verticalType = String(order.vertical_type || 'restaurants').toLowerCase().trim();
+      const vendorName = String(order.vendor_name || 'Unknown Vendor');
+      const vendorLower = vendorName.toLowerCase();
+      const tagsList = Array.isArray(order.tags) ? order.tags : [];
+
+      // Darkstores = طلبات مارت (Talabat Mart) بكل فروعه فقط، وفصل السوبرماركت العادي عنه
+      const isTalabatMart =
+        vendorLower.includes('talabat mart') ||
+        vendorLower.includes('طلبات مارت') ||
+        tagsList.includes('tmart_dedicated');
+      const isDarkstore = (verticalType === 'darkstores' || isTalabatMart) && verticalType !== 'supermarket';
+
       const verticalMap = {
         restaurants: 'Restaurants',
-        darkstores: 'Darkstores',
+        darkstores: 'Darkstores (Talabat Mart)',
+        supermarket: 'Supermarket',
         dairy_products: 'Dairy Products',
         convenience: 'Convenience',
         courier_business: 'Courier Business',
@@ -285,7 +304,9 @@
       if (order.is_cash_collection) instructions.push('Cash');
       if (order.is_card_on_delivery) instructions.push('Card');
       if (rec.is_returning) instructions.push('Return');
-      const vLabel = verticalMap[order.vertical_type] || (order.vertical_type ? order.vertical_type : 'Restaurants');
+      const vLabel = isDarkstore
+        ? 'Darkstores'
+        : verticalMap[verticalType] || (verticalType ? verticalType : 'Restaurants');
       instructions.push(vLabel);
 
       const statusLabel = (rec.status || 'queued')
@@ -302,11 +323,14 @@
         ? rec.business_restricted_vehicles.split(',').map((s) => s.trim()).filter(Boolean)
         : [];
       const allZones = Array.isArray(rec.starting_points) ? rec.starting_points : [];
+      const uniqueDeliveryId = String(rec.id ? `${tabName}_${rec.id}_${idx}` : `${tabName}_${order.code || 'ord'}_${idx}`);
 
       return {
+        uid: uniqueDeliveryId,
         id: String(order.code || rec.id),
         orderCode: order.order_code || `HF_EG${order.code || rec.id}`,
-        vendor: order.vendor_name || 'Unknown Vendor',
+        isPrimary: rec.is_primary !== false,
+        vendor: vendorName,
         vo: order.vendor_order_number || '-',
         deadline: deadlineStr,
         isLate: deadlineStr.startsWith('-'),
@@ -331,9 +355,10 @@
         isReviewed: order.is_order_reviewed !== false,
         isHighUtil: Boolean(order.is_high_utilization),
         isReturning: Boolean(rec.is_returning),
-        verticalType: order.vertical_type || 'restaurants',
+        isDarkstore,
+        verticalType,
         restrictions,
-        tags: Array.isArray(order.tags) ? order.tags : [],
+        tags: tagsList,
         placedAt: formatReadableTimestamp(order.placed_at || order.send_to_restaurant_at),
         sentToVendorAt: formatReadableTimestamp(order.send_to_restaurant_at),
         confirmedAt: formatReadableTimestamp(order.restaurant_confirmed_at),
@@ -481,7 +506,7 @@
           const payload = bundle[key];
           if (payload && Array.isArray(payload.records)) {
             hasAnyDelivery = true;
-            const mapped = payload.records.map((r) => mapHurrierRecordToDelivery(r, tab));
+            const mapped = payload.records.map((r, idx) => mapHurrierRecordToDelivery(r, tab, idx));
             updatedMap.set(tab, mapped);
             nextCounts[tab] = payload.metadata?.total_count ?? mapped.length;
           }
@@ -713,8 +738,9 @@
           if (quickFilter === 'late') matchesQuick = d.isLate;
           else if (quickFilter === 'cash') matchesQuick = d.isCash;
           else if (quickFilter === 'card') matchesQuick = d.isCard;
-          else if (quickFilter === 'restaurants') matchesQuick = d.verticalType === 'restaurants';
-          else if (quickFilter === 'darkstores') matchesQuick = d.verticalType === 'darkstores';
+          else if (quickFilter === 'restaurants') matchesQuick = d.verticalType === 'restaurants' && !d.isDarkstore;
+          else if (quickFilter === 'darkstores') matchesQuick = d.isDarkstore;
+          else if (quickFilter === 'supermarket') matchesQuick = d.verticalType === 'supermarket';
           else if (quickFilter === 'high_util') matchesQuick = d.isHighUtil;
           else if (quickFilter === 'returning') matchesQuick = d.isReturning;
           else if (quickFilter === 'not_reviewed') matchesQuick = !d.isReviewed;
@@ -1314,22 +1340,26 @@
         if (activeTab === 'Completed') return renderCompletedOrdersView();
         if (activeTab === 'Cancelled') return renderCancelledOrdersView();
 
+        const tabItems = deliveries.filter((d) => d.tab === activeTab);
+        const filterChips = [
+          { id: 'all', label: `All (${tabItems.length})` },
+          { id: 'late', label: `Delayed (${tabItems.filter((d) => d.isLate).length})` },
+          { id: 'cash', label: `Cash (${tabItems.filter((d) => d.isCash).length})` },
+          { id: 'card', label: `Card (${tabItems.filter((d) => d.isCard).length})` },
+          { id: 'restaurants', label: `Restaurants (${tabItems.filter((d) => d.verticalType === 'restaurants' && !d.isDarkstore).length})` },
+          { id: 'darkstores', label: `Darkstores - Talabat Mart (${tabItems.filter((d) => d.isDarkstore).length})` },
+          { id: 'supermarket', label: `Supermarkets (${tabItems.filter((d) => d.verticalType === 'supermarket').length})` },
+          { id: 'high_util', label: `High Util (${tabItems.filter((d) => d.isHighUtil).length})` },
+          { id: 'returning', label: `Return Orders (${tabItems.filter((d) => d.isReturning).length})` },
+          { id: 'not_reviewed', label: `Not Reviewed (${tabItems.filter((d) => !d.isReviewed).length})` }
+        ];
+
         return (
           <div className="mt-4 space-y-4">
             {/* Quick Slice & Filter Bar for Delivery Tables */}
             <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-50 px-4 py-2.5 rounded-lg border border-gray-200">
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                {[
-                  { id: 'all', label: 'All' },
-                  { id: 'late', label: `Delayed (${deliveries.filter((d) => d.tab === activeTab && d.isLate).length})` },
-                  { id: 'cash', label: 'Cash Collection' },
-                  { id: 'card', label: 'Card on Delivery' },
-                  { id: 'restaurants', label: 'Restaurants' },
-                  { id: 'darkstores', label: 'Darkstores' },
-                  { id: 'high_util', label: 'High Utilization' },
-                  { id: 'returning', label: 'Return Orders' },
-                  { id: 'not_reviewed', label: 'Not Reviewed' }
-                ].map((chip) => (
+                {filterChips.map((chip) => (
                   <button
                     key={chip.id}
                     type="button"
@@ -1373,12 +1403,12 @@
                       </td>
                     </tr>
                   ) : (
-                    filteredDeliveries.map((item) => {
+                    filteredDeliveries.map((item, rowIndex) => {
                       const deadlineColor = item.isLate ? 'bg-[#e53935] text-white' : 'bg-gray-100 text-gray-800';
 
                       return (
                         <tr
-                          key={item.id}
+                          key={item.uid || `${item.id}_${rowIndex}`}
                           onClick={() => setSelectedOrder(item)}
                           className="border-b border-gray-100 hover:bg-gray-50/80 transition-colors cursor-pointer"
                         >
@@ -1401,6 +1431,11 @@
                                     <CopyIcon size={14} />
                                   )}
                                 </button>
+                                {!item.isPrimary && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 font-semibold border border-amber-200">
+                                    Split
+                                  </span>
+                                )}
                                 {!item.isReviewed && (
                                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-700 font-semibold border border-red-200">
                                     Not Reviewed
