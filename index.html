@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v5.4</title>
+  <title>Hurrier Live Operations Dashboard v5.5 — Completed Orders (50/Page) + Live Sync</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -35,7 +35,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v5.4...
+      Loading Hurrier Live Operations Dashboard v5.5...
     </div>
   </div>
 
@@ -365,6 +365,125 @@
       return `${Math.round(s / 60)}m`;
     }
 
+    function formatCompletedTimingSeconds(secondsVal) {
+      if (secondsVal === null || secondsVal === undefined || secondsVal === "") return "-";
+      const totalSec = Math.round(Number(secondsVal));
+      if (Number.isNaN(totalSec)) return String(secondsVal);
+      const absSec = Math.abs(totalSec);
+      const sign = totalSec < 0 ? "-" : "";
+      if (absSec < 60) return `${sign}${absSec}s`;
+      const mins = Math.floor(absSec / 60);
+      const remSec = absSec % 60;
+      if (mins >= 60) {
+        const hrs = Math.floor(mins / 60);
+        const remMin = mins % 60;
+        return `${sign}${hrs}h ${remMin}m`;
+      }
+      return remSec > 0 ? `${sign}${mins}m ${remSec}s` : `${sign}${mins}m`;
+    }
+
+    function getTodayCairoDateInput() {
+      try {
+        return new Intl.DateTimeFormat("en-CA", {
+          timeZone: "Africa/Cairo",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit"
+        }).format(new Date());
+      } catch {
+        return new Date().toISOString().slice(0, 10);
+      }
+    }
+
+    function mapHurrierCompletedRecord(rec) {
+      const order = rec?.order || {};
+      const primaryDel = rec?.primary_delivery || {};
+      const timings = rec?.primary_delivery_timings || {};
+      const dropAddr = order.drop_off_address || {};
+      const pickAddr = order.pickup_address || {};
+
+      const codeStr = String(
+        order.confirmation_number ||
+          String(order.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+          order.id ||
+          ""
+      ).trim();
+
+      const rawSps = Array.isArray(dropAddr.starting_points) ? dropAddr.starting_points : [];
+      const zoneObjects = [];
+      const zonesList = [];
+      rawSps.forEach((sp) => {
+        if (sp && typeof sp === "object") {
+          const nm = normalizeText(sp.name);
+          const id = Number(sp.id);
+          if (nm) zonesList.push(nm);
+          if (nm || id) zoneObjects.push({ id, name: nm });
+        } else if (sp) {
+          const nm = normalizeText(sp);
+          if (nm) zonesList.push(nm);
+        }
+      });
+
+      const distMeters = Number(primaryDel.delivery_distance);
+      const distanceKm =
+        !Number.isNaN(distMeters) && distMeters > 0 ? `${(distMeters / 1000).toFixed(2)} km` : "-";
+
+      const totalVal = typeof order.total === "number" ? `${(order.total / 100).toFixed(2)} EGP` : "-";
+      const instructions = [];
+      if (order.is_cash_collection) instructions.push("Cash");
+      if (order.is_card_on_delivery) instructions.push("Card");
+      const vType = order.vendor_vertical_type || order.featured_business?.vertical_type || "restaurants";
+      instructions.push(humanizeSnakeCase(vType));
+
+      const placedTimestamp = order.placed_at ? new Date(order.placed_at).getTime() : 0;
+
+      return {
+        uid: `Completed-${order.id || codeStr}-${Math.random().toString(36).slice(2, 6)}`,
+        id: codeStr,
+        orderCode: order.order_code || `HF_EG${codeStr}`,
+        placedAtFormatted: formatShortTimeOnly(order.placed_at),
+        placedTimestamp: Number.isNaN(placedTimestamp) ? 0 : placedTimestamp,
+        vo: order.vendor_order_number || "-",
+        city: normalizeText(dropAddr.city) || "Cairo",
+        zone: zonesList.join(", ") || "-",
+        zonesList,
+        zoneObjects,
+        courier: normalizeText(primaryDel.courier_name) || "-",
+        courierId: primaryDel.courier_id || null,
+        vendor: normalizeText(order.vendor_name || order.featured_business?.name) || "Unknown Vendor",
+        distance: distanceKm,
+        acceptTime: formatCompletedTimingSeconds(timings.accepting_time),
+        retailerLate: formatCompletedTimingSeconds(timings.vendor_late),
+        courierLate: formatCompletedTimingSeconds(timings.courier_late),
+        waitTime: formatCompletedTimingSeconds(timings.wait_pickup_time),
+        deliveryLate: formatCompletedTimingSeconds(timings.delivery_late),
+        timeInBag: formatCompletedTimingSeconds(timings.time_in_bag),
+        orderDuration: formatCompletedTimingSeconds(timings.total_time),
+        isPreorder: Boolean(order.is_preorder),
+        dropoffIssue: normalizeText(order.deliveries_dropoff_issues) || "-",
+        status: "Completed",
+        deadline: "Completed",
+        orderValue: totalVal,
+        instructions,
+        tab: "Completed",
+        rawRecord: {
+          id: order.id,
+          status: "completed",
+          distance: primaryDel.delivery_distance,
+          courier_id: primaryDel.courier_id,
+          courier_name: primaryDel.courier_name,
+          starting_points: rawSps,
+          order: {
+            ...order,
+            code: codeStr,
+            order_value: order.total,
+            dropoff_address: dropAddr,
+            pickup_address: pickAddr
+          }
+        }
+      };
+    }
+
     function formatPiastersMoney(val, currency = "EGP") {
       if (val === null || val === undefined || val === "") return "-";
       if (typeof val === "string" && /[A-Z]{3}|\$/.test(val)) return val;
@@ -648,6 +767,18 @@
       const courierHoverTimerRef = useRef(null);
 
       const [deliveries, setDeliveries] = useState([]);
+      const [completedOrders, setCompletedOrders] = useState([]);
+      const [completedTotalCount, setCompletedTotalCount] = useState(0);
+      const [completedDate, setCompletedDate] = useState(() => getTodayCairoDateInput());
+      const [completedCityFilter, setCompletedCityFilter] = useState("All Cities");
+      const [completedZoneScope, setCompletedZoneScope] = useState("selected");
+      const [completedSpecificZoneId, setCompletedSpecificZoneId] = useState("");
+      const [completedSearchQuery, setCompletedSearchQuery] = useState("");
+      const [completedPage, setCompletedPage] = useState(1);
+      const [completedJumpPage, setCompletedJumpPage] = useState("");
+      const [completedSortAsc, setCompletedSortAsc] = useState(true);
+      const [isCompletedLoading, setIsCompletedLoading] = useState(false);
+
       const [tabCounts, setTabCounts] = useState({
         Actionable: 0,
         "Pre-order": 0,
@@ -889,6 +1020,25 @@
 
       const registerOrHeartbeatSession = useCallback(async () => {
         if (!isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
+        const completedReqPayload =
+          activeTab === "Completed"
+            ? {
+                date: completedDate || getTodayCairoDateInput(),
+                page: completedPage,
+                per_page: 50,
+                zone_scope: completedZoneScope,
+                specific_zone_id: completedZoneScope === "single" ? Number(completedSpecificZoneId) || 0 : 0,
+                city_id:
+                  completedCityFilter === "Cairo"
+                    ? "1"
+                    : completedCityFilter === "Alexandria"
+                    ? "200"
+                    : "",
+                search: completedSearchQuery.trim(),
+                requested_at: Date.now()
+              }
+            : null;
+
         try {
           await fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}.json`, {
             method: "PUT",
@@ -897,18 +1047,36 @@
               employee_name: normalizeText(employeeName) || `Employee (${sessionId.slice(-5)})`,
               zone_ids: selectedZoneIds.map(Number).filter(isRealHurrierZoneId),
               zone_names: selectedZoneNames,
+              active_tab: activeTab,
+              completed_req: completedReqPayload,
               heartbeat_at: Date.now()
             })
           });
         } catch {}
-      }, [isZoneSetupConfirmed, selectedZoneIds, sessionId, employeeName, selectedZoneNames]);
+      }, [
+        isZoneSetupConfirmed,
+        selectedZoneIds,
+        sessionId,
+        employeeName,
+        selectedZoneNames,
+        activeTab,
+        completedDate,
+        completedPage,
+        completedZoneScope,
+        completedSpecificZoneId,
+        completedCityFilter,
+        completedSearchQuery
+      ]);
 
       useEffect(() => {
         if (!isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
+        if (activeTab === "Completed") {
+          setIsCompletedLoading(true);
+        }
         registerOrHeartbeatSession();
         const hbTimer = setInterval(registerOrHeartbeatSession, 15000);
         return () => clearInterval(hbTimer);
-      }, [isZoneSetupConfirmed, selectedZoneIds, registerOrHeartbeatSession]);
+      }, [isZoneSetupConfirmed, selectedZoneIds, activeTab, registerOrHeartbeatSession]);
 
       const handleConfirmZoneSelection = useCallback(() => {
         if (selectedZoneIds.length === 0) return;
@@ -920,8 +1088,11 @@
       const handleChangeZones = useCallback(async () => {
         setIsZoneSetupConfirmed(false);
         setDeliveries([]);
+        setCompletedOrders([]);
         setSelectedOrder(null);
+        setSelectedCourier(null);
         setCurrentPage(1);
+        setCompletedPage(1);
         try {
           await Promise.all([
             fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}.json`, { method: "DELETE" }),
@@ -958,6 +1129,17 @@
 
         setDeliveries(nextDeliveries);
         setTabCounts(nextCounts);
+
+        if (bundle.completed && Array.isArray(bundle.completed.records)) {
+          const mappedCompleted = bundle.completed.records.map(mapHurrierCompletedRecord);
+          setCompletedOrders(mappedCompleted);
+          setCompletedTotalCount(
+            typeof bundle.completed.metadata?.total_count === "number"
+              ? bundle.completed.metadata.total_count
+              : mappedCompleted.length
+          );
+          setIsCompletedLoading(false);
+        }
 
         if (bundle.stats && Array.isArray(bundle.stats.cities)) {
           const summaries = [];
@@ -1834,6 +2016,365 @@
         </div>
       );
 
+      const visibleCompletedOrders = useMemo(() => {
+        const q = completedSearchQuery.trim().toLowerCase();
+        const filtered = completedOrders.filter((item) => {
+          if (completedCityFilter !== "All Cities" && item.city.toLowerCase() !== completedCityFilter.toLowerCase()) {
+            return false;
+          }
+          if (completedZoneScope === "single" && completedSpecificZoneId) {
+            const targetId = Number(completedSpecificZoneId);
+            const hasZone = (item.zoneObjects || []).some((zo) => Number(zo.id) === targetId);
+            if (!hasZone) return false;
+          }
+          if (!q) return true;
+          return (
+            item.id.toLowerCase().includes(q) ||
+            item.courier.toLowerCase().includes(q) ||
+            item.vendor.toLowerCase().includes(q) ||
+            item.zone.toLowerCase().includes(q)
+          );
+        });
+
+        return [...filtered].sort((a, b) => {
+          if (!a.placedTimestamp || !b.placedTimestamp) return 0;
+          return completedSortAsc ? a.placedTimestamp - b.placedTimestamp : b.placedTimestamp - a.placedTimestamp;
+        });
+      }, [
+        completedOrders,
+        completedSearchQuery,
+        completedCityFilter,
+        completedZoneScope,
+        completedSpecificZoneId,
+        completedSortAsc
+      ]);
+
+      const completedTotalPages = Math.max(1, Math.ceil(Math.max(completedTotalCount, visibleCompletedOrders.length) / 50));
+
+      const completedVisiblePages = useMemo(() => {
+        if (completedTotalPages <= 7) {
+          return Array.from({ length: completedTotalPages }, (_, i) => i + 1);
+        }
+        if (completedPage <= 4) {
+          return [1, 2, 3, 4, 5, "...", completedTotalPages];
+        }
+        if (completedPage >= completedTotalPages - 3) {
+          return [
+            1,
+            "...",
+            completedTotalPages - 4,
+            completedTotalPages - 3,
+            completedTotalPages - 2,
+            completedTotalPages - 1,
+            completedTotalPages
+          ];
+        }
+        return [1, "...", completedPage - 1, completedPage, completedPage + 1, "...", completedTotalPages];
+      }, [completedPage, completedTotalPages]);
+
+      const renderCompletedOrdersView = () => (
+        <div className="mt-4 space-y-4">
+          {/* Hurrier Completed Orders Top Filter Bar (Date, City, Zone, Search) */}
+          <div className="flex flex-wrap items-center gap-3 bg-white p-3.5 rounded-lg border border-gray-200 shadow-sm">
+            {/* Date Picker */}
+            <div className="flex flex-col">
+              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Date</label>
+              <input
+                type="date"
+                value={completedDate}
+                onChange={(e) => {
+                  setCompletedDate(e.target.value || getTodayCairoDateInput());
+                  setCompletedPage(1);
+                }}
+                className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-800 bg-white focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            {/* City Dropdown */}
+            <div className="flex flex-col min-w-[160px]">
+              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">City</label>
+              <select
+                value={completedCityFilter}
+                onChange={(e) => {
+                  setCompletedCityFilter(e.target.value);
+                  setCompletedPage(1);
+                }}
+                className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-800 bg-white focus:outline-none focus:border-blue-500"
+              >
+                <option value="All Cities">All Cities</option>
+                <option value="Cairo">Cairo</option>
+                <option value="Alexandria">Alexandria</option>
+                <option value="Suez">Suez</option>
+              </select>
+            </div>
+
+            {/* Zone Scope Dropdown */}
+            <div className="flex flex-col min-w-[220px]">
+              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Zone</label>
+              <select
+                value={completedZoneScope === "single" ? `zone:${completedSpecificZoneId}` : completedZoneScope}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val.startsWith("zone:")) {
+                    setCompletedZoneScope("single");
+                    setCompletedSpecificZoneId(val.replace("zone:", ""));
+                  } else {
+                    setCompletedZoneScope(val);
+                    setCompletedSpecificZoneId("");
+                  }
+                  setCompletedPage(1);
+                }}
+                className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-800 bg-white focus:outline-none focus:border-blue-500"
+              >
+                <option value="selected">زوناتي المختارة ({selectedZoneIds.length} Zones)</option>
+                <option value="all">All Zones (كل المناطق)</option>
+                {selectedZonesDisplayList.map((z) => (
+                  <option key={z.id} value={`zone:${z.id}`}>
+                    {z.name} ({z.id})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Search order/courier */}
+            <div className="flex flex-col flex-1 min-w-[220px]">
+              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Search</label>
+              <div className="relative flex items-center">
+                <input
+                  type="text"
+                  value={completedSearchQuery}
+                  onChange={(e) => {
+                    setCompletedSearchQuery(e.target.value);
+                    setCompletedPage(1);
+                  }}
+                  placeholder="Search order/courier"
+                  className="w-full pl-3.5 pr-8 py-1.5 border border-gray-300 rounded-md text-sm text-gray-800 bg-white focus:outline-none focus:border-blue-500"
+                />
+                {completedSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCompletedSearchQuery("");
+                      setCompletedPage(1);
+                    }}
+                    className="absolute right-2.5 text-gray-400 hover:text-gray-700 text-xs"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="ml-auto self-end text-xs text-gray-500 pb-1">
+              Page <strong className="text-gray-800">{completedPage}</strong> •{" "}
+              <strong>{visibleCompletedOrders.length}</strong> / 50 per page
+            </div>
+          </div>
+
+          {/* Hurrier Completed Orders Full Columns Table */}
+          <div className="w-full overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm">
+            <table className="w-full text-left text-xs whitespace-nowrap">
+              <thead>
+                <tr className="border-b border-gray-200 text-gray-600 font-bold text-[11px] uppercase bg-gray-50/70">
+                  <th
+                    onClick={() => setCompletedSortAsc((prev) => !prev)}
+                    className="py-3.5 px-4 cursor-pointer hover:text-blue-600 select-none"
+                    title="ترتيب حسب وقت الطلب"
+                  >
+                    PLACED AT {completedSortAsc ? "↑" : "↓"}
+                  </th>
+                  <th className="py-3.5 px-4">CONFIRMATION</th>
+                  <th className="py-3.5 px-3">CITY</th>
+                  <th className="py-3.5 px-3">ZONES</th>
+                  <th className="py-3.5 px-3">COURIER</th>
+                  <th className="py-3.5 px-3">BUSINESS</th>
+                  <th className="py-3.5 px-3">KM</th>
+                  <th className="py-3.5 px-3">ACCEPT TIME</th>
+                  <th className="py-3.5 px-3">RETAILER LATE</th>
+                  <th className="py-3.5 px-3">COURIER LATE</th>
+                  <th className="py-3.5 px-3">WAIT</th>
+                  <th className="py-3.5 px-3">DELIVERY LATE</th>
+                  <th className="py-3.5 px-3">TIME IN BAG</th>
+                  <th className="py-3.5 px-3">ORDER DURATION</th>
+                  <th className="py-3.5 px-3">PREORDER</th>
+                  <th className="py-3.5 px-4">DROPOFF ISSUE</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 text-[13px]">
+                {isCompletedLoading && visibleCompletedOrders.length === 0 ? (
+                  <tr>
+                    <td colSpan={16} className="py-12 text-center text-blue-600 font-semibold text-sm">
+                      ⏳ جاري سحب Completed Orders ليوم {completedDate} (صفحة {completedPage} • 50 أوردر)...
+                    </td>
+                  </tr>
+                ) : visibleCompletedOrders.length === 0 ? (
+                  <tr>
+                    <td colSpan={16} className="py-12 text-center text-gray-500 text-sm">
+                      لا توجد أوردرات مكتملة (Completed Orders) مطابقة للبحث أو التاريخ المحدد.
+                    </td>
+                  </tr>
+                ) : (
+                  visibleCompletedOrders.map((item) => (
+                    <tr
+                      key={item.uid}
+                      onMouseEnter={() => handleOrderRowHover(item)}
+                      onClick={() => setSelectedOrder(item)}
+                      className="hover:bg-blue-50/30 transition-colors cursor-pointer"
+                    >
+                      <td className="py-3.5 px-4 align-top font-medium text-gray-800">
+                        {item.placedAtFormatted}
+                      </td>
+                      <td className="py-3.5 px-4 align-top">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-indigo-600 hover:underline font-semibold">{item.id}</span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              copyToClipboard(`comp-${item.id}`, item.id);
+                            }}
+                            className="text-gray-400 hover:text-gray-700 text-xs px-1"
+                            title="Copy Confirmation Number"
+                          >
+                            {copiedText === `comp-${item.id}` ? "✓" : "⧉"}
+                          </button>
+                        </div>
+                        <div className="text-[11px] text-gray-500 mt-0.5">VO #{item.vo}</div>
+                      </td>
+                      <td className="py-3.5 px-3 align-top text-gray-800">{item.city}</td>
+                      <td className="py-3.5 px-3 align-top max-w-[260px] truncate text-gray-700" title={item.zone}>
+                        {item.zone}
+                      </td>
+                      <td className="py-3.5 px-3 align-top max-w-[210px] truncate">
+                        {item.courier && item.courier !== "-" ? (
+                          <button
+                            type="button"
+                            onMouseEnter={() => handleCourierHover(item.courierId, item.courier)}
+                            onClick={(e) => openCourierModal(e, item.courierId, item.courier)}
+                            className="text-blue-600 hover:underline font-medium truncate max-w-full text-left"
+                            title="اضغط لعرض User ID ورقم موبايل الرايدر"
+                          >
+                            {item.courier}
+                          </button>
+                        ) : (
+                          <span className="text-gray-500">-</span>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-3 align-top max-w-[220px] truncate text-gray-800 font-medium" title={item.vendor}>
+                        {item.vendor}
+                      </td>
+                      <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.distance}</td>
+                      <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.acceptTime}</td>
+                      <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.retailerLate}</td>
+                      <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.courierLate}</td>
+                      <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.waitTime}</td>
+                      <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.deliveryLate}</td>
+                      <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.timeInBag}</td>
+                      <td className="py-3.5 px-3 align-top font-mono font-semibold text-gray-800">{item.orderDuration}</td>
+                      <td className="py-3.5 px-3 align-top text-gray-700">{item.isPreorder ? "Yes" : "No"}</td>
+                      <td className="py-3.5 px-4 align-top text-gray-600">{item.dropoffIssue}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* 50-per-page Pagination Controls */}
+          <div className="pt-2 pb-6 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs text-gray-500">
+              Showing <strong>{(completedPage - 1) * 50 + (visibleCompletedOrders.length > 0 ? 1 : 0)}</strong>–
+              <strong>{(completedPage - 1) * 50 + visibleCompletedOrders.length}</strong> (50 orders / page)
+            </div>
+
+            <div className="flex items-center gap-1 select-none">
+              <button
+                type="button"
+                disabled={completedPage <= 1}
+                onClick={() => {
+                  setCompletedPage((p) => Math.max(1, p - 1));
+                  if (mainContainerRef.current) mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+                className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
+                  completedPage <= 1 ? "text-gray-300 cursor-not-allowed" : "text-gray-600 hover:bg-gray-100"
+                }`}
+              >
+                ‹
+              </button>
+
+              {completedVisiblePages.map((p, idx) =>
+                p === "..." ? (
+                  <span key={`comp-dots-${idx}`} className="px-2 text-gray-400 text-sm">
+                    ...
+                  </span>
+                ) : (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => {
+                      setCompletedPage(Number(p));
+                      if (mainContainerRef.current) mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
+                    }}
+                    className={`min-w-[36px] h-9 px-2.5 flex items-center justify-center text-sm transition-colors ${
+                      Number(completedPage) === Number(p)
+                        ? "border-b-2 border-blue-600 text-blue-600 font-bold"
+                        : "text-gray-700 hover:bg-gray-100 rounded font-medium"
+                    }`}
+                  >
+                    {p}
+                  </button>
+                )
+              )}
+
+              <button
+                type="button"
+                disabled={completedOrders.length < 50 && completedPage >= completedTotalPages}
+                onClick={() => {
+                  setCompletedPage((p) => p + 1);
+                  if (mainContainerRef.current) mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
+                }}
+                className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
+                  completedOrders.length < 50 && completedPage >= completedTotalPages
+                    ? "text-gray-300 cursor-not-allowed"
+                    : "text-gray-600 hover:bg-gray-100"
+                }`}
+              >
+                ›
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const num = Number(completedJumpPage);
+                if (num >= 1) {
+                  setCompletedPage(num);
+                  setCompletedJumpPage("");
+                  if (mainContainerRef.current) mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
+                }
+              }}
+              className="flex items-center gap-1.5 text-xs"
+            >
+              <span className="text-gray-500">Go to:</span>
+              <input
+                type="number"
+                min={1}
+                value={completedJumpPage}
+                onChange={(e) => setCompletedJumpPage(e.target.value)}
+                placeholder="Page"
+                className="w-16 px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:border-blue-500"
+              />
+              <button
+                type="submit"
+                className="px-2.5 py-1 rounded border border-gray-300 bg-white hover:bg-gray-50 font-semibold text-gray-700"
+              >
+                Go
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+
       const totalItemsForPagination = filteredDeliveries.length;
       const totalPages = Math.max(1, Math.ceil(totalItemsForPagination / PAGE_SIZE));
 
@@ -2255,7 +2796,7 @@
                         تحديد زونات الموظف قبل بدء السحب (Independent Zone Gate)
                       </h1>
                       <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        v5.4 • All Zone Pages (50/Page)
+                        ★ v5.5 • Completed Orders (50/Page) + Live Sync
                       </span>
                     </div>
                     <p className="text-xs text-slate-300 mt-0.5">
@@ -2429,7 +2970,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">v5.4 • 50 Orders/Page</span>
+                <span className="font-bold text-emerald-700">★ v5.5 (50/Page • Completed)</span>
                 <span className="font-mono text-gray-400">#{sessionId.slice(-5)}</span>
               </div>
               {employeeName && (
@@ -2557,6 +3098,8 @@
                   <h1 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
                     {activeTab === "Active Couriers"
                       ? "Active Couriers"
+                      : activeTab === "Completed"
+                      ? "Completed Orders"
                       : activeTab === "Dashboard" || activeTab === "Dispatcher Dashboard" || activeTab === "Issues"
                       ? activeTab
                       : `${activeTab} Deliveries ${activeHeaderCount !== undefined ? `(${activeHeaderCount})` : ""}`}
@@ -2564,7 +3107,13 @@
 
                   <button
                     type="button"
-                    onClick={fetchMySessionBundleFromFirebase}
+                    onClick={() => {
+                      if (activeTab === "Completed") {
+                        setIsCompletedLoading(true);
+                        registerOrHeartbeatSession();
+                      }
+                      fetchMySessionBundleFromFirebase();
+                    }}
                     className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 rounded-lg text-xs sm:text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
                   >
                     ↻ Refresh
@@ -2579,6 +3128,8 @@
                   ? renderDispatcherDashboardView()
                   : activeTab === "Issues"
                   ? renderIssuesView()
+                  : activeTab === "Completed"
+                  ? renderCompletedOrdersView()
                   : renderDeliveriesTable()}
               </div>
             </main>
