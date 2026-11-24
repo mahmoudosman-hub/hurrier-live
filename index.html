@@ -1,0 +1,1539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hurrier - Live Operations Dashboard (View Only)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+  </style>
+</head>
+<body class="bg-white text-gray-800">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo, useEffect, useCallback, useRef } = React;
+
+    // --- PRE-CONFIGURED PUBLIC GIST ID (READ-ONLY VIEW FOR EMPLOYEES) ---
+    const DEFAULT_GIST_ID = "cccb6283d24d991ae2656411758acb72";
+
+    // --- CRISP INLINE SVG ICONS (ZERO EXTERNAL ICON DEPENDENCIES) ---
+    const IconSvg = ({ children, size = 16, className = "" }) => (
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={className}
+      >
+        {children}
+      </svg>
+    );
+
+    const SearchIcon = (p) => <IconSvg {...p}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></IconSvg>;
+    const UserIcon = (p) => <IconSvg {...p}><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></IconSvg>;
+    const CoffeeIcon = (p) => <IconSvg {...p}><path d="M17 8h1a4 4 0 1 1 0 8h-1"/><path d="M3 8h14v9a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z"/><line x1="6" x2="6" y1="2" y2="4"/><line x1="10" x2="10" y1="2" y2="4"/><line x1="14" x2="14" y1="2" y2="4"/></IconSvg>;
+    const ChevronDownIcon = (p) => <IconSvg {...p}><path d="m6 9 6 6 6-6"/></IconSvg>;
+    const ChevronUpIcon = (p) => <IconSvg {...p}><path d="m18 15-6-6-6 6"/></IconSvg>;
+    const InfoIcon = (p) => <IconSvg {...p}><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></IconSvg>;
+    const CopyIcon = (p) => <IconSvg {...p}><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></IconSvg>;
+    const CheckIcon = (p) => <IconSvg {...p}><path d="M20 6 9 17l-5-5"/></IconSvg>;
+    const UtensilsIcon = (p) => <IconSvg {...p}><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/><path d="M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></IconSvg>;
+    const BanknoteIcon = (p) => <IconSvg {...p}><rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></IconSvg>;
+    const StoreIcon = (p) => <IconSvg {...p}><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"/><path d="M2 7h20"/></IconSvg>;
+    const RefreshCwIcon = (p) => <IconSvg {...p}><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></IconSvg>;
+    const BoxIcon = (p) => <IconSvg {...p}><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></IconSvg>;
+    const MapPinIcon = (p) => <IconSvg {...p}><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></IconSvg>;
+    const ClockIcon = (p) => <IconSvg {...p}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></IconSvg>;
+    const XIcon = (p) => <IconSvg {...p}><path d="M18 6 6 18"/><path d="m6 6 12 12"/></IconSvg>;
+    const UsersIcon = (p) => <IconSvg {...p}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></IconSvg>;
+    const ActivityIcon = (p) => <IconSvg {...p}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></IconSvg>;
+    const AlertCircleIcon = (p) => <IconSvg {...p}><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></IconSvg>;
+    const FileTextIcon = (p) => <IconSvg {...p}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></IconSvg>;
+    const RadioIcon = (p) => <IconSvg {...p}><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></IconSvg>;
+    const ShieldCheckIcon = (p) => <IconSvg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></IconSvg>;
+    const PlayIcon = (p) => <IconSvg {...p}><polygon points="5 3 19 12 5 21 5 3"/></IconSvg>;
+    const PauseIcon = (p) => <IconSvg {...p}><rect width="4" height="16" x="6" y="4"/><rect width="4" height="16" x="14" y="4"/></IconSvg>;
+    const UploadIcon = (p) => <IconSvg {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></IconSvg>;
+    const Link2Icon = (p) => <IconSvg {...p}><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></IconSvg>;
+    const WifiIcon = (p) => <IconSvg {...p}><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" x2="12.01" y1="20" y2="20"/></IconSvg>;
+
+    // --- INITIAL SNAPSHOT DATA ---
+    const MOCK_DELIVERIES = [
+      {
+        id: "4725665949",
+        orderCode: "HF_EG4725665949",
+        vendor: "المخبز اللبناني الأصلي, فيصل - المطبعة",
+        vo: "3507",
+        deadline: "-172h 18min",
+        courier: "Ahmed Abdelaziz Zaki Abdelaziz _EL ABTAL(Blacklist)",
+        courierId: 3138000,
+        status: "Left Pickup",
+        time_in: "-172h 18min",
+        time_at: "November 16, 9:59 pm",
+        zone: "Haram sp, Haram nesting sp, Haram sp 2",
+        city: "Cairo",
+        instructions: ["Cash", "Restaurants"],
+        tab: "Active",
+        distance: "2.49 km",
+        orderValue: "166.00 EGP",
+        pickupAddress: "فيصل شارع ٢٨٢ الملك فيصل عمارات الإسكان والتعمير",
+        dropoffAddress: "Tersa ٨ فرقان - شقة ٢ - الدور ١٠",
+        customerName: "Youssef Ashraaf",
+        items: [{ name: "منقوشة ميكس جبن", qty: 2, price: "244.00 EGP" }],
+        transitions: [
+          { state: "queued", time: "21:30:01", by: "order_create_post_processing_worker" },
+          { state: "dispatched", time: "21:30:21", by: "auto_dispatching (AI)" },
+          { state: "left_pickup", time: "22:09:04", by: "courier_app" }
+        ]
+      },
+      {
+        id: "4737058883",
+        orderCode: "HF_EG4737058883",
+        vendor: "ريماس لاند, الهرم - الطالبيه - 3",
+        vo: "3793",
+        deadline: "-51h 47min",
+        courier: "Youssef Rabie Mabrouk Mahmoud _READY",
+        courierId: 2483300,
+        status: "Left Pickup",
+        time_in: "-51h 47min",
+        time_at: "November 21, 10:29 pm",
+        zone: "Haram sp, Haram nesting sp, Haram sp 2",
+        city: "Cairo",
+        instructions: ["Cash", "Dairy Products"],
+        tab: "Active",
+        distance: "4.74 km",
+        orderValue: "378.00 EGP",
+        pickupAddress: "ش ترسا الرئيسي بجوار طلبات مارت",
+        dropoffAddress: "مهدى البطران بيت خاص",
+        customerName: "Customer #218658342",
+        items: [{ name: "Dairy & Grocery Assortment", qty: 1, price: "378.00 EGP" }],
+        transitions: [
+          { state: "queued", time: "21:53:14", by: "system" },
+          { state: "left_pickup", time: "22:15:00", by: "courier_app" }
+        ]
+      },
+      {
+        id: "4741714149",
+        orderCode: "HF_EG4741714149",
+        vendor: "بلبن، المنيل",
+        vo: "9084",
+        deadline: "-51min",
+        courier: "Hassan Moustafa Abdelnaem Amin _EL EZZ",
+        courierId: 2314203,
+        status: "Near Dropoff",
+        time_in: "-51min",
+        time_at: "November 24, 1:26 am",
+        zone: "Manial nesting, Tahrir nesting",
+        city: "Cairo",
+        instructions: ["Restaurants"],
+        tab: "Active",
+        distance: "3.88 km",
+        orderValue: "197.99 EGP",
+        pickupAddress: "المنيل الرئيسي",
+        dropoffAddress: "مستشفى الطلبة جامعة القاهرة",
+        customerName: "Customer #178203258",
+        items: [{ name: "قشطوطة مانجو", qty: 2, price: "197.99 EGP" }],
+        transitions: [
+          { state: "queued", time: "01:02:11", by: "system" },
+          { state: "near_dropoff", time: "01:24:30", by: "gps_geofence" }
+        ]
+      },
+      {
+        id: "4741747871",
+        orderCode: "HF_EG4741747871",
+        vendor: "صاج و شاورما، المنيل تي جو",
+        vo: "2754",
+        deadline: "15min",
+        courier: "Pending Acceptance",
+        status: "Queued",
+        time_in: "2m",
+        time_at: "November 24, 2:24 am",
+        zone: "Manial sp, Tahrir, Manial nesting",
+        city: "Cairo",
+        instructions: ["Restaurants"],
+        tab: "Queued",
+        distance: "0.52 km",
+        orderValue: "201.60 EGP",
+        pickupAddress: "85 محطة الغمراوي شارع المنيل الرئيسي امام بنك القاهرة",
+        dropoffAddress: "حافظ بهجت 10",
+        customerName: "Customer #239985286",
+        items: [{ name: "ساندوتش شاورما سوري", qty: 2, price: "201.60 EGP" }],
+        transitions: [{ state: "queued", time: "02:06:30", by: "system" }]
+      },
+      {
+        id: "4741742564",
+        orderCode: "HF_EG4741742564",
+        vendor: "بيتزا الروضة, المنيل",
+        vo: "9927",
+        deadline: "10min",
+        courier: "Alhusseini Abdeen Bakri Hassan _TOP DELIVERY",
+        courierId: 3194100,
+        status: "Courier Notified",
+        time_in: "1m",
+        time_at: "November 24, 2:23 am",
+        zone: "Manial sp, Tahrir, Manial nesting",
+        city: "Cairo",
+        instructions: ["Cash", "Restaurants"],
+        tab: "Dispatched",
+        distance: "2.48 km",
+        orderValue: "153.74 EGP",
+        pickupAddress: "مصر القديمة 17 ش المماليك منيل الروضة",
+        dropoffAddress: "شارع القصر العيني ٧٣",
+        customerName: "Customer #508808299",
+        items: [{ name: "بيتزا مارجريتا وسط", qty: 1, price: "153.74 EGP" }],
+        transitions: [
+          { state: "queued", time: "01:54:06", by: "system" },
+          { state: "courier_notified", time: "02:15:30", by: "auto_dispatching" }
+        ]
+      }
+    ];
+
+    const MOCK_COURIERS = [
+      { id: 10162, zone: "Manial nesting", city: "Cairo", starting: 0, working: 11, ending: 17, break: 4, tempBreak: 0, delay: "9.7m", queued: 4, dispatched: 2, active: 8, puPercent: 50, doPercent: 50, zeroDel: 9, lowDel: 6, medDel: 2, highDel: 0 },
+      { id: 10004, zone: "Manial sp", city: "Cairo", starting: 0, working: 62, ending: 40, break: 2, tempBreak: 2, delay: "9.7m", queued: 3, dispatched: 17, active: 45, puPercent: 40, doPercent: 60, zeroDel: 2, lowDel: 22, medDel: 16, highDel: 2 },
+      { id: 10022, zone: "Tahrir", city: "Cairo", starting: 0, working: 83, ending: 60, break: 4, tempBreak: 1, delay: "9.7m", queued: 5, dispatched: 19, active: 68, puPercent: 30, doPercent: 70, zeroDel: 2, lowDel: 35, medDel: 26, highDel: 0 },
+      { id: 10163, zone: "Tahrir nesting", city: "Cairo", starting: 0, working: 19, ending: 19, break: 3, tempBreak: 1, delay: "9.7m", queued: 3, dispatched: 3, active: 18, puPercent: 39, doPercent: 61, zeroDel: 3, lowDel: 13, medDel: 4, highDel: 0 },
+      { id: 10181, zone: "Haram nesting pt", city: "Cairo", starting: 1, working: 28, ending: 40, break: 6, tempBreak: 2, delay: "7.1m", queued: 10, dispatched: 1, active: 27, puPercent: 63, doPercent: 37, zeroDel: 17, lowDel: 25, medDel: 1, highDel: 0 },
+      { id: 10125, zone: "Haram nesting sp", city: "Cairo", starting: 0, working: 2, ending: 6, break: 4, tempBreak: 1, delay: "7.1m", queued: 8, dispatched: 0, active: 2, puPercent: 0, doPercent: 100, zeroDel: 4, lowDel: 2, medDel: 0, highDel: 0 },
+      { id: 10182, zone: "Haram pt", city: "Cairo", starting: 1, working: 79, ending: 66, break: 6, tempBreak: 1, delay: "7.1m", queued: 9, dispatched: 12, active: 66, puPercent: 43, doPercent: 57, zeroDel: 3, lowDel: 49, medDel: 14, highDel: 0 },
+      { id: 10183, zone: "Haram pt 2", city: "Cairo", starting: 1, working: 78, ending: 65, break: 7, tempBreak: 1, delay: "7.1m", queued: 9, dispatched: 17, active: 66, puPercent: 43, doPercent: 57, zeroDel: 3, lowDel: 43, medDel: 19, highDel: 0 },
+      { id: 10018, zone: "Haram sp", city: "Cairo", starting: 0, working: 22, ending: 20, break: 5, tempBreak: 0, delay: "7.1m", queued: 9, dispatched: 3, active: 19, puPercent: 43, doPercent: 57, zeroDel: 2, lowDel: 14, medDel: 4, highDel: 0 },
+      { id: 10139, zone: "Haram sp 2", city: "Cairo", starting: 0, working: 42, ending: 36, break: 7, tempBreak: 1, delay: "7.1m", queued: 9, dispatched: 4, active: 36, puPercent: 34, doPercent: 66, zeroDel: 5, lowDel: 28, medDel: 6, highDel: 0 },
+      { id: 10074, zone: "Hadayek el ahram sp", city: "Cairo", starting: 0, working: 71, ending: 93, break: 13, tempBreak: 4, delay: "2.8m", queued: 21, dispatched: 4, active: 63, puPercent: 26, doPercent: 74, zeroDel: 41, lowDel: 48, medDel: 7, highDel: 0 }
+    ];
+
+    const DISPATCHER_STATS = [
+      { picked_by: "ahd.ahmed@talabat.com", picked: 2, processing: 0, max_picked_for: "2h 11m" },
+      { picked_by: "ahmed.emadeldin@talabat.com", picked: 3, processing: 0, max_picked_for: "23h 39m" },
+      { picked_by: "mohamed.badran@talabat.com", picked: 2, processing: 0, max_picked_for: "2h 02m" },
+      { picked_by: "msobhy@talabat.com", picked: 3, processing: 0, max_picked_for: "2h 15m" },
+      { picked_by: "salma.ashraf@talabat.com", picked: 1, processing: 0, max_picked_for: "23h 14m" }
+    ];
+
+    const CITY_KPI_SUMMARY = [
+      {
+        city: "Cairo",
+        queued: 188,
+        queuedPct: 5,
+        dispatched: 491,
+        dispatchedPct: 14,
+        active: 2600,
+        activePct: 81,
+        delay: "11.6m",
+        puPct: 36,
+        doPct: 64,
+        zeroDel: 941,
+        lowDel: 1665,
+        medDel: 579,
+        highDel: 50,
+        starting: 10,
+        working: 2594,
+        ending: 640,
+        tempBreak: 191,
+        break: 792
+      }
+    ];
+
+    const SIDEBAR_ITEMS = [
+      { label: 'Dashboard', id: 'Dashboard' },
+      { label: 'Issues', id: 'Issues' },
+      { label: 'Active Couriers', id: 'Active Couriers' },
+      { label: 'Actionable', count: 23, id: 'Actionable' },
+      { label: 'Pre-order', count: 6, id: 'Pre-order' },
+      { label: 'Waiting for Assembly', count: 0, id: 'Waiting for Assembly' },
+      { label: 'Queued', count: 37, id: 'Queued' },
+      { label: 'Dispatched', count: 78, id: 'Dispatched' },
+      { label: 'Active', count: 458, id: 'Active' },
+      { label: 'Upcoming Orders', id: 'Upcoming' },
+      { label: 'Cancelled Orders', id: 'Cancelled' },
+      { label: 'Completed Orders', id: 'Completed' },
+      { label: 'Dispatcher Dashboard', id: 'Dispatcher Dashboard', className: 'mt-6' },
+    ];
+
+    function buildGitHubGistCollectorScript(gistId, gistToken) {
+      const safeGistId = (gistId || DEFAULT_GIST_ID).trim();
+      const safeToken = (gistToken || 'YOUR_GITHUB_GIST_TOKEN').trim();
+      return `// شغّل الكود ده في Console تاب Hurrier المفتوح عندك (يرفع التحديثات لـ GitHub Gist بأمان)
+(function startHurrierGitHubRelay() {
+  const GIST_ID = "${safeGistId}";
+  const GITHUB_TOKEN = "${safeToken}";
+  const ZONES = "starting_point_id[]=10022&starting_point_id[]=10163&starting_point_id[]=10162&starting_point_id[]=10004&starting_point_id[]=10181&starting_point_id[]=10125&starting_point_id[]=10182&starting_point_id[]=10183&starting_point_id[]=10018&starting_point_id[]=10139&starting_point_id[]=10074";
+  const BASE = "https://eg.me.logisticsbackoffice.com/api";
+
+  async function syncToGitHub() {
+    try {
+      const opts = { credentials: "include", headers: { "Accept": "application/json" } };
+      const [stats, active, queued, dispatched, actionable, preorder, dispatchers] = await Promise.all([
+        fetch(\`\${BASE}/dispatcher-dashboard/stats?\${ZONES}\`, opts).then(r => r.json()),
+        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/active?\${ZONES}&page=1&per_page=50\`, opts).then(r => r.json()),
+        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/queued?\${ZONES}&page=1&per_page=50\`, opts).then(r => r.json()),
+        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/dispatched?\${ZONES}&page=1&per_page=50\`, opts).then(r => r.json()),
+        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/actionable?\${ZONES}&page=1&per_page=50\`, opts).then(r => r.json()),
+        fetch(\`\${BASE}/dispatcher-dashboard/deliveries/preorder?\${ZONES}&page=1&per_page=50\`, opts).then(r => r.json()),
+        fetch(\`\${BASE}/issue-service/dispatcher_dashboard\`, opts).then(r => r.json()).catch(() => [])
+      ]);
+
+      const payload = JSON.stringify({
+        stats, active, queued, dispatched, actionable, preorder, dispatchers,
+        syncedAt: new Date().toISOString()
+      });
+
+      const ghRes = await fetch(\`https://api.github.com/gists/\${GIST_ID}\`, {
+        method: "PATCH",
+        headers: {
+          "Accept": "application/vnd.github+json",
+          "Authorization": \`Bearer \${GITHUB_TOKEN}\`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          files: {
+            "hurrier-live.json": { content: payload }
+          }
+        })
+      });
+
+      if (!ghRes.ok) throw new Error("GitHub API " + ghRes.status);
+      console.log("[Hurrier -> GitHub] Synced at", new Date().toLocaleTimeString());
+    } catch (err) {
+      console.warn("[Hurrier -> GitHub] Sync error:", err.message);
+    }
+  }
+
+  syncToGitHub();
+  window.__hurrierGitHubTimer && clearInterval(window.__hurrierGitHubTimer);
+  window.__hurrierGitHubTimer = setInterval(syncToGitHub, 15000);
+})();`;
+    }
+
+    function formatRelativeDeadline(isoDate, isPreorder = false) {
+      if (!isoDate) return '-';
+      const target = new Date(isoDate);
+      if (Number.isNaN(target.getTime())) return '-';
+      if (isPreorder) {
+        return target.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      }
+      const diffMins = Math.round((target.getTime() - Date.now()) / 60000);
+      const absMins = Math.abs(diffMins);
+      const sign = diffMins < 0 ? '-' : '';
+      if (absMins >= 60) {
+        const h = Math.floor(absMins / 60);
+        const m = absMins % 60;
+        return `${sign}${h}h ${m}min`;
+      }
+      return `${sign}${absMins}min`;
+    }
+
+    function formatReadableTimestamp(isoDate) {
+      if (!isoDate) return '-';
+      const d = new Date(isoDate);
+      if (Number.isNaN(d.getTime())) return '-';
+      return d.toLocaleString('en-US', {
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+    }
+
+    function mapHurrierRecordToDelivery(rec, tabName) {
+      const order = rec.order || {};
+      const verticalMap = {
+        restaurants: 'Restaurants',
+        darkstores: 'Darkstores',
+        dairy_products: 'Dairy Products',
+        convenience: 'Convenience',
+        courier_business: 'Courier Business'
+      };
+      const instructions = [];
+      if (order.is_cash_collection) instructions.push('Cash');
+      const vLabel = verticalMap[order.vertical_type] || (order.vertical_type ? order.vertical_type : 'Restaurants');
+      instructions.push(vLabel);
+
+      const statusLabel = (rec.status || 'queued')
+        .split('_')
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+
+      const deadlineStr = formatRelativeDeadline(order.scheduled_dropoff_at, tabName === 'Pre-order');
+      const distKm = typeof rec.distance === 'number' ? `${(rec.distance / 1000).toFixed(2)} km` : '-';
+      const valEgp = typeof order.order_value === 'number' ? `${(order.order_value / 100).toFixed(2)} EGP` : '-';
+
+      return {
+        id: String(order.code || rec.id),
+        orderCode: order.order_code || `HF_EG${order.code || rec.id}`,
+        vendor: order.vendor_name || 'Unknown Vendor',
+        vo: order.vendor_order_number || '-',
+        deadline: deadlineStr,
+        courier: rec.courier_name || (tabName === 'Queued' ? 'Assigning...' : '-'),
+        courierId: rec.courier_id || null,
+        status: statusLabel,
+        time_in: deadlineStr.startsWith('-') ? deadlineStr : '-',
+        time_at: formatReadableTimestamp(order.scheduled_dropoff_at),
+        zone: Array.isArray(rec.starting_points) ? rec.starting_points.slice(0, 3).join(', ') : 'Cairo',
+        city: 'Cairo',
+        instructions,
+        tab: tabName,
+        distance: distKm,
+        orderValue: valEgp,
+        pickupAddress: order.pickup_address?.street_address || '-',
+        dropoffAddress: order.dropoff_address?.street_address || '-',
+        customerName: order.tags?.find((t) => t.startsWith('external_address_id:'))?.replace('external_address_id:', 'Customer #') || 'Customer',
+        items: [{ name: `${order.vendor_name || 'Order'} #${order.vendor_order_number || ''}`, qty: 1, price: valEgp }],
+        transitions: [
+          { state: rec.status || 'queued', time: formatReadableTimestamp(order.restaurant_confirmed_at || order.send_to_restaurant_at), by: 'hurrier_live' }
+        ]
+      };
+    }
+
+    const InstructionPill = ({ type }) => {
+      let Icon = BoxIcon;
+      if (type === 'Cash') Icon = BanknoteIcon;
+      if (type === 'Restaurants') Icon = UtensilsIcon;
+      if (type === 'Darkstores') Icon = StoreIcon;
+
+      return (
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 border border-gray-300 rounded-full text-xs font-medium text-gray-700 bg-white shadow-sm">
+          <Icon size={13} className="text-gray-600" />
+          <span>{type}</span>
+        </div>
+      );
+    };
+
+    function App() {
+      const initialGistId = useMemo(() => {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('gist') || DEFAULT_GIST_ID;
+      }, []);
+
+      const [activeTab, setActiveTab] = useState('Active');
+      const [searchQuery, setSearchQuery] = useState('');
+      const [selectedCity, setSelectedCity] = useState('All Cities');
+      const [expandedZoneId, setExpandedZoneId] = useState(null);
+      const [selectedOrder, setSelectedOrder] = useState(null);
+      const [copiedId, setCopiedId] = useState(null);
+      const [lastRefreshed, setLastRefreshed] = useState('Waiting for first sync...');
+
+      const [deliveries, setDeliveries] = useState(MOCK_DELIVERIES);
+      const [couriers, setCouriers] = useState(MOCK_COURIERS);
+      const [citySummary, setCitySummary] = useState(CITY_KPI_SUMMARY);
+      const [dispatcherStats, setDispatcherStats] = useState(DISPATCHER_STATS);
+      const [tabCounts, setTabCounts] = useState({
+        Actionable: 23,
+        'Pre-order': 6,
+        'Waiting for Assembly': 0,
+        Queued: 37,
+        Dispatched: 78,
+        Active: 458
+      });
+
+      const [gistId, setGistId] = useState(initialGistId);
+      const [gistToken, setGistToken] = useState('');
+      const cachedGistRawUrlRef = useRef('');
+      const [syncMode, setSyncMode] = useState('live');
+      const [isAutoRefresh, setIsAutoRefresh] = useState(true);
+      const [refreshIntervalSec, setRefreshIntervalSec] = useState(15);
+      const [countdown, setCountdown] = useState(15);
+      const [syncStatus, setSyncStatus] = useState('idle');
+      const [syncError, setSyncError] = useState('');
+      const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+      const [modalTab, setModalTab] = useState('github');
+      const [pasteTargetTab, setPasteTargetTab] = useState('Active');
+      const [rawJsonInput, setRawJsonInput] = useState('');
+      const [copiedSnippet, setCopiedSnippet] = useState(null);
+
+      const sidebarItemsWithCounts = useMemo(() => {
+        return SIDEBAR_ITEMS.map((item) =>
+          Object.prototype.hasOwnProperty.call(tabCounts, item.id)
+            ? { ...item, count: tabCounts[item.id] }
+            : item
+        );
+      }, [tabCounts]);
+
+      const applyHurrierBundle = useCallback((bundle) => {
+        if (!bundle || bundle.empty || Object.keys(bundle).length === 0) return;
+
+        const tabBuckets = [
+          { key: 'active', tab: 'Active' },
+          { key: 'queued', tab: 'Queued' },
+          { key: 'dispatched', tab: 'Dispatched' },
+          { key: 'actionable', tab: 'Actionable' },
+          { key: 'preorder', tab: 'Pre-order' }
+        ];
+
+        let hasAnyDelivery = false;
+        const updatedMap = new Map();
+        const nextCounts = {};
+
+        tabBuckets.forEach(({ key, tab }) => {
+          const payload = bundle[key];
+          if (payload && Array.isArray(payload.records)) {
+            hasAnyDelivery = true;
+            const mapped = payload.records.map((r) => mapHurrierRecordToDelivery(r, tab));
+            updatedMap.set(tab, mapped);
+            nextCounts[tab] = payload.metadata?.total_count ?? mapped.length;
+          }
+        });
+
+        if (hasAnyDelivery) {
+          setDeliveries((prev) => {
+            const preserved = prev.filter((d) => !updatedMap.has(d.tab));
+            const incoming = Array.from(updatedMap.values()).flat();
+            return [...incoming, ...preserved];
+          });
+          setTabCounts((prev) => ({ ...prev, ...nextCounts }));
+        }
+
+        if (bundle.stats && Array.isArray(bundle.stats.cities)) {
+          const newSummaries = [];
+          const newZoneRows = [];
+
+          bundle.stats.cities.forEach((c) => {
+            const s = c.stat || {};
+            newSummaries.push({
+              city: c.city_name,
+              queued: s.queued_count ?? 0,
+              queuedPct: s.queued_percent ?? 0,
+              dispatched: s.dispatched_count ?? 0,
+              dispatchedPct: s.dispatched_percent ?? 0,
+              active: s.active_count ?? 0,
+              activePct: s.active_percent ?? 0,
+              delay: `${Number(s.delay || 0).toFixed(1)}m`,
+              puPct: s.picked_up_percent ?? 0,
+              doPct: s.drop_off_percent ?? 0,
+              zeroDel: s.zero_deliveries ?? 0,
+              lowDel: s.low_deliveries ?? 0,
+              medDel: s.medium_deliveries ?? 0,
+              highDel: s.high_deliveries ?? 0,
+              starting: s.couriers_in_starting ?? 0,
+              working: s.couriers_in_working ?? 0,
+              ending: s.couriers_in_ending ?? 0,
+              tempBreak: s.couriers_in_temp_break ?? 0,
+              break: s.couriers_in_break ?? 0
+            });
+
+            (c.zones || []).forEach((z) => {
+              const zDelay = `${Number(z.stat?.delay || 0).toFixed(1)}m`;
+              (z.starting_points || []).forEach((sp) => {
+                const st = sp.stat || {};
+                newZoneRows.push({
+                  id: sp.id,
+                  zone: sp.name,
+                  city: c.city_name,
+                  starting: st.couriers_in_starting ?? 0,
+                  working: st.couriers_in_working ?? 0,
+                  ending: st.couriers_in_ending ?? 0,
+                  break: st.couriers_in_break ?? 0,
+                  tempBreak: st.couriers_in_temp_break ?? 0,
+                  delay: st.delay ? `${Number(st.delay).toFixed(1)}m` : zDelay,
+                  queued: st.queued_count ?? 0,
+                  dispatched: st.dispatched_count ?? 0,
+                  active: st.active_count ?? 0,
+                  puPercent: st.picked_up_percent ?? 0,
+                  doPercent: st.drop_off_percent ?? 0,
+                  zeroDel: st.zero_deliveries ?? 0,
+                  lowDel: st.low_deliveries ?? 0,
+                  medDel: st.medium_deliveries ?? 0,
+                  highDel: st.high_deliveries ?? 0
+                });
+              });
+            });
+          });
+
+          if (newSummaries.length > 0) setCitySummary(newSummaries);
+          if (newZoneRows.length > 0) setCouriers(newZoneRows);
+        }
+
+        if (Array.isArray(bundle.dispatchers) && bundle.dispatchers.length > 0) {
+          setDispatcherStats(
+            bundle.dispatchers.map((d) => ({
+              picked_by: d.picked_by,
+              picked: d.picked ?? 0,
+              processing: d.processing ?? 0,
+              max_picked_for: d.min_picked_at ? formatRelativeDeadline(d.min_picked_at).replace('-', '') : '-'
+            }))
+          );
+        }
+
+        const now = new Date();
+        setLastRefreshed(now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      }, []);
+
+      const fetchLiveFeed = useCallback(async () => {
+        setSyncStatus('syncing');
+        setSyncError('');
+        try {
+          const cleanId = gistId.trim();
+          if (!cleanId) throw new Error('أدخل Gist ID أولاً');
+
+          let data = null;
+          if (cachedGistRawUrlRef.current) {
+            const rawRes = await fetch(`${cachedGistRawUrlRef.current}?t=${Date.now()}`, { cache: 'no-store' });
+            if (rawRes.ok) {
+              data = await rawRes.json();
+            } else {
+              cachedGistRawUrlRef.current = '';
+            }
+          }
+
+          if (!data) {
+            const apiRes = await fetch(`https://api.github.com/gists/${cleanId}`, {
+              headers: { Accept: 'application/vnd.github+json' },
+              cache: 'no-store'
+            });
+            if (!apiRes.ok) throw new Error(`GitHub Gist HTTP ${apiRes.status}`);
+            const gistMeta = await apiRes.json();
+            const fileEntry =
+              gistMeta.files?.['hurrier-live.json'] || Object.values(gistMeta.files || {})[0];
+            if (!fileEntry || !fileEntry.content) {
+              throw new Error('ملف hurrier-live.json غير موجود داخل الـ Gist');
+            }
+            if (fileEntry.raw_url) {
+              cachedGistRawUrlRef.current = fileEntry.raw_url.replace(/\/raw\/[a-f0-9]{40}\//, '/raw/');
+            }
+            data = JSON.parse(fileEntry.content);
+          }
+
+          applyHurrierBundle(data);
+          setSyncStatus('connected');
+        } catch (err) {
+          setSyncStatus('error');
+          setSyncError(err?.message || 'في انتظار وصول أول تحديث من متصفح Hurrier...');
+        }
+      }, [gistId, applyHurrierBundle]);
+
+      useEffect(() => {
+        fetchLiveFeed();
+      }, [fetchLiveFeed]);
+
+      useEffect(() => {
+        if (syncMode !== 'live' || !isAutoRefresh) return;
+        setCountdown(refreshIntervalSec);
+        const timer = setInterval(() => {
+          setCountdown((prev) => {
+            if (prev <= 1) {
+              fetchLiveFeed();
+              return refreshIntervalSec;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+        return () => clearInterval(timer);
+      }, [syncMode, isAutoRefresh, refreshIntervalSec, fetchLiveFeed]);
+
+      const handleCopyId = (e, id) => {
+        e.stopPropagation();
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(id).catch(() => {});
+        }
+        setCopiedId(id);
+        setTimeout(() => setCopiedId(null), 1500);
+      };
+
+      const handleCopyCode = (key, text) => {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).catch(() => {});
+        }
+        setCopiedSnippet(key);
+        setTimeout(() => setCopiedSnippet(null), 1800);
+      };
+
+      const employeeShareLink = useMemo(() => {
+        const base =
+          window.location.origin && window.location.origin !== 'null'
+            ? `${window.location.origin}${window.location.pathname}`
+            : 'https://mahmoudosman-hub.github.io/hurrier-live/';
+        return base;
+      }, []);
+
+      const generatedGistScript = useMemo(
+        () => buildGitHubGistCollectorScript(gistId, gistToken),
+        [gistId, gistToken]
+      );
+
+      const handleApplyPastedJson = () => {
+        try {
+          const parsed = JSON.parse(rawJsonInput);
+          if (parsed.cities) {
+            applyHurrierBundle({ stats: parsed });
+          } else if (Array.isArray(parsed.records)) {
+            applyHurrierBundle({ [pasteTargetTab.toLowerCase().replace('-', '')]: parsed });
+          } else if (parsed.active || parsed.queued || parsed.stats) {
+            applyHurrierBundle(parsed);
+          } else if (Array.isArray(parsed)) {
+            applyHurrierBundle({ dispatchers: parsed });
+          }
+          setRawJsonInput('');
+          setIsSyncModalOpen(false);
+        } catch {
+          setSyncError('صيغة JSON غير صحيحة');
+        }
+      };
+
+      const handleRefresh = () => {
+        fetchLiveFeed();
+        setCountdown(refreshIntervalSec);
+      };
+
+      const filteredCouriers = useMemo(() => {
+        return couriers.filter((c) => {
+          const matchesCity = selectedCity === 'All Cities' || c.city === selectedCity;
+          const matchesSearch =
+            !searchQuery.trim() ||
+            c.zone.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            String(c.id).includes(searchQuery.trim());
+          return matchesCity && matchesSearch;
+        });
+      }, [couriers, selectedCity, searchQuery]);
+
+      const filteredDeliveries = useMemo(() => {
+        return deliveries.filter((d) => {
+          const matchesTab = d.tab === activeTab;
+          const matchesCity = selectedCity === 'All Cities' || d.city === selectedCity;
+          const q = searchQuery.trim().toLowerCase();
+          const matchesSearch =
+            !q ||
+            d.id.toLowerCase().includes(q) ||
+            d.vendor.toLowerCase().includes(q) ||
+            d.courier.toLowerCase().includes(q) ||
+            d.zone.toLowerCase().includes(q);
+          return matchesTab && matchesCity && matchesSearch;
+        });
+      }, [deliveries, activeTab, selectedCity, searchQuery]);
+
+      const renderDashboardOverview = () => {
+        const visibleCities = citySummary.filter(
+          (c) => selectedCity === 'All Cities' || c.city === selectedCity
+        );
+
+        return (
+          <div className="mt-6 space-y-6">
+            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
+                  Region Performance &amp; Rider Shifts
+                </span>
+                <span className="text-xs text-gray-500">Read-Only Live View</span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-gray-500 font-semibold bg-white">
+                      <th className="py-3 px-4">REGION</th>
+                      <th className="py-3 px-3">QUEUED</th>
+                      <th className="py-3 px-3">DISP</th>
+                      <th className="py-3 px-3">ACTIVE</th>
+                      <th className="py-3 px-3">DELAY</th>
+                      <th className="py-3 px-3">PU / DO</th>
+                      <th className="py-3 px-3">0 / 1 / 2 / 3+ DEL</th>
+                      <th className="py-3 px-3">START</th>
+                      <th className="py-3 px-3">WORK</th>
+                      <th className="py-3 px-3">END</th>
+                      <th className="py-3 px-3">TEMP</th>
+                      <th className="py-3 px-3">BREAK</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 text-sm">
+                    {visibleCities.map((row) => (
+                      <tr key={row.city} className="hover:bg-gray-50">
+                        <td className="py-3.5 px-4 font-semibold text-gray-900">{row.city}</td>
+                        <td className="py-3.5 px-3">
+                          <span className="font-semibold text-gray-800">{row.queued}</span>{' '}
+                          <span className="text-xs text-gray-400">({row.queuedPct}%)</span>
+                        </td>
+                        <td className="py-3.5 px-3">
+                          <span className="font-semibold text-gray-800">{row.dispatched}</span>{' '}
+                          <span className="text-xs text-gray-400">({row.dispatchedPct}%)</span>
+                        </td>
+                        <td className="py-3.5 px-3">
+                          <span className="font-semibold text-blue-600">{row.active}</span>{' '}
+                          <span className="text-xs text-gray-400">({row.activePct}%)</span>
+                        </td>
+                        <td className="py-3.5 px-3 font-semibold text-[#d32f2f]">{row.delay}</td>
+                        <td className="py-3.5 px-3 text-gray-700">
+                          {row.puPct}% / {row.doPct}%
+                        </td>
+                        <td className="py-3.5 px-3 text-xs text-gray-600 font-mono">
+                          {row.zeroDel} / {row.lowDel} / {row.medDel} / {row.highDel}
+                        </td>
+                        <td className="py-3.5 px-3 text-gray-700">{row.starting}</td>
+                        <td className="py-3.5 px-3 font-semibold text-emerald-700">{row.working}</td>
+                        <td className="py-3.5 px-3 text-amber-700">{row.ending}</td>
+                        <td className="py-3.5 px-3 text-gray-600">{row.tempBreak}</td>
+                        <td className="py-3.5 px-3 text-gray-600">{row.break}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
+                  Starting Points Breakdown ({filteredCouriers.length} Zones)
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-gray-500 font-semibold">
+                      <th className="py-3 px-4">STARTING POINT</th>
+                      <th className="py-3 px-3">QUEUED</th>
+                      <th className="py-3 px-3">DISP</th>
+                      <th className="py-3 px-3">ACTIVE</th>
+                      <th className="py-3 px-3">DELAY</th>
+                      <th className="py-3 px-3">PU / DO</th>
+                      <th className="py-3 px-3">WORK</th>
+                      <th className="py-3 px-3">END</th>
+                      <th className="py-3 px-3">BREAK</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 text-sm">
+                    {filteredCouriers.map((sp) => (
+                      <tr key={sp.id} className="hover:bg-gray-50">
+                        <td className="py-3 px-4 font-medium text-gray-900">{sp.zone}</td>
+                        <td className="py-3 px-3">{sp.queued}</td>
+                        <td className="py-3 px-3">{sp.dispatched}</td>
+                        <td className="py-3 px-3 font-medium text-blue-600">{sp.active}</td>
+                        <td className={`py-3 px-3 font-medium ${parseFloat(sp.delay) > 5 ? 'text-[#d32f2f]' : 'text-gray-600'}`}>
+                          {sp.delay}
+                        </td>
+                        <td className="py-3 px-3 text-gray-600">{sp.puPercent}% / {sp.doPercent}%</td>
+                        <td className="py-3 px-3 font-medium text-gray-800">{sp.working}</td>
+                        <td className="py-3 px-3 text-gray-600">{sp.ending}</td>
+                        <td className="py-3 px-3 text-gray-600">{sp.break}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      const renderDispatcherDashboard = () => (
+        <div className="mt-6 bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+          <table className="w-full text-left text-sm whitespace-nowrap">
+            <thead>
+              <tr className="border-b border-gray-200 text-gray-500 font-semibold text-xs bg-gray-50">
+                <th className="py-3.5 px-4">EMAIL</th>
+                <th className="py-3.5 px-4">ISSUES PICKED</th>
+                <th className="py-3.5 px-4">PROCESSING</th>
+                <th className="py-3.5 px-4">MAX PICKED FOR</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {dispatcherStats.map((disp, idx) => (
+                <tr key={idx} className="hover:bg-gray-50">
+                  <td className="py-3.5 px-4 font-medium text-gray-800">{disp.picked_by}</td>
+                  <td className="py-3.5 px-4">
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700">
+                      {disp.picked}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-4 text-gray-600">{disp.processing}</td>
+                  <td className="py-3.5 px-4 text-gray-600 font-mono text-xs">{disp.max_picked_for}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+
+      const renderContent = () => {
+        if (activeTab === 'Dashboard') return renderDashboardOverview();
+        if (activeTab === 'Dispatcher Dashboard') return renderDispatcherDashboard();
+
+        if (activeTab === 'Active Couriers') {
+          return (
+            <div className="mt-6 w-full border-t border-gray-200">
+              {filteredCouriers.map((item) => {
+                const isHighDelay = parseFloat(item.delay) > 5;
+                const isExpanded = expandedZoneId === item.id;
+
+                return (
+                  <div key={item.id} className="border-b border-gray-200">
+                    <div
+                      onClick={() => setExpandedZoneId(isExpanded ? null : item.id)}
+                      className="flex justify-between items-center py-4 cursor-pointer hover:bg-gray-50 px-3 transition-colors"
+                    >
+                      <div className="text-[15px] text-gray-800">
+                        <span className="font-medium">{item.zone}</span>
+                        <span className="text-gray-600 ml-1.5">
+                          ({item.working} / {item.ending} / {item.break})
+                        </span>
+                        <span className={`ml-2 font-medium ${isHighDelay ? 'text-[#d32f2f]' : 'text-gray-600'}`}>
+                          {item.delay}
+                        </span>
+                      </div>
+                      {isExpanded ? (
+                        <ChevronUpIcon size={20} className="text-gray-500" />
+                      ) : (
+                        <ChevronDownIcon size={20} className="text-gray-400" />
+                      )}
+                    </div>
+
+                    {isExpanded && (
+                      <div className="bg-gray-50/80 px-4 py-4 border-t border-gray-100 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4 text-xs">
+                        <div className="bg-white p-3 rounded border border-gray-200">
+                          <div className="text-gray-400 uppercase font-semibold">Working</div>
+                          <div className="text-lg font-bold text-emerald-600 mt-0.5">{item.working}</div>
+                        </div>
+                        <div className="bg-white p-3 rounded border border-gray-200">
+                          <div className="text-gray-400 uppercase font-semibold">Ending Shift</div>
+                          <div className="text-lg font-bold text-amber-600 mt-0.5">{item.ending}</div>
+                        </div>
+                        <div className="bg-white p-3 rounded border border-gray-200">
+                          <div className="text-gray-400 uppercase font-semibold">On Break / Temp</div>
+                          <div className="text-lg font-bold text-gray-700 mt-0.5">
+                            {item.break} <span className="text-xs font-normal text-gray-400">/ {item.tempBreak}</span>
+                          </div>
+                        </div>
+                        <div className="bg-white p-3 rounded border border-gray-200">
+                          <div className="text-gray-400 uppercase font-semibold">Queued / Disp</div>
+                          <div className="text-lg font-bold text-gray-800 mt-0.5">
+                            {item.queued} / {item.dispatched}
+                          </div>
+                        </div>
+                        <div className="bg-white p-3 rounded border border-gray-200">
+                          <div className="text-gray-400 uppercase font-semibold">Active Orders</div>
+                          <div className="text-lg font-bold text-blue-600 mt-0.5">{item.active}</div>
+                        </div>
+                        <div className="bg-white p-3 rounded border border-gray-200">
+                          <div className="text-gray-400 uppercase font-semibold">Deliveries / Rider</div>
+                          <div className="text-sm font-semibold text-gray-700 mt-1.5 font-mono">
+                            0:{item.zeroDel} | 1:{item.lowDel} | 2:{item.medDel}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        }
+
+        return (
+          <div className="mt-6 w-full overflow-x-auto">
+            <table className="w-full text-left text-sm whitespace-nowrap">
+              <thead>
+                <tr className="border-b border-gray-200 text-gray-500 font-semibold tracking-wide text-xs">
+                  <th className="pb-3 px-2 w-1/4">ORDER</th>
+                  <th className="pb-3 px-2">DEADLINE</th>
+                  <th className="pb-3 px-2 w-1/4">COURIER</th>
+                  <th className="pb-3 px-2">STATUS</th>
+                  <th className="pb-3 px-2">ZONE</th>
+                  <th className="pb-3 px-2">DELIVERY INSTRUCTION</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredDeliveries.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-12 text-center text-gray-500">
+                      No deliveries found for <span className="font-semibold">{activeTab}</span>.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredDeliveries.map((item) => {
+                    const isNegative = item.deadline.includes('-') || item.deadline === 'Late';
+                    const deadlineColor = isNegative ? 'bg-[#e53935] text-white' : 'bg-gray-100 text-gray-800';
+
+                    return (
+                      <tr
+                        key={item.id}
+                        onClick={() => setSelectedOrder(item)}
+                        className="border-b border-gray-100 hover:bg-gray-50/80 transition-colors cursor-pointer"
+                      >
+                        <td className="py-4 px-2 align-top">
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-blue-600 hover:underline font-medium text-[15px]">
+                                {item.id}
+                              </span>
+                              <InfoIcon size={14} className="text-gray-400 hover:text-blue-600" />
+                              <button
+                                type="button"
+                                onClick={(e) => handleCopyId(e, item.id)}
+                                className="text-gray-400 hover:text-gray-700 p-0.5 rounded"
+                                title="Copy Order ID"
+                              >
+                                {copiedId === item.id ? (
+                                  <CheckIcon size={14} className="text-emerald-600" />
+                                ) : (
+                                  <CopyIcon size={14} />
+                                )}
+                              </button>
+                            </div>
+                            <span className="text-xs text-gray-500">
+                              VO #{item.vo} - {item.vendor}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-4 px-2 align-top">
+                          <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-semibold ${deadlineColor}`}>
+                            {item.deadline}
+                          </span>
+                        </td>
+                        <td className="py-4 px-2 align-top text-[15px] max-w-[240px] whitespace-normal">
+                          {item.courier === '-' || item.courier === 'Assigning...' || item.courier === 'Pending Acceptance' ? (
+                            <span className="text-gray-500">{item.courier}</span>
+                          ) : (
+                            <span className="text-blue-600 hover:underline font-normal leading-snug block">
+                              {item.courier}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-4 px-2 align-top">
+                          <div className="font-semibold text-gray-800 text-[15px]">{item.status}</div>
+                          {item.time_in !== '-' && (
+                            <div className="text-xs text-gray-500 mt-0.5">In: {item.time_in}</div>
+                          )}
+                          {item.time_at !== '-' && (
+                            <div className="text-xs text-gray-500">At: {item.time_at}</div>
+                          )}
+                        </td>
+                        <td className="py-4 px-2 align-top text-gray-600 max-w-[200px]">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate">{item.zone}</span>
+                            <InfoIcon size={14} className="text-gray-400 flex-shrink-0" />
+                          </div>
+                        </td>
+                        <td className="py-4 px-2 align-top">
+                          <div className="flex gap-2 flex-wrap">
+                            {item.instructions.map((inst, i) => (
+                              <InstructionPill key={i} type={inst} />
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        );
+      };
+
+      return (
+        <div className="flex h-screen w-full bg-white font-sans overflow-hidden text-gray-800">
+          <aside className="w-[240px] flex-shrink-0 border-r border-gray-200 flex flex-col h-full bg-white z-10 shadow-[2px_0_5px_rgba(0,0,0,0.02)]">
+            <div className="h-14 flex items-center justify-between px-4 border-b border-gray-200">
+              <div className="flex items-center gap-2 font-semibold text-lg tracking-tight text-gray-900">
+                <span className="text-xl">🚴‍♂️</span>
+                <span>Hurrier</span>
+              </div>
+              <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                View Only
+              </span>
+            </div>
+
+            <nav className="flex-1 overflow-y-auto py-4 flex flex-col">
+              {sidebarItemsWithCounts.map((item) => {
+                const isActive = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setActiveTab(item.id)}
+                    className={`
+                      flex items-center justify-between px-6 py-2.5 text-sm font-medium w-full text-left transition-colors
+                      ${isActive
+                        ? 'border-l-4 border-blue-600 text-blue-600 bg-blue-50/50'
+                        : 'border-l-4 border-transparent text-gray-700 hover:bg-gray-50'
+                      }
+                      ${item.className || ''}
+                    `}
+                  >
+                    <span>
+                      {item.label} {item.count !== undefined && `(${item.count})`}
+                    </span>
+                  </button>
+                );
+              })}
+            </nav>
+          </aside>
+
+          <div className="flex-1 flex flex-col min-w-0 bg-white">
+            <header className="h-14 flex items-center justify-between px-6 border-b border-gray-200 bg-white gap-4">
+              <div className="flex items-center gap-3 text-xs text-gray-500">
+                <button
+                  type="button"
+                  onClick={() => setIsSyncModalOpen(true)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-semibold border transition-colors ${
+                    syncStatus === 'connected'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      syncStatus === 'connected' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                    }`}
+                  />
+                  {syncStatus === 'connected'
+                    ? `LIVE (${countdown}s)`
+                    : `READY (${countdown}s)`}
+                </button>
+
+                <span className="hidden sm:inline">Last Sync: {lastRefreshed}</span>
+
+                <button
+                  type="button"
+                  onClick={() => setIsAutoRefresh((prev) => !prev)}
+                  className="p-1 rounded hover:bg-gray-100 text-gray-600"
+                  title={isAutoRefresh ? 'Pause Auto-Refresh' : 'Resume Auto-Refresh'}
+                >
+                  {isAutoRefresh ? <PauseIcon size={13} /> : <PlayIcon size={13} />}
+                </button>
+              </div>
+
+              <div className="flex items-center gap-3 text-gray-600">
+                <button
+                  type="button"
+                  onClick={() => setIsSyncModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded transition-colors"
+                >
+                  <RadioIcon size={13} />
+                  <span>Live Sync</span>
+                </button>
+
+                <div className="bg-gray-100 text-gray-500 text-xs px-2 py-1 rounded border border-gray-200 font-mono">
+                  0.31.0
+                </div>
+
+                <div className="relative flex items-center">
+                  <SearchIcon size={16} className="absolute left-3 text-gray-400" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search by Order ID or Courier"
+                    className="pl-9 pr-4 py-1.5 border border-gray-300 rounded text-sm w-64 focus:outline-none focus:border-blue-500 placeholder-gray-400"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2.5 text-gray-400 hover:text-gray-600"
+                    >
+                      <XIcon size={14} />
+                    </button>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('Active Couriers')}
+                  title="Active Couriers"
+                  className="p-1.5 text-blue-600 bg-blue-50 rounded hover:bg-blue-100 transition-colors"
+                >
+                  <UserIcon size={18} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('Dashboard')}
+                  title="Region Shift Overview"
+                  className="p-1.5 hover:bg-gray-100 rounded transition-colors text-gray-500"
+                >
+                  <CoffeeIcon size={18} />
+                </button>
+
+                <div className="border-l border-gray-200 pl-3">
+                  <select
+                    value={selectedCity}
+                    onChange={(e) => setSelectedCity(e.target.value)}
+                    className="bg-transparent text-sm font-medium text-gray-700 cursor-pointer focus:outline-none pr-2 py-1"
+                  >
+                    <option value="All Cities">All Cities</option>
+                    <option value="Cairo">Cairo</option>
+                    <option value="Alexandria">Alexandria</option>
+                  </select>
+                </div>
+
+                <div className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center ml-1">
+                  <UserIcon size={15} />
+                </div>
+              </div>
+            </header>
+
+            <main className="flex-1 overflow-auto p-8">
+              <div className="max-w-[1400px] mx-auto">
+                <div className="flex items-center justify-between mb-2">
+                  <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
+                    {activeTab === 'Active Couriers'
+                      ? 'Active Couriers'
+                      : activeTab === 'Dashboard' || activeTab === 'Dispatcher Dashboard'
+                      ? activeTab
+                      : `${activeTab} Deliveries ${
+                          sidebarItemsWithCounts.find((i) => i.id === activeTab)?.count !== undefined
+                            ? `(${sidebarItemsWithCounts.find((i) => i.id === activeTab)?.count})`
+                            : ''
+                        }`}
+                  </h1>
+
+                  <button
+                    type="button"
+                    onClick={handleRefresh}
+                    className="flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors shadow-sm"
+                  >
+                    <RefreshCwIcon size={14} className="text-gray-500" /> Refresh
+                  </button>
+                </div>
+
+                {renderContent()}
+              </div>
+            </main>
+          </div>
+
+          {selectedOrder && (
+            <div
+              className="fixed inset-0 bg-black/30 z-50 flex justify-end"
+              onClick={() => setSelectedOrder(null)}
+            >
+              <div
+                className="w-full max-w-lg bg-white h-full shadow-2xl border-l border-gray-200 flex flex-col overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg font-bold text-gray-900">{selectedOrder.orderCode}</span>
+                      <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold">
+                        {selectedOrder.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-0.5">Read-Only Order Inspection</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOrder(null)}
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-200/60"
+                  >
+                    <XIcon size={20} />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-6 space-y-6 text-sm">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
+                      <div className="text-xs text-gray-500">Order Value</div>
+                      <div className="font-bold text-gray-900 mt-1">{selectedOrder.orderValue}</div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
+                      <div className="text-xs text-gray-500">Distance</div>
+                      <div className="font-bold text-gray-900 mt-1">{selectedOrder.distance}</div>
+                    </div>
+                    <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
+                      <div className="text-xs text-gray-500">Deadline</div>
+                      <div className="font-bold text-[#e53935] mt-1">{selectedOrder.deadline}</div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 border-t border-gray-100 pt-4">
+                    <div className="flex items-start gap-2.5">
+                      <UsersIcon size={16} className="text-gray-400 mt-0.5" />
+                      <div>
+                        <div className="text-xs text-gray-500">Assigned Courier</div>
+                        <div className="font-medium text-gray-900">
+                          {selectedOrder.courier}{' '}
+                          {selectedOrder.courierId && (
+                            <span className="text-xs text-gray-400 font-mono">(#{selectedOrder.courierId})</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-2.5">
+                      <UserIcon size={16} className="text-gray-400 mt-0.5" />
+                      <div>
+                        <div className="text-xs text-gray-500">Customer</div>
+                        <div className="font-medium text-gray-900">{selectedOrder.customerName}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 border-t border-gray-100 pt-4">
+                    <div className="flex items-start gap-2.5">
+                      <StoreIcon size={16} className="text-blue-600 mt-0.5" />
+                      <div>
+                        <div className="text-xs text-gray-500">Pickup ({selectedOrder.vendor} - VO #{selectedOrder.vo})</div>
+                        <div className="text-gray-800 mt-0.5">{selectedOrder.pickupAddress}</div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-2.5">
+                      <MapPinIcon size={16} className="text-emerald-600 mt-0.5" />
+                      <div>
+                        <div className="text-xs text-gray-500">Drop-off Address</div>
+                        <div className="text-gray-800 mt-0.5">{selectedOrder.dropoffAddress}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-gray-100 pt-4">
+                    <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 flex items-center gap-1.5">
+                      <FileTextIcon size={14} /> Order Items
+                    </div>
+                    <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
+                      {selectedOrder.items?.map((it, idx) => (
+                        <div key={idx} className="p-3 flex justify-between items-center">
+                          <div>
+                            <span className="font-semibold text-gray-800">{it.qty}x</span>{' '}
+                            <span className="text-gray-700">{it.name}</span>
+                          </div>
+                          <span className="font-medium text-gray-900">{it.price}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="border-t border-gray-100 pt-4">
+                    <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3 flex items-center gap-1.5">
+                      <ActivityIcon size={14} /> Delivery State Transitions
+                    </div>
+                    <div className="space-y-2.5">
+                      {selectedOrder.transitions?.map((tr, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-xs bg-gray-50 p-2.5 rounded border border-gray-200">
+                          <div>
+                            <span className="font-semibold text-gray-900 uppercase">{tr.state}</span>
+                            <span className="text-gray-500 ml-2">by {tr.by}</span>
+                          </div>
+                          <span className="font-mono text-gray-600 flex items-center gap-1">
+                            <ClockIcon size={12} /> {tr.time}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
+                  <span className="flex items-center gap-1">
+                    <AlertCircleIcon size={14} className="text-amber-600" /> Actions disabled (Read-Only View)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOrder(null)}
+                    className="px-4 py-1.5 bg-white border border-gray-300 rounded font-medium text-gray-700 hover:bg-gray-100"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {isSyncModalOpen && (
+            <div
+              className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+              onClick={() => setIsSyncModalOpen(false)}
+            >
+              <div
+                className="bg-white rounded-xl max-w-2xl w-full shadow-2xl border border-gray-200 overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="px-6 py-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheckIcon size={20} className="text-emerald-600" />
+                    <div>
+                      <h2 className="text-base font-bold text-gray-900">
+                        البث المباشر عبر GitHub (Remote Read-Only Sync)
+                      </h2>
+                      <p className="text-xs text-gray-500">
+                        مربوط تلقائياً بالـ Gist الخاص بك — التوكن لا يظهر للموظفين
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsSyncModalOpen(false)}
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-200/60"
+                  >
+                    <XIcon size={18} />
+                  </button>
+                </div>
+
+                <div className="flex border-b border-gray-200 bg-white px-6 gap-6 text-xs font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => setModalTab('github')}
+                    className={`py-3 border-b-2 transition-colors ${
+                      modalTab === 'github'
+                        ? 'border-blue-600 text-blue-600'
+                        : 'border-transparent text-gray-500 hover:text-gray-800'
+                    }`}
+                  >
+                    إعدادات البث (GitHub Gist)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModalTab('paste')}
+                    className={`py-3 border-b-2 transition-colors ${
+                      modalTab === 'paste'
+                        ? 'border-blue-600 text-blue-600'
+                        : 'border-transparent text-gray-500 hover:text-gray-800'
+                    }`}
+                  >
+                    لصق يدوي (Paste JSON)
+                  </button>
+                </div>
+
+                <div className="p-6 space-y-4 text-sm max-h-[70vh] overflow-y-auto">
+                  {modalTab === 'github' && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                            GitHub Secret Gist ID
+                          </label>
+                          <input
+                            type="text"
+                            value={gistId}
+                            onChange={(e) => {
+                              setGistId(e.target.value);
+                              cachedGistRawUrlRef.current = '';
+                            }}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-mono focus:outline-none focus:border-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                            GitHub Gist Token (لجهازك إنت فقط)
+                          </label>
+                          <input
+                            type="password"
+                            value={gistToken}
+                            onChange={(e) => setGistToken(e.target.value)}
+                            placeholder="الصق التوكن هنا لتوليد السكريبت..."
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-mono focus:outline-none focus:border-blue-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-gray-800">
+                            سكريبت السحب (يلصق في Console تاب Hurrier عندك)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyCode('ghScript', generatedGistScript)}
+                            className="px-2.5 py-1 rounded bg-gray-900 hover:bg-gray-800 text-white text-xs font-semibold flex items-center gap-1"
+                          >
+                            {copiedSnippet === 'ghScript' ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                            {copiedSnippet === 'ghScript' ? 'تم النسخ' : 'نسخ سكريبت Hurrier'}
+                          </button>
+                        </div>
+                        <pre className="p-2.5 rounded-lg bg-gray-900 text-gray-100 font-mono text-[10px] overflow-x-auto max-h-28">
+                          {generatedGistScript}
+                        </pre>
+                      </div>
+
+                      <div className="p-3 rounded-lg bg-blue-50/60 border border-blue-200 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+                            <Link2Icon size={14} /> رابط الموظفين (عرض فقط بدون Token)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleCopyCode('shareLink', employeeShareLink)}
+                            className="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1"
+                          >
+                            {copiedSnippet === 'shareLink' ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+                            {copiedSnippet === 'shareLink' ? 'تم النسخ' : 'نسخ رابط الموظفين'}
+                          </button>
+                        </div>
+                        <div className="text-[11px] font-mono text-gray-600 bg-white px-2.5 py-1.5 rounded border border-blue-100 truncate">
+                          {employeeShareLink}
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            fetchLiveFeed();
+                            setIsSyncModalOpen(false);
+                          }}
+                          className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors flex items-center gap-2"
+                        >
+                          <WifiIcon size={16} /> تحديث البيانات الآن
+                        </button>
+                      </div>
+
+                      {syncError && (
+                        <div className="p-3 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                          {syncError}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {modalTab === 'paste' && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-gray-700">
+                          اختر القسم المستهدف للبيانات:
+                        </span>
+                        <select
+                          value={pasteTargetTab}
+                          onChange={(e) => setPasteTargetTab(e.target.value)}
+                          className="px-3 py-1.5 border border-gray-300 rounded text-xs font-medium bg-white"
+                        >
+                          <option value="Active">Active Deliveries</option>
+                          <option value="Queued">Queued Deliveries</option>
+                          <option value="Dispatched">Dispatched Deliveries</option>
+                          <option value="Actionable">Actionable Deliveries</option>
+                          <option value="Pre-order">Pre-order Deliveries</option>
+                        </select>
+                      </div>
+
+                      <textarea
+                        rows={6}
+                        value={rawJsonInput}
+                        onChange={(e) => setRawJsonInput(e.target.value)}
+                        placeholder='الصق هنا الـ JSON Response القادم من /deliveries/active أو /stats ...'
+                        className="w-full p-3 border border-gray-300 rounded-lg font-mono text-xs focus:outline-none focus:border-blue-500"
+                      />
+
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          onClick={handleApplyPastedJson}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5"
+                        >
+                          <UploadIcon size={14} /> تحديث الجداول الآن
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
