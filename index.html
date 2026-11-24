@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v5.7 — Last 4h Live Completed Orders (50/Page)</title>
+  <title>Hurrier Live Operations Dashboard v5.9 — 4h Chronological Completed Orders (50/Page)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -35,7 +35,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v5.7...
+      Loading Hurrier Live Operations Dashboard v5.9...
     </div>
   </div>
 
@@ -395,6 +395,22 @@
       }
     }
 
+    function humanizeSnakeCase(str) {
+      return String(str || "")
+        .split("_")
+        .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : ""))
+        .join(" ")
+        .trim();
+    }
+
+    function formatPiastersMoney(val, currency = "EGP") {
+      if (val === null || val === undefined || val === "") return "-";
+      if (typeof val === "string" && /[A-Z]{3}|\$/.test(val)) return val;
+      const num = Number(val);
+      if (Number.isNaN(num)) return String(val);
+      return `${(num / 100).toFixed(2)} ${currency}`;
+    }
+
     function mapHurrierCompletedRecord(rec) {
       const order = rec?.order || {};
       const primaryDel = rec?.primary_delivery || {};
@@ -482,22 +498,6 @@
           }
         }
       };
-    }
-
-    function formatPiastersMoney(val, currency = "EGP") {
-      if (val === null || val === undefined || val === "") return "-";
-      if (typeof val === "string" && /[A-Z]{3}|\$/.test(val)) return val;
-      const num = Number(val);
-      if (Number.isNaN(num)) return String(val);
-      return `${(num / 100).toFixed(2)} ${currency}`;
-    }
-
-    function humanizeSnakeCase(str) {
-      return String(str || "")
-        .split("_")
-        .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : ""))
-        .join(" ")
-        .trim();
     }
 
     function extractCustomerInfoFromOrder(orderObj, doc) {
@@ -777,7 +777,7 @@
       const [completedSearchQuery, setCompletedSearchQuery] = useState("");
       const [completedPage, setCompletedPage] = useState(1);
       const [completedJumpPage, setCompletedJumpPage] = useState("");
-      const [completedSortAsc, setCompletedSortAsc] = useState(false);
+      const [completedSortAsc, setCompletedSortAsc] = useState(true);
       const [isCompletedLoading, setIsCompletedLoading] = useState(false);
 
       const [tabCounts, setTabCounts] = useState({
@@ -906,10 +906,8 @@
       const requestCourierDetailsFromHurrier = useCallback(async (courierId, courierName = "") => {
         const cleanId = String(courierId || "").trim();
         const cleanName = normalizeText(courierName);
-        if (!cleanId && (!cleanName || cleanName === "-" || cleanName === "Assigning..." || cleanName === "Pending Acceptance")) {
-          return;
-        }
-        const token = cleanId ? `${cleanId}|${cleanName}` : `|${cleanName}`;
+        if (!cleanId && !cleanName) return;
+        const token = `${cleanId}|${cleanName}`;
         try {
           const curRes = await fetch(`${FIREBASE_DB_URL}/config/requested_courier_details.json`, { cache: "no-store" });
           const curList = curRes.ok ? await curRes.json() : [];
@@ -925,42 +923,51 @@
 
       const handleCourierHover = useCallback(
         (courierId, courierName) => {
-          const key = sanitizeCourierKey(courierId || String(courierName || "").toLowerCase());
+          const cleanName = normalizeText(courierName);
+          if (!cleanName || cleanName === "-" || cleanName === "Assigning..." || cleanName === "Pending Acceptance") return;
+          const key = sanitizeCourierKey(courierId || cleanName.toLowerCase());
           if (!key || prewarmedCourierKeysRef.current.has(key)) return;
           if (courierHoverTimerRef.current) clearTimeout(courierHoverTimerRef.current);
           courierHoverTimerRef.current = setTimeout(() => {
             prewarmedCourierKeysRef.current.add(key);
-            requestCourierDetailsFromHurrier(courierId, courierName);
+            requestCourierDetailsFromHurrier(courierId, cleanName);
           }, 180);
         },
         [requestCourierDetailsFromHurrier]
       );
 
-      const fetchSingleCourierDetailDoc = useCallback(async (courierObj) => {
-        if (!courierObj) return;
-        const primaryKey = sanitizeCourierKey(courierObj.id || String(courierObj.name || "").toLowerCase());
-        if (!primaryKey) return;
-        try {
-          const res = await fetch(`${FIREBASE_DB_URL}/courier_details/${primaryKey}.json`, { cache: "no-store" });
-          if (res.ok) {
-            const doc = await res.json();
-            if (doc && typeof doc === "object") {
-              setLiveCourierDetailDoc(doc);
-            }
-          }
-        } catch {}
-      }, []);
-
       const openCourierModal = useCallback((e, courierId, courierName) => {
         if (e) e.stopPropagation();
         const cleanName = normalizeText(courierName);
-        if (!cleanName || cleanName === "-" || cleanName === "Assigning..." || cleanName === "Pending Acceptance") {
-          return;
-        }
+        if (!cleanName || cleanName === "-" || cleanName === "Assigning..." || cleanName === "Pending Acceptance") return;
         setSelectedCourier({
-          id: courierId ? String(courierId).trim() : "",
+          id: courierId ? String(courierId) : "",
           name: cleanName
         });
+      }, []);
+
+      const fetchSingleCourierDetailDoc = useCallback(async (courierObj) => {
+        if (!courierObj) return;
+        const keys = Array.from(
+          new Set(
+            [
+              courierObj.id ? sanitizeCourierKey(courierObj.id) : "",
+              courierObj.name ? sanitizeCourierKey(courierObj.name.toLowerCase()) : ""
+            ].filter(Boolean)
+          )
+        );
+        for (const k of keys) {
+          try {
+            const res = await fetch(`${FIREBASE_DB_URL}/courier_details/${k}.json`, { cache: "no-store" });
+            if (res.ok) {
+              const doc = await res.json();
+              if (doc && typeof doc === "object") {
+                setLiveCourierDetailDoc(doc);
+                return;
+              }
+            }
+          } catch {}
+        }
       }, []);
 
       useEffect(() => {
@@ -980,11 +987,6 @@
 
         return () => clearInterval(pollTimer);
       }, [selectedCourier, fetchSingleCourierDetailDoc, requestCourierDetailsFromHurrier]);
-
-      const selectedCourierFullView = useMemo(() => {
-        if (!selectedCourier) return null;
-        return extractCourierProfileFromDoc(selectedCourier, liveCourierDetailDoc);
-      }, [selectedCourier, liveCourierDetailDoc]);
 
       const availableZones = useMemo(() => {
         const map = new Map();
@@ -1014,32 +1016,30 @@
       const selectedZoneNames = useMemo(() => {
         if (!Array.isArray(selectedZoneIds) || selectedZoneIds.length === 0) return [];
         const idSet = new Set(selectedZoneIds.map(Number));
-        return ALL_ZONES_CATALOG.filter((z) => idSet.has(Number(z.id)))
-          .map((z) => normalizeText(z.name).toLowerCase())
-          .filter(Boolean);
-      }, [selectedZoneIds]);
+        const names = new Set();
+        ALL_ZONES_CATALOG.forEach((z) => {
+          if (idSet.has(Number(z.id))) names.add(normalizeText(z.name).toLowerCase());
+        });
+        discoveredZonesFromBundle.forEach((z) => {
+          if (idSet.has(Number(z?.id)) && z?.name) names.add(normalizeText(z.name).toLowerCase());
+        });
+        return Array.from(names).filter(Boolean);
+      }, [selectedZoneIds, discoveredZonesFromBundle]);
 
       const registerOrHeartbeatSession = useCallback(async () => {
         if (!isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
-        const todayStr = getTodayCairoDateInput();
-        const activeDate = completedDate || todayStr;
+        const cityIdMap = { Cairo: "1", Alexandria: "200" };
         const completedReqPayload =
           activeTab === "Completed"
             ? {
-                date: activeDate,
+                date: completedDate || getTodayCairoDateInput(),
                 page: completedPage,
                 per_page: 50,
-                hours_window: activeDate === todayStr ? completedHoursWindow : 0,
+                hours_window: completedDate === getTodayCairoDateInput() ? Number(completedHoursWindow) : 0,
                 zone_scope: completedZoneScope,
-                specific_zone_id: completedZoneScope === "single" ? Number(completedSpecificZoneId) || 0 : 0,
-                city_id:
-                  completedCityFilter === "Cairo"
-                    ? "1"
-                    : completedCityFilter === "Alexandria"
-                    ? "200"
-                    : "",
-                search: completedSearchQuery.trim(),
-                heartbeat_tick: Math.floor(Date.now() / 4000)
+                specific_zone_id: completedZoneScope === "single" ? Number(completedSpecificZoneId || 0) : null,
+                city_id: cityIdMap[completedCityFilter] || "",
+                search: completedSearchQuery.trim()
               }
             : null;
 
@@ -1051,7 +1051,6 @@
               employee_name: normalizeText(employeeName) || `Employee (${sessionId.slice(-5)})`,
               zone_ids: selectedZoneIds.map(Number).filter(isRealHurrierZoneId),
               zone_names: selectedZoneNames,
-              active_tab: activeTab,
               completed_req: completedReqPayload,
               heartbeat_at: Date.now()
             })
@@ -1065,8 +1064,8 @@
         selectedZoneNames,
         activeTab,
         completedDate,
-        completedHoursWindow,
         completedPage,
+        completedHoursWindow,
         completedZoneScope,
         completedSpecificZoneId,
         completedCityFilter,
@@ -1075,21 +1074,32 @@
 
       useEffect(() => {
         if (!isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
-        if (activeTab === "Completed") {
-          setIsCompletedLoading(true);
-        }
         registerOrHeartbeatSession();
-        const hbMs = activeTab === "Completed" ? 4000 : 15000;
-        const hbTimer = setInterval(registerOrHeartbeatSession, hbMs);
+        const hbTimer = setInterval(registerOrHeartbeatSession, 15000);
         return () => clearInterval(hbTimer);
-      }, [isZoneSetupConfirmed, selectedZoneIds, activeTab, registerOrHeartbeatSession]);
+      }, [isZoneSetupConfirmed, selectedZoneIds, registerOrHeartbeatSession]);
+
+      useEffect(() => {
+        if (!isZoneSetupConfirmed || activeTab !== "Completed") return;
+        setIsCompletedLoading(true);
+        registerOrHeartbeatSession();
+      }, [
+        isZoneSetupConfirmed,
+        activeTab,
+        completedDate,
+        completedHoursWindow,
+        completedCityFilter,
+        completedZoneScope,
+        completedSpecificZoneId,
+        completedSearchQuery,
+        completedPage,
+        registerOrHeartbeatSession
+      ]);
 
       const handleConfirmZoneSelection = useCallback(() => {
         if (selectedZoneIds.length === 0) return;
         setConnectionStatus("waiting");
         setCurrentPage(1);
-        setCompletedZoneScope("selected");
-        setCompletedSpecificZoneId("");
         setCompletedPage(1);
         setIsZoneSetupConfirmed(true);
       }, [selectedZoneIds]);
@@ -1101,8 +1111,6 @@
         setSelectedOrder(null);
         setSelectedCourier(null);
         setCurrentPage(1);
-        setCompletedZoneScope("selected");
-        setCompletedSpecificZoneId("");
         setCompletedPage(1);
         try {
           await Promise.all([
@@ -1141,14 +1149,10 @@
         setDeliveries(nextDeliveries);
         setTabCounts(nextCounts);
 
-        if (bundle.completed && Array.isArray(bundle.completed.records)) {
-          const mappedCompleted = bundle.completed.records.map(mapHurrierCompletedRecord);
-          setCompletedOrders(mappedCompleted);
-          setCompletedTotalCount(
-            typeof bundle.completed.metadata?.total_count === "number"
-              ? bundle.completed.metadata.total_count
-              : mappedCompleted.length
-          );
+        if (bundle.completed && typeof bundle.completed === "object") {
+          const compRecs = Array.isArray(bundle.completed.records) ? bundle.completed.records : [];
+          setCompletedOrders(compRecs.map(mapHurrierCompletedRecord));
+          setCompletedTotalCount(Number(bundle.completed.metadata?.total_count ?? compRecs.length));
           setIsCompletedLoading(false);
         }
 
@@ -1375,6 +1379,11 @@
         });
       }, [baseTabDeliveries, activeQuickFilter, selectedMartBranch, orderSortMode]);
 
+      const selectedCourierFullView = useMemo(() => {
+        if (!selectedCourier) return null;
+        return extractCourierProfileFromDoc(selectedCourier, liveCourierDetailDoc);
+      }, [selectedCourier, liveCourierDetailDoc]);
+
       const selectedOrderFullView = useMemo(() => {
         if (!selectedOrder) return null;
         const doc = liveOrderDetailDoc || {};
@@ -1484,8 +1493,8 @@
           const delZones = Array.isArray(del.starting_points)
             ? del.starting_points.map((sp) => (typeof sp === "object" ? sp?.name || sp?.id : sp)).filter(Boolean).join(", ")
             : selectedOrder.zone;
-          const delCourier = del.courier_name || del.courier?.name || selectedOrder.courier || "-";
           const delCourierId = del.courier_id || del.courier?.id || selectedOrder.courierId || null;
+          const delCourier = del.courier_name || del.courier?.name || selectedOrder.courier || "-";
           const delUtilization = del.utilization ?? del.capacity ?? "-";
           const transitions = Array.isArray(del.transitions) ? del.transitions : [];
           const delEvents = [];
@@ -1506,17 +1515,17 @@
             }
 
             const timeSec = formatExactTimeSeconds(rawTimeVal);
+            const courierIdVal =
+              tr.courier_id ||
+              tr.courier?.id ||
+              tr.metadata?.courier_id ||
+              (stateRaw === "queued" && tIdx === 0 ? null : delCourierId);
             const courierName =
               tr.courier_name ||
               tr.courier?.name ||
               tr.metadata?.courier_name ||
               (stateRaw === "queued" && tIdx === 0 ? "-" : delCourier) ||
               "-";
-            const eventCourierId =
-              tr.courier_id ||
-              tr.courier?.id ||
-              tr.metadata?.courier_id ||
-              (courierName === delCourier ? delCourierId : null);
 
             const subReasonRaw =
               tr.un_dispatch_type ||
@@ -1553,6 +1562,7 @@
             if (courierName && courierName !== "-" && courierName !== "Assigning...") {
               const entry = riderMap.get(courierName) || {
                 courierName,
+                courierId: courierIdVal,
                 dispatchedAt: "-",
                 acceptedAt: "-",
                 pickedUpAt: "-",
@@ -1587,8 +1597,8 @@
               timeSec,
               eventLabel,
               subLabel,
+              courierId: courierIdVal,
               courierName,
-              courierId: eventCourierId,
               locUrl,
               estAcceptTime,
               estPickupArrival,
@@ -1609,8 +1619,8 @@
             id: delId,
             status: delStatusLabel,
             zones: delZones,
-            courier: delCourier,
             courierId: delCourierId,
+            courier: delCourier,
             utilization: delUtilization,
             events: delEvents
           });
@@ -1773,6 +1783,77 @@
         const filtered = couriers.filter((c) => idSet.has(Number(c.id)));
         return filtered.length > 0 ? filtered : couriers;
       }, [couriers, selectedZoneIds]);
+
+      const selectedZonesDisplayList = useMemo(() => {
+        const idSet = new Set(selectedZoneIds.map(Number));
+        const map = new Map();
+        ALL_ZONES_CATALOG.forEach((z) => {
+          if (idSet.has(Number(z.id))) map.set(Number(z.id), z);
+        });
+        discoveredZonesFromBundle.forEach((z) => {
+          const nid = Number(z?.id);
+          if (idSet.has(nid) && !map.has(nid)) {
+            map.set(nid, { id: nid, name: z.name, city: z.city || "Cairo" });
+          }
+        });
+        return Array.from(map.values());
+      }, [selectedZoneIds, discoveredZonesFromBundle]);
+
+      const visibleCompletedOrders = useMemo(() => {
+        const q = completedSearchQuery.trim().toLowerCase();
+        const isTodaySelected = completedDate === getTodayCairoDateInput();
+        const cutoffMs =
+          isTodaySelected && Number(completedHoursWindow) > 0
+            ? Date.now() - Number(completedHoursWindow) * 3600 * 1000
+            : 0;
+
+        const filtered = completedOrders.filter((item) => {
+          if (cutoffMs > 0 && item.placedTimestamp > 0 && item.placedTimestamp < cutoffMs) {
+            return false;
+          }
+          if (completedCityFilter !== "All Cities" && item.city.toLowerCase() !== completedCityFilter.toLowerCase()) {
+            return false;
+          }
+          if (completedZoneScope === "selected") {
+            if (!matchesZoneFilter(item)) return false;
+          } else if (completedZoneScope === "single" && completedSpecificZoneId) {
+            const targetId = Number(completedSpecificZoneId);
+            const hasId = (item.zoneObjects || []).some((zo) => Number(zo.id) === targetId);
+            if (!hasId) return false;
+          }
+          if (!q) return true;
+          return (
+            item.id.toLowerCase().includes(q) ||
+            item.courier.toLowerCase().includes(q) ||
+            item.vendor.toLowerCase().includes(q) ||
+            item.zone.toLowerCase().includes(q)
+          );
+        });
+
+        return [...filtered].sort((a, b) =>
+          completedSortAsc ? a.placedTimestamp - b.placedTimestamp : b.placedTimestamp - a.placedTimestamp
+        );
+      }, [
+        completedOrders,
+        completedDate,
+        completedHoursWindow,
+        completedSearchQuery,
+        completedCityFilter,
+        completedZoneScope,
+        completedSpecificZoneId,
+        matchesZoneFilter,
+        completedSortAsc
+      ]);
+
+      const completedTotalPages = Math.max(1, Math.ceil(Math.max(completedTotalCount, visibleCompletedOrders.length) / 50));
+
+      const completedVisiblePages = useMemo(() => {
+        const total = Math.max(completedTotalPages, completedPage + (completedOrders.length === 50 ? 1 : 0));
+        if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+        if (completedPage <= 4) return [1, 2, 3, 4, 5, "...", total];
+        if (completedPage >= total - 3) return [1, "...", total - 4, total - 3, total - 2, total - 1, total];
+        return [1, "...", completedPage - 1, completedPage, completedPage + 1, "...", total];
+      }, [completedPage, completedTotalPages, completedOrders.length]);
 
       const renderDashboardView = () => (
         <div className="mt-6 space-y-6">
@@ -2027,78 +2108,10 @@
         </div>
       );
 
-      const visibleCompletedOrders = useMemo(() => {
-        const q = completedSearchQuery.trim().toLowerCase();
-        const isToday = completedDate === getTodayCairoDateInput();
-        const cutoffMs =
-          isToday && completedHoursWindow > 0 ? Date.now() - completedHoursWindow * 3600 * 1000 : 0;
-
-        const filtered = completedOrders.filter((item) => {
-          if (cutoffMs > 0 && item.placedTimestamp > 0 && item.placedTimestamp < cutoffMs) {
-            return false;
-          }
-          if (completedCityFilter !== "All Cities" && item.city.toLowerCase() !== completedCityFilter.toLowerCase()) {
-            return false;
-          }
-          if (completedZoneScope === "selected") {
-            if (!matchesZoneFilter(item)) return false;
-          } else if (completedZoneScope === "single" && completedSpecificZoneId) {
-            const targetId = Number(completedSpecificZoneId);
-            const hasZone = (item.zoneObjects || []).some((zo) => Number(zo.id) === targetId);
-            if (!hasZone) return false;
-          }
-          if (!q) return true;
-          return (
-            item.id.toLowerCase().includes(q) ||
-            item.courier.toLowerCase().includes(q) ||
-            item.vendor.toLowerCase().includes(q) ||
-            item.zone.toLowerCase().includes(q)
-          );
-        });
-
-        return [...filtered].sort((a, b) => {
-          if (!a.placedTimestamp || !b.placedTimestamp) return 0;
-          return completedSortAsc ? a.placedTimestamp - b.placedTimestamp : b.placedTimestamp - a.placedTimestamp;
-        });
-      }, [
-        completedOrders,
-        completedDate,
-        completedHoursWindow,
-        completedSearchQuery,
-        completedCityFilter,
-        completedZoneScope,
-        completedSpecificZoneId,
-        matchesZoneFilter,
-        completedSortAsc
-      ]);
-
-      const completedTotalPages = Math.max(1, Math.ceil(Math.max(completedTotalCount, visibleCompletedOrders.length) / 50));
-
-      const completedVisiblePages = useMemo(() => {
-        if (completedTotalPages <= 7) {
-          return Array.from({ length: completedTotalPages }, (_, i) => i + 1);
-        }
-        if (completedPage <= 4) {
-          return [1, 2, 3, 4, 5, "...", completedTotalPages];
-        }
-        if (completedPage >= completedTotalPages - 3) {
-          return [
-            1,
-            "...",
-            completedTotalPages - 4,
-            completedTotalPages - 3,
-            completedTotalPages - 2,
-            completedTotalPages - 1,
-            completedTotalPages
-          ];
-        }
-        return [1, "...", completedPage - 1, completedPage, completedPage + 1, "...", completedTotalPages];
-      }, [completedPage, completedTotalPages]);
-
       const renderCompletedOrdersView = () => (
         <div className="mt-4 space-y-4">
-          {/* Hurrier Completed Orders Top Filter Bar (Date, Time Window, City, Zone, Search) */}
-          <div className="flex flex-wrap items-center gap-3 bg-white p-3.5 rounded-lg border border-gray-200 shadow-sm">
+          {/* Hurrier Completed Orders Filter Controls Bar */}
+          <div className="flex flex-wrap items-center gap-3">
             {/* Date Picker */}
             <div className="flex flex-col">
               <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Date</label>
@@ -2106,42 +2119,40 @@
                 type="date"
                 value={completedDate}
                 onChange={(e) => {
-                  const nextDate = e.target.value || getTodayCairoDateInput();
-                  setCompletedDate(nextDate);
-                  if (nextDate !== getTodayCairoDateInput()) {
+                  const val = e.target.value || getTodayCairoDateInput();
+                  setCompletedDate(val);
+                  if (val !== getTodayCairoDateInput()) {
                     setCompletedHoursWindow(0);
                   } else if (completedHoursWindow === 0) {
                     setCompletedHoursWindow(4);
                   }
                   setCompletedPage(1);
-                  setIsCompletedLoading(true);
                 }}
-                className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-800 bg-white focus:outline-none focus:border-blue-500"
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 focus:outline-none focus:border-blue-500"
               />
             </div>
 
-            {/* Time Window Filter (Default: Last 4 Hours Live) */}
-            <div className="flex flex-col min-w-[185px]">
-              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Time Window (سرعة السحب)</label>
+            {/* Time Window Selector */}
+            <div className="flex flex-col">
+              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Time Window</label>
               <select
-                value={completedHoursWindow}
+                value={completedDate === getTodayCairoDateInput() ? completedHoursWindow : 0}
+                disabled={completedDate !== getTodayCairoDateInput()}
                 onChange={(e) => {
                   setCompletedHoursWindow(Number(e.target.value));
                   setCompletedPage(1);
-                  setIsCompletedLoading(true);
                 }}
-                disabled={completedDate !== getTodayCairoDateInput()}
-                className="px-3 py-1.5 border border-emerald-300 rounded-md text-sm font-semibold text-emerald-900 bg-emerald-50/50 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 focus:outline-none focus:border-blue-500 min-w-[190px]"
               >
-                <option value={4}>آخر 4 ساعات (تحديث مستمر)</option>
-                <option value={2}>آخر ساعتين (Last 2h)</option>
-                <option value={8}>آخر 8 ساعات (Last 8h)</option>
+                <option value={4}>آخر 4 ساعات (تحديث مستمر ↑)</option>
+                <option value={2}>آخر ساعتين (تحديث مستمر ↑)</option>
+                <option value={8}>آخر 8 ساعات (تحديث مستمر ↑)</option>
                 <option value={0}>اليوم بالكامل (Full Day)</option>
               </select>
             </div>
 
-            {/* City Dropdown */}
-            <div className="flex flex-col min-w-[140px]">
+            {/* City Filter */}
+            <div className="flex flex-col">
               <label className="text-[11px] font-semibold text-gray-500 mb-0.5">City</label>
               <select
                 value={completedCityFilter}
@@ -2149,48 +2160,46 @@
                   setCompletedCityFilter(e.target.value);
                   setCompletedPage(1);
                 }}
-                className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-800 bg-white focus:outline-none focus:border-blue-500"
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 focus:outline-none focus:border-blue-500 min-w-[140px]"
               >
                 <option value="All Cities">All Cities</option>
                 <option value="Cairo">Cairo</option>
                 <option value="Alexandria">Alexandria</option>
-                <option value="Suez">Suez</option>
               </select>
             </div>
 
-            {/* Zone Scope Dropdown */}
-            <div className="flex flex-col min-w-[220px]">
-              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Zone (مرتبط بفلتر الداشبورد)</label>
+            {/* Zone Filter */}
+            <div className="flex flex-col">
+              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Zone</label>
               <select
-                value={completedZoneScope === "single" ? `zone:${completedSpecificZoneId}` : completedZoneScope}
+                value={completedZoneScope === "single" ? `single:${completedSpecificZoneId}` : completedZoneScope}
                 onChange={(e) => {
                   const val = e.target.value;
-                  if (val.startsWith("zone:")) {
+                  if (val.startsWith("single:")) {
                     setCompletedZoneScope("single");
-                    setCompletedSpecificZoneId(val.replace("zone:", ""));
+                    setCompletedSpecificZoneId(val.replace("single:", ""));
                   } else {
                     setCompletedZoneScope(val);
                     setCompletedSpecificZoneId("");
                   }
                   setCompletedPage(1);
-                  setIsCompletedLoading(true);
                 }}
-                className="px-3 py-1.5 border border-blue-300 rounded-md text-sm font-medium text-gray-800 bg-blue-50/40 focus:outline-none focus:border-blue-500"
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 focus:outline-none focus:border-blue-500 min-w-[215px]"
               >
-                <option value="selected">زونات الداشبورد المختارة ({selectedZoneIds.length} Zones)</option>
+                <option value="selected">زونات الداشبورد المختارة ({selectedZoneIds.length})</option>
+                <option value="all">All Zones (كل الزونات)</option>
                 {selectedZonesDisplayList.map((z) => (
-                  <option key={z.id} value={`zone:${z.id}`}>
-                    زون محددة: {z.name} ({z.id})
+                  <option key={z.id} value={`single:${z.id}`}>
+                    {z.name} ({z.id})
                   </option>
                 ))}
-                <option value="all">All Zones (كل المناطق)</option>
               </select>
             </div>
 
             {/* Search order/courier */}
-            <div className="flex flex-col flex-1 min-w-[200px]">
+            <div className="flex flex-col flex-1 min-w-[220px] max-w-xs">
               <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Search</label>
-              <div className="relative flex items-center">
+              <div className="relative">
                 <input
                   type="text"
                   value={completedSearchQuery}
@@ -2199,7 +2208,7 @@
                     setCompletedPage(1);
                   }}
                   placeholder="Search order/courier"
-                  className="w-full pl-3.5 pr-8 py-1.5 border border-gray-300 rounded-md text-sm text-gray-800 bg-white focus:outline-none focus:border-blue-500"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 focus:outline-none focus:border-blue-500"
                 />
                 {completedSearchQuery && (
                   <button
@@ -2208,7 +2217,7 @@
                       setCompletedSearchQuery("");
                       setCompletedPage(1);
                     }}
-                    className="absolute right-2.5 text-gray-400 hover:text-gray-700 text-xs"
+                    className="absolute right-2.5 top-2.5 text-xs text-gray-400 hover:text-gray-700"
                   >
                     ✕
                   </button>
@@ -2220,7 +2229,7 @@
               {completedDate === getTodayCairoDateInput() && completedHoursWindow > 0 && (
                 <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[11px]">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  LIVE • آخر {completedHoursWindow} ساعات
+                  LIVE • من {formatShortTimeOnly(new Date(Date.now() - completedHoursWindow * 3600 * 1000).toISOString())} حتى الآن ({completedHoursWindow}h ↑)
                 </span>
               )}
               <div>
@@ -2837,21 +2846,6 @@
 
       const activeHeaderCount = effectiveTabCounts[activeTab];
 
-      const selectedZonesDisplayList = useMemo(() => {
-        const idSet = new Set(selectedZoneIds.map(Number));
-        const map = new Map();
-        ALL_ZONES_CATALOG.forEach((z) => {
-          if (idSet.has(Number(z.id))) map.set(Number(z.id), z);
-        });
-        discoveredZonesFromBundle.forEach((z) => {
-          const nid = Number(z?.id);
-          if (idSet.has(nid) && !map.has(nid)) {
-            map.set(nid, { id: nid, name: z.name, city: z.city || "Cairo" });
-          }
-        });
-        return Array.from(map.values());
-      }, [selectedZoneIds, discoveredZonesFromBundle]);
-
       // --- 1) MANDATORY ZONE SELECTION GATE SCREEN ---
       if (!isZoneSetupConfirmed) {
         return (
@@ -2866,7 +2860,7 @@
                         تحديد زونات الموظف قبل بدء السحب (Independent Zone Gate)
                       </h1>
                       <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v5.7 • Last 4h Live Completed Orders (50/Page)
+                        ★ v5.9 • 4h Chronological Completed Orders (50/Page)
                       </span>
                     </div>
                     <p className="text-xs text-slate-300 mt-0.5">
@@ -3040,7 +3034,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v5.7 (Last 4h Completed 50/Page)</span>
+                <span className="font-bold text-emerald-700">★ v5.9 (4h Window ↑ • 50/Page)</span>
                 <span className="font-mono text-gray-400">#{sessionId.slice(-5)}</span>
               </div>
               {employeeName && (
