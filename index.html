@@ -244,29 +244,29 @@
             src.name ||
             (first || last ? `${first} ${last}` : "")
         );
-        if (full && !/^customer\s*#?\d+$/i.test(full) && !/^(hf_eg\d+|\d+)$/i.test(full)) {
+        if (full && !/^customer\s*#?\d*$/i.test(full)) {
           name = full;
           break;
         }
       }
+
       if (!name) {
-        const extTag = Array.isArray(orderObj?.tags)
-          ? orderObj.tags.find((t) => typeof t === "string" && t.startsWith("external_address_id:"))
-          : "";
-        name = extTag ? `Customer #${extTag.replace("external_address_id:", "").trim()}` : "Customer";
+        const tagCust =
+          (Array.isArray(orderObj.tags) ? orderObj.tags : [])
+            .map((t) => String(t || ""))
+            .find((t) => /customer|address_id|external/i.test(t)) || "";
+        const numMatch = tagCust.match(/\d{5,}/);
+        name = numMatch ? `Customer #${numMatch[0]}` : "Customer";
       }
 
       let phone = "";
       const phoneKeys = [
         "phone",
-        "phone_number",
-        "phoneNumber",
         "mobile",
         "mobile_number",
-        "mobileNumber",
+        "phone_number",
         "customer_phone",
         "recipient_phone",
-        "contact_number",
         "contact_phone",
         "tel"
       ];
@@ -276,9 +276,16 @@
           const val = src[k];
           if (!val) continue;
           if (typeof val === "object") {
-            const nestedPhone = normalizeText(val.number || val.phone || val.value || "");
+            const nestedPhone = normalizeText(
+              val.number || val.phone || val.mobile || val.raw || val.formatted || ""
+            );
             if (isValidPhoneCandidate(nestedPhone)) {
               phone = nestedPhone;
+              break;
+            }
+            const extractedNested = extractPhoneFromAnyText(JSON.stringify(val));
+            if (extractedNested) {
+              phone = extractedNested;
               break;
             }
           } else {
@@ -368,6 +375,16 @@
         ? order.starting_points.map((sp) => (typeof sp === "object" ? sp?.name || sp?.id : sp)).filter(Boolean)
         : ["Cairo"];
 
+      const rawZoneObjects = Array.isArray(rec.starting_points)
+        ? rec.starting_points
+            .filter((sp) => sp && typeof sp === "object" && (sp.id || sp.starting_point_id) && (sp.name || sp.starting_point_name))
+            .map((sp) => ({
+              id: Number(sp.id || sp.starting_point_id),
+              name: normalizeText(sp.name || sp.starting_point_name),
+              city: normalizeText(rec.city_name || order.city_name || "Cairo")
+            }))
+        : [];
+
       const orderIdNum = String(order.code || rec.order_id || rec.id || "");
       const courierName = rec.courier_name || order.courier_name || (tabName === "Queued" ? "Assigning..." : "-");
       const isSplit = Boolean(rec.is_split || order.is_split || (Array.isArray(order.deliveries) && order.deliveries.length > 1));
@@ -386,6 +403,7 @@
         time_at: formatReadableTimestamp(scheduledDropoff),
         zone: rawZones.join(", "),
         zonesList: rawZones,
+        zoneObjects: rawZoneObjects,
         city: rec.city_name || order.city_name || "Cairo",
         instructions,
         tab: tabName,
@@ -664,14 +682,22 @@
             map.set(Number(c.id), { id: Number(c.id), name: c.zone, city: c.city || "Cairo" });
           }
         });
+        deliveries.forEach((d) => {
+          (d.zoneObjects || []).forEach((zo) => {
+            if (zo && zo.id && zo.name) {
+              map.set(Number(zo.id), { id: Number(zo.id), name: zo.name, city: zo.city || d.city || "Cairo" });
+            }
+          });
+        });
         return Array.from(map.values()).sort((a, b) => String(a.name).localeCompare(String(b.name)));
-      }, [couriers, discoveredZonesFromBundle]);
+      }, [couriers, discoveredZonesFromBundle, deliveries]);
 
       const selectedZoneNames = useMemo(() => {
-        if (cityFilterMode !== "zones" || selectedZoneIds.length === 0) return [];
-        const idSet = new Set(selectedZoneIds.map(Number));
-        return availableZones.filter((z) => idSet.has(Number(z.id))).map((z) => z.name);
-      }, [cityFilterMode, selectedZoneIds, availableZones]);
+        if (!Array.isArray(selectedZoneIds) || selectedZoneIds.length === 0) return [];
+        return selectedZoneIds
+          .map((id) => availableZones.find((z) => Number(z.id) === Number(id))?.name)
+          .filter(Boolean);
+      }, [selectedZoneIds, availableZones]);
 
       const matchesZoneFilter = useCallback(
         (zoneStrOrList) => {
