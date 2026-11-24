@@ -25,7 +25,7 @@
     const DEFAULT_GIST_OWNER = "mahmoudosman-hub";
     const DEFAULT_GIST_ID = "cccb6283d24d991ae2656411758acb72";
 
-    // --- CRISP INLINE SVG ICONS (ZERO EXTERNAL ICON DEPENDENCIES) ---
+    // --- CRISP INLINE SVG ICONS ---
     const IconSvg = ({ children, size = 16, className = "" }) => (
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -315,7 +315,7 @@
 
   syncToGitHub();
   window.__hurrierGitHubTimer && clearInterval(window.__hurrierGitHubTimer);
-  window.__hurrierGitHubTimer = setInterval(syncToGitHub, 12000);
+  window.__hurrierGitHubTimer = setInterval(syncToGitHub, 4000);
 })();`;
     }
 
@@ -442,13 +442,15 @@
       });
 
       const [gistId, setGistId] = useState(initialGistId);
-      const [gistToken, setGistToken] = useState('');
+      const [gistToken, setGistToken] = useState(() => {
+        try { return localStorage.getItem('hurrier_gh_reader_token') || ''; } catch { return ''; }
+      });
       const cachedGistRawUrlRef = useRef('');
       const lastGistEtagRef = useRef('');
       const [syncMode, setSyncMode] = useState('live');
       const [isAutoRefresh, setIsAutoRefresh] = useState(true);
-      const [refreshIntervalSec, setRefreshIntervalSec] = useState(10);
-      const [countdown, setCountdown] = useState(10);
+      const [refreshIntervalSec, setRefreshIntervalSec] = useState(3);
+      const [countdown, setCountdown] = useState(3);
       const [syncStatus, setSyncStatus] = useState('idle');
       const [syncError, setSyncError] = useState('');
       const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
@@ -582,6 +584,9 @@
           if (!cleanId) throw new Error('أدخل Gist ID أولاً');
 
           const reqHeaders = { Accept: 'application/vnd.github+json' };
+          if (gistToken.trim()) {
+            reqHeaders['Authorization'] = `Bearer ${gistToken.trim()}`;
+          }
           if (lastGistEtagRef.current) {
             reqHeaders['If-None-Match'] = lastGistEtagRef.current;
           }
@@ -627,7 +632,7 @@
           setSyncStatus('error');
           setSyncError(err?.message || 'في انتظار وصول أول تحديث من متصفح Hurrier...');
         }
-      }, [gistId, applyHurrierBundle]);
+      }, [gistId, gistToken, applyHurrierBundle]);
 
       useEffect(() => {
         fetchLiveFeed();
@@ -1396,7 +1401,7 @@
                         : 'border-transparent text-gray-500 hover:text-gray-800'
                     }`}
                   >
-                    إعدادات البث (GitHub Gist)
+                    1. الربط عبر GitHub
                   </button>
                   <button
                     type="button"
@@ -1407,7 +1412,7 @@
                         : 'border-transparent text-gray-500 hover:text-gray-800'
                     }`}
                   >
-                    لصق يدوي (Paste JSON)
+                    2. لصق يدوي (Paste JSON)
                   </button>
                 </div>
 
@@ -1425,19 +1430,21 @@
                             onChange={(e) => {
                               setGistId(e.target.value);
                               cachedGistRawUrlRef.current = '';
-                              lastGistEtagRef.current = '';
                             }}
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-mono focus:outline-none focus:border-blue-500"
                           />
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                            GitHub Gist Token (لجهازك إنت فقط)
+                            GitHub Gist Token (اختياري لزيادة سرعة السحب)
                           </label>
                           <input
                             type="password"
                             value={gistToken}
-                            onChange={(e) => setGistToken(e.target.value)}
+                            onChange={(e) => {
+                              setGistToken(e.target.value);
+                              try { localStorage.setItem('hurrier_gh_reader_token', e.target.value); } catch {}
+                            }}
                             placeholder="الصق التوكن هنا لتوليد السكريبت..."
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs font-mono focus:outline-none focus:border-blue-500"
                           />
