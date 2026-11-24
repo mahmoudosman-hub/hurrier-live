@@ -2021,9 +2021,13 @@
         if (!selectedOrder) return null;
         const cleanCode = String(selectedOrder.id).replace(/^HF_EG/i, '').trim();
         const rich = orderDetailsCache[cleanCode] || null;
-        const richOrder =
-          rich?.order ||
-          (rich && (rich.code || rich.order_code || rich.pickup_address || rich.dropoff_address) ? rich : {});
+        const rawRoot = rich?.raw_detail || {};
+        const custExtra = rich?.customer_details || {};
+        const richOrder = {
+          ...(rawRoot?.order || {}),
+          ...rawRoot,
+          ...(rich?.order || {})
+        };
         const richDeliveries = Array.isArray(rich?.deliveries) && rich.deliveries.length > 0 ? rich.deliveries : [];
         const richNotes = Array.isArray(rich?.dispatcher_notes) ? rich.dispatcher_notes : [];
 
@@ -2033,32 +2037,78 @@
           .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
           .join(' ');
 
-        const pickupAddrObj = richOrder.pickup_address || {};
-        const dropoffAddrObj = richOrder.dropoff_address || {};
-        const customerObj = richOrder.customer || {};
+        const pickupAddrObj = richOrder.pickup_address || rawRoot.pickup_address || {};
+        const dropoffAddrObj = {
+          ...(rawRoot.dropoff_address || {}),
+          ...(rawRoot.delivery_address || {}),
+          ...(richOrder.dropoff_address || {}),
+          ...(richOrder.delivery_address || {}),
+          ...(custExtra.dropoff_address || custExtra.address || {})
+        };
+        const customerObj = {
+          ...(rawRoot.customer || {}),
+          ...(rawRoot.recipient || {}),
+          ...(richOrder.customer || {}),
+          ...(richOrder.recipient || {}),
+          ...(custExtra.customer || custExtra || {})
+        };
+
+        const pickFirstNonEmpty = (...vals) => {
+          for (const v of vals) {
+            if (v !== undefined && v !== null && String(v).trim() !== '' && String(v).trim().toUpperCase() !== 'NA') {
+              return String(v).trim();
+            }
+          }
+          return '';
+        };
+
+        const findPhoneDeep = (obj, depth = 0) => {
+          if (!obj || typeof obj !== 'object' || depth > 4) return '';
+          const phoneKeys = ['phone_number', 'phone', 'mobile', 'mobile_number', 'contact_number', 'telephone', 'msisdn', 'customer_phone'];
+          for (const k of phoneKeys) {
+            if (obj[k] && typeof obj[k] !== 'object') {
+              const s = String(obj[k]).trim();
+              if (s.length >= 8) return s;
+            }
+          }
+          for (const v of Object.values(obj)) {
+            if (v && typeof v === 'object') {
+              const found = findPhoneDeep(v, depth + 1);
+              if (found) return found;
+            }
+          }
+          return '';
+        };
 
         const resolvedCustomerName =
-          dropoffAddrObj.name ||
-          dropoffAddrObj.recipient_name ||
-          dropoffAddrObj.full_name ||
-          [dropoffAddrObj.first_name, dropoffAddrObj.last_name].filter(Boolean).join(' ') ||
-          richOrder.customer_name ||
-          customerObj.name ||
-          [customerObj.first_name, customerObj.last_name].filter(Boolean).join(' ') ||
-          selectedOrder.customerName ||
-          'Customer';
+          pickFirstNonEmpty(
+            dropoffAddrObj.name,
+            dropoffAddrObj.recipient_name,
+            dropoffAddrObj.full_name,
+            [dropoffAddrObj.first_name, dropoffAddrObj.last_name].filter(Boolean).join(' '),
+            richOrder.customer_name,
+            rawRoot.customer_name,
+            customerObj.name,
+            customerObj.full_name,
+            [customerObj.first_name, customerObj.last_name].filter(Boolean).join(' '),
+            selectedOrder.customerName
+          ) || 'Customer';
 
         const resolvedCustomerPhone =
-          dropoffAddrObj.phone_number ||
-          dropoffAddrObj.phone ||
-          dropoffAddrObj.mobile ||
-          dropoffAddrObj.mobile_number ||
-          dropoffAddrObj.contact_number ||
-          richOrder.customer_phone ||
-          customerObj.phone_number ||
-          customerObj.phone ||
-          customerObj.mobile ||
-          '-';
+          pickFirstNonEmpty(
+            dropoffAddrObj.phone_number,
+            dropoffAddrObj.phone,
+            dropoffAddrObj.mobile,
+            dropoffAddrObj.mobile_number,
+            dropoffAddrObj.contact_number,
+            richOrder.customer_phone,
+            rawRoot.customer_phone,
+            customerObj.phone_number,
+            customerObj.phone,
+            customerObj.mobile,
+            customerObj.mobile_number,
+            findPhoneDeep({ dropoffAddrObj, customerObj, richOrder, rawRoot, custExtra })
+          ) || '-';
 
         const riderHistory = extractCourierHistoryFromDeliveries(
           richDeliveries,
@@ -2066,49 +2116,65 @@
           selectedOrder.courierId
         );
 
-        const pickedUpTransitionTime = (() => {
-          for (const d of richDeliveries) {
-            const tr = (d.transitions || []).find(
-              (t) => String(t.to_state || '').toLowerCase() === 'picked_up'
+        let pickedUpTransitionTime = richOrder.picked_up_at
+          ? formatShortTimeWithSec(richOrder.picked_up_at)
+          : '-';
+        if (pickedUpTransitionTime === '-') {
+          for (const del of richDeliveries) {
+            const trs = Array.isArray(del.transitions) ? del.transitions : [];
+            const puTr = trs.find((t) =>
+              ['picked_up', 'left_pickup'].includes(String(t.to_state || '').toLowerCase())
             );
-            const rawTs = getTransitionRawTimestamp(tr);
-            if (rawTs) return formatShortTimeWithSec(rawTs);
+            if (puTr) {
+              const rawPu = getTransitionRawTimestamp(puTr);
+              if (rawPu) {
+                pickedUpTransitionTime = formatShortTimeWithSec(rawPu);
+                break;
+              }
+            }
           }
-          return '-';
-        })();
+        }
 
         const rawItems = Array.isArray(richOrder.items)
           ? richOrder.items
           : Array.isArray(richOrder.order_items)
           ? richOrder.order_items
-          : Array.isArray(richOrder.line_items)
-          ? richOrder.line_items
+          : Array.isArray(rawRoot.items)
+          ? rawRoot.items
           : selectedOrder.items || [];
 
-        const rawOrderIssues = Array.isArray(richOrder.issues) ? richOrder.issues : [];
+        const rawOrderIssues = Array.isArray(richOrder.issues)
+          ? richOrder.issues
+          : Array.isArray(rawRoot.issues)
+          ? rawRoot.issues
+          : [];
 
         return {
           cleanCode,
           orderCode: richOrder.order_code || selectedOrder.orderCode || `HF_EG${cleanCode}`,
           status: formattedStatus,
-          statusSince: formatReadableTimestamp(richOrder.created_at || richOrder.placed_at),
+          statusSince: formatReadableTimestamp(
+            richOrder.status_updated_at || richOrder.updated_at || richOrder.placed_at
+          ),
           platform: richOrder.platform || 'talabat',
           globalEntityId: richOrder.global_entity_id || 'HF_EG',
-          vendorCode: richOrder.vendor_code || '-',
+          vendorCode: richOrder.vendor_code || richOrder.vendor_id || '-',
           vendorOrderNo: richOrder.vendor_order_number || selectedOrder.vo || '-',
           orderValue:
             typeof richOrder.order_value === 'number'
               ? `${(richOrder.order_value / 100).toFixed(2)} EGP`
-              : selectedOrder.orderValue,
+              : selectedOrder.orderValue || '-',
           cashAtPickup:
             typeof richOrder.cash_at_pickup === 'number'
               ? `${(richOrder.cash_at_pickup / 100).toFixed(2)} EGP`
-              : '-',
+              : '0.00 EGP',
           cashAtDropoff:
             typeof richOrder.cash_at_dropoff === 'number'
               ? `${(richOrder.cash_at_dropoff / 100).toFixed(2)} EGP`
               : selectedOrder.isCash
-              ? selectedOrder.orderValue
+              ? typeof richOrder.order_value === 'number'
+                ? `${(richOrder.order_value / 100).toFixed(2)} EGP`
+                : selectedOrder.orderValue || '0.00 EGP'
               : '0.00 EGP',
           valueLimit:
             typeof richOrder.value_limit === 'number'
@@ -2147,21 +2213,21 @@
               : selectedOrder.pickupCoords,
           customerName: resolvedCustomerName,
           customerPhone: resolvedCustomerPhone,
-          customerStreet: dropoffAddrObj.street_address || selectedOrder.dropoffAddress || '-',
+          customerStreet: dropoffAddrObj.street_address || dropoffAddrObj.address || selectedOrder.dropoffAddress || '-',
           customerCity: dropoffAddrObj.city || dropoffAddrObj.area || dropoffAddrObj.district || '',
-          customerApt: dropoffAddrObj.apartment || 'NA',
-          customerBuilding: dropoffAddrObj.building || 'NA',
-          customerFloor: dropoffAddrObj.floor || 'NA',
-          customerZip: dropoffAddrObj.zipcode || 'NA',
-          customerIntercom: dropoffAddrObj.intercom || 'NA',
-          customerEntrance: dropoffAddrObj.entrance || 'NA',
+          customerApt: pickFirstNonEmpty(dropoffAddrObj.apartment, dropoffAddrObj.apt, richOrder.apartment, customerObj.apartment) || 'NA',
+          customerBuilding: pickFirstNonEmpty(dropoffAddrObj.building, dropoffAddrObj.building_number, richOrder.building, customerObj.building) || 'NA',
+          customerFloor: pickFirstNonEmpty(dropoffAddrObj.floor, dropoffAddrObj.floor_number, richOrder.floor, customerObj.floor) || 'NA',
+          customerZip: pickFirstNonEmpty(dropoffAddrObj.zipcode, dropoffAddrObj.zip_code, dropoffAddrObj.postal_code) || 'NA',
+          customerIntercom: pickFirstNonEmpty(dropoffAddrObj.intercom, dropoffAddrObj.intercom_code) || 'NA',
+          customerEntrance: pickFirstNonEmpty(dropoffAddrObj.entrance) || 'NA',
           dropoffInstructions:
             dropoffAddrObj.delivery_instructions || dropoffAddrObj.instructions || dropoffAddrObj.note || '',
           dropoffCoords:
             dropoffAddrObj.latitude && dropoffAddrObj.longitude
               ? `${dropoffAddrObj.latitude}, ${dropoffAddrObj.longitude}`
               : selectedOrder.dropoffCoords,
-          customerUpdatedAt: formatReadableTimestamp(dropoffAddrObj.updated_at || richOrder.updated_at),
+          customerUpdatedAt: formatReadableTimestamp(dropoffAddrObj.updated_at || richOrder.customer_updated_at || richOrder.updated_at),
           deadline: selectedOrder.deadline,
           isLate: selectedOrder.isLate,
           orderedAt: formatReadableTimestamp(richOrder.placed_at || richOrder.created_at),
