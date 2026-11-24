@@ -60,7 +60,6 @@
       { id: 10167, name: "Mohandiseen nesting p", city: "Cairo" },
       { id: 10181, name: "Haram nesting pt", city: "Cairo" },
       { id: 10138, name: "October hosary", city: "Cairo" },
-      { id: 1, name: "Heliopolis", city: "Cairo" },
       { id: 10012, name: "Tagammoa 1 sp", city: "Cairo" },
       { id: 10089, name: "Rehab 2 sp", city: "Cairo" },
       { id: 10069, name: "Shorouk city sp 1", city: "Cairo" },
@@ -103,7 +102,6 @@
       { id: 10067, name: "Obour hay awal sp", city: "Cairo" },
       { id: 10092, name: "Hadayek el qobba 2 sp", city: "Cairo" },
       { id: 10164, name: "Shobra nesting", city: "Cairo" },
-      { id: 2, name: "Mohandiseen", city: "Cairo" },
       { id: 10101, name: "Shorouk city sp 2", city: "Cairo" },
       { id: 10126, name: "October nesting", city: "Cairo" },
       { id: 10010, name: "Auc sp", city: "Cairo" },
@@ -191,8 +189,6 @@
       { id: 10276, name: "Hybrid agouza bc", city: "Cairo" },
       { id: 10281, name: "Hybrid fleet shorouk 4", city: "Cairo" },
       { id: 10187, name: "Hybrid fleet shorouk 3rd", city: "Cairo" },
-      { id: 10290, name: "Hybrid fleet talbya", city: "Cairo" },
-      { id: 10291, name: "Hybrid talbya bc", city: "Cairo" },
       { id: 10027, name: "Gleem sp", city: "Alexandria" },
       { id: 10028, name: "Raml station sp", city: "Alexandria" }
     ];
@@ -215,7 +211,7 @@
 
     function isRealHurrierZoneId(id) {
       const n = Number(id);
-      return Number.isInteger(n) && n > 0 && n < 90000;
+      return Number.isInteger(n) && n >= 10000 && n < 90000;
     }
 
     function normalizeText(v) {
