@@ -68,6 +68,50 @@
       { id: 10185, name: "Hybrid fleet banafseg", city: "Cairo" },
       { id: 10290, name: "Hybrid fleet talbya", city: "Cairo" },
       { id: 10291, name: "Hybrid talbya bc", city: "Cairo" },
+      { id: 10208, name: "Hybrid fleet banks center", city: "Cairo" },
+      { id: 10218, name: "Hybrid fleet el hadeeka el dawlya", city: "Cairo" },
+      { id: 10238, name: "Hybrid fleet el daher", city: "Cairo" },
+      { id: 10213, name: "Hybrid fleet el montazah", city: "Cairo" },
+      { id: 10250, name: "Hybrid fleet el nadi el gedid", city: "Cairo" },
+      { id: 10193, name: "Hybrid fleet el zeitoun", city: "Cairo" },
+      { id: 10273, name: "Hybrid fleet gardenia", city: "Cairo" },
+      { id: 10210, name: "Hybrid fleet hadayek el ahram", city: "Cairo" },
+      { id: 10276, name: "Hybrid agouza bc", city: "Cairo" },
+      { id: 10127, name: "Heliopolis nesting sp", city: "Cairo" },
+      { id: 10020, name: "Helwan SP", city: "Cairo" },
+      { id: 10135, name: "Helwan sp 2", city: "Cairo" },
+      { id: 10101, name: "Dokki sp", city: "Cairo" },
+      { id: 10102, name: "Dokki nesting sp", city: "Cairo" },
+      { id: 10103, name: "Mohandiseen sp", city: "Cairo" },
+      { id: 10104, name: "Mohandiseen nesting sp", city: "Cairo" },
+      { id: 10105, name: "Agouza sp", city: "Cairo" },
+      { id: 10106, name: "Zamalek sp", city: "Cairo" },
+      { id: 10107, name: "Maadi sp", city: "Cairo" },
+      { id: 10108, name: "Maadi nesting sp", city: "Cairo" },
+      { id: 10109, name: "Nasr city sp", city: "Cairo" },
+      { id: 10110, name: "Nasr city 2 sp", city: "Cairo" },
+      { id: 10111, name: "Nasr city nesting sp", city: "Cairo" },
+      { id: 10112, name: "Heliopolis sp", city: "Cairo" },
+      { id: 10113, name: "New cairo sp", city: "Cairo" },
+      { id: 10114, name: "Tagamoa sp", city: "Cairo" },
+      { id: 10115, name: "Rehab sp", city: "Cairo" },
+      { id: 10116, name: "Madinaty sp", city: "Cairo" },
+      { id: 10117, name: "Shorouk sp", city: "Cairo" },
+      { id: 10118, name: "Obour sp", city: "Cairo" },
+      { id: 10119, name: "6th of october sp", city: "Cairo" },
+      { id: 10120, name: "Sheikh zayed sp", city: "Cairo" },
+      { id: 10121, name: "Faisal sp", city: "Cairo" },
+      { id: 10122, name: "Faisal nesting sp", city: "Cairo" },
+      { id: 10123, name: "Omranya sp", city: "Cairo" },
+      { id: 10124, name: "Boulaq el dakrour sp", city: "Cairo" },
+      { id: 10126, name: "Shubra sp", city: "Cairo" },
+      { id: 10128, name: "Hadayek el kobba sp", city: "Cairo" },
+      { id: 10129, name: "Ain shams sp", city: "Cairo" },
+      { id: 10130, name: "Matariya sp", city: "Cairo" },
+      { id: 10131, name: "El salam sp", city: "Cairo" },
+      { id: 10132, name: "Badr sp", city: "Cairo" },
+      { id: 10133, name: "Mokattam sp", city: "Cairo" },
+      { id: 10134, name: "Sayeda zeinab sp", city: "Cairo" },
       { id: 10027, name: "Gleem sp", city: "Alexandria" },
       { id: 10028, name: "Raml station sp", city: "Alexandria" }
     ];
@@ -671,59 +715,114 @@
 
       const availableZones = useMemo(() => {
         const map = new Map();
-        ALL_ZONES_CATALOG.forEach((z) => map.set(Number(z.id), z));
+        ALL_ZONES_CATALOG.forEach((z) => {
+          const key = normalizeText(z.name).toLowerCase();
+          map.set(key, { ...z, id: Number(z.id) });
+        });
         discoveredZonesFromBundle.forEach((z) => {
-          if (z && z.id !== undefined && z.name) {
-            map.set(Number(z.id), { id: Number(z.id), name: z.name, city: z.city || "Cairo" });
+          if (z && z.name) {
+            const key = normalizeText(z.name).toLowerCase();
+            const existing = map.get(key);
+            map.set(key, {
+              id: Number(z.id || existing?.id || Math.abs(key.split("").reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) | 0, 0))),
+              name: normalizeText(z.name),
+              city: z.city || existing?.city || "Cairo"
+            });
           }
         });
         couriers.forEach((c) => {
-          if (c.id !== undefined) {
-            map.set(Number(c.id), { id: Number(c.id), name: c.zone, city: c.city || "Cairo" });
+          if (c.zone) {
+            const key = normalizeText(c.zone).toLowerCase();
+            const existing = map.get(key);
+            map.set(key, {
+              id: Number(c.id || existing?.id || Math.abs(key.split("").reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) | 0, 0))),
+              name: normalizeText(c.zone),
+              city: c.city || existing?.city || "Cairo"
+            });
           }
         });
         deliveries.forEach((d) => {
           (d.zoneObjects || []).forEach((zo) => {
-            if (zo && zo.id && zo.name) {
-              map.set(Number(zo.id), { id: Number(zo.id), name: zo.name, city: zo.city || d.city || "Cairo" });
+            if (zo && zo.name) {
+              const key = normalizeText(zo.name).toLowerCase();
+              const existing = map.get(key);
+              map.set(key, {
+                id: Number(zo.id || existing?.id || Math.abs(key.split("").reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) | 0, 0))),
+                name: normalizeText(zo.name),
+                city: zo.city || d.city || existing?.city || "Cairo"
+              });
+            }
+          });
+          (d.zonesList || []).forEach((zName) => {
+            const clean = normalizeText(zName);
+            if (!clean) return;
+            const key = clean.toLowerCase();
+            if (!map.has(key)) {
+              map.set(key, {
+                id: Math.abs(key.split("").reduce((a, b) => ((a << 5) - a + b.charCodeAt(0)) | 0, 0)),
+                name: clean,
+                city: d.city || "Cairo"
+              });
             }
           });
         });
-        return Array.from(map.values()).sort((a, b) => String(a.name).localeCompare(String(b.name)));
-      }, [couriers, discoveredZonesFromBundle, deliveries]);
+        return Array.from(map.values())
+          .filter((z) => selectedCity === "All Cities" || z.city === selectedCity)
+          .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      }, [couriers, discoveredZonesFromBundle, deliveries, selectedCity]);
 
       const selectedZoneNames = useMemo(() => {
         if (!Array.isArray(selectedZoneIds) || selectedZoneIds.length === 0) return [];
-        return selectedZoneIds
-          .map((id) => availableZones.find((z) => Number(z.id) === Number(id))?.name)
+        const idSet = new Set(selectedZoneIds.map(Number));
+        return availableZones
+          .filter((z) => idSet.has(Number(z.id)))
+          .map((z) => normalizeText(z.name).toLowerCase())
           .filter(Boolean);
-      }, [selectedZoneIds, availableZones]);
+      }, [availableZones, selectedZoneIds]);
 
       const matchesZoneFilter = useCallback(
-        (zoneStrOrList) => {
+        (delivery) => {
           if (cityFilterMode === "zones" && selectedZoneIds.length > 0) {
-            const list = Array.isArray(zoneStrOrList)
-              ? zoneStrOrList.map((x) => normalizeText(x).toLowerCase())
-              : normalizeText(zoneStrOrList)
-                  .toLowerCase()
-                  .split(",")
-                  .map((x) => x.trim());
-            const targetNames = selectedZoneNames.map((n) => normalizeText(n).toLowerCase());
-            return list.some((zn) => targetNames.some((tn) => zn.includes(tn) || tn.includes(zn)));
+            const recZoneIds = (delivery.zoneObjects || [])
+              .map((zo) => Number(zo.id))
+              .filter((n) => !Number.isNaN(n) && n > 0);
+            const matchesById = recZoneIds.some((zid) => selectedZoneIds.map(Number).includes(zid));
+            if (matchesById) return true;
+
+            const recNames = [
+              ...(delivery.zonesList || []),
+              ...(delivery.zoneObjects || []).map((zo) => zo.name),
+              delivery.zone
+            ]
+              .map((n) => normalizeText(n).toLowerCase())
+              .filter(Boolean);
+
+            return selectedZoneNames.some((selName) =>
+              recNames.some((rn) => rn === selName || rn.includes(selName) || selName.includes(rn))
+            );
           }
+
           if (cityFilterMode === "multi_cities") {
-            return true;
+            if (!selectedMultiCities.length) return true;
+            return selectedMultiCities.some(
+              (c) => normalizeText(c).toLowerCase() === normalizeText(delivery.city).toLowerCase()
+            );
           }
+
+          if (selectedCity && selectedCity !== "All Cities") {
+            return normalizeText(selectedCity).toLowerCase() === normalizeText(delivery.city).toLowerCase();
+          }
+
           return true;
         },
-        [cityFilterMode, selectedZoneIds, selectedZoneNames]
+        [cityFilterMode, selectedZoneIds, selectedZoneNames, selectedMultiCities, selectedCity]
       );
 
       const baseTabDeliveries = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();
         return deliveries.filter((d) => {
           const matchesTab = d.tab === activeTab;
-          const matchesZone = matchesZoneFilter(d.zonesList || d.zone);
+          const matchesZone = matchesZoneFilter(d);
           const matchesSearch =
             !q ||
             d.id.toLowerCase().includes(q) ||
