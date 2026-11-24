@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v6.0 — Rider Follow-up Copy + 4h Window</title>
+  <title>Hurrier Live Operations Dashboard v6.1 — Persistent Selection + 4h Window</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -35,7 +35,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v6.0...
+      Loading Hurrier Live Operations Dashboard v6.1...
     </div>
   </div>
 
@@ -454,7 +454,7 @@
       const placedTimestamp = order.placed_at ? new Date(order.placed_at).getTime() : 0;
 
       return {
-        uid: `Completed-${order.id || codeStr}-${Math.random().toString(36).slice(2, 6)}`,
+        uid: `Completed-${order.id || codeStr}`,
         id: codeStr,
         orderCode: order.order_code || `HF_EG${codeStr}`,
         placedAtFormatted: formatShortTimeOnly(order.placed_at),
@@ -680,7 +680,7 @@
         Boolean(order.is_split || rec?.is_split) || (codeStr.includes("-") && codeStr.length > 14);
 
       return {
-        uid: `${tabName}-${rec?.id || codeStr}-${Math.random().toString(36).slice(2, 7)}`,
+        uid: `${tabName}-${rec?.id || codeStr}`,
         id: codeStr,
         orderCode: order.order_code || `HF_EG${codeStr}`,
         vendor: order.vendor_name || "Unknown Vendor",
@@ -1334,7 +1334,15 @@
             : Array.isArray(payload)
             ? payload
             : [];
-          recs.forEach((r) => nextDeliveries.push(mapHurrierRecordToDelivery(r, tab)));
+          const seenTabUids = new Set();
+          recs.forEach((r, idx) => {
+            const mapped = mapHurrierRecordToDelivery(r, tab);
+            if (seenTabUids.has(mapped.uid)) {
+              mapped.uid = `${mapped.uid}-${idx}`;
+            }
+            seenTabUids.add(mapped.uid);
+            nextDeliveries.push(mapped);
+          });
           nextCounts[tab] = payload?.metadata?.total_count ?? recs.length;
         });
 
@@ -3166,7 +3174,7 @@
                         تحديد زونات الموظف قبل بدء السحب (Independent Zone Gate)
                       </h1>
                       <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v6.0 • Rider Follow-up Copy + 4h Window (50/Page)
+                        ★ v6.1 • Persistent Selection + 4h Window (50/Page)
                       </span>
                     </div>
                     <p className="text-xs text-slate-300 mt-0.5">
@@ -3340,7 +3348,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v6.0 (Rider Copy + 4h ↑)</span>
+                <span className="font-bold text-emerald-700">★ v6.1 (Persistent Copy + 4h ↑)</span>
                 <span className="font-mono text-gray-400">#{sessionId.slice(-5)}</span>
               </div>
               {employeeName && (
