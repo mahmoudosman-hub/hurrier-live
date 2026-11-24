@@ -21,10 +21,10 @@
   <script type="text/babel">
     const { useState, useMemo, useEffect, useCallback, useRef } = React;
 
-    // --- PRE-CONFIGURED FIREBASE REALTIME DATABASE (READ-ONLY VIEW FOR EMPLOYEES) ---
     const DEFAULT_FIREBASE_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
+    const FIREBASE_WRITE_KEY = "hurrier_sec_9981";
 
-    // --- INLINE SVG ICON SYSTEM ---
+    // --- INLINE SVG ICONS ---
     const IconSvg = ({ children, size = 16, className = "" }) => (
       <svg
         xmlns="http://www.w3.org/2000/svg"
@@ -59,9 +59,7 @@
     const ClockIcon = (p) => <IconSvg {...p}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></IconSvg>;
     const XIcon = (p) => <IconSvg {...p}><path d="M18 6 6 18"/><path d="m6 6 12 12"/></IconSvg>;
     const UsersIcon = (p) => <IconSvg {...p}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></IconSvg>;
-    const ActivityIcon = (p) => <IconSvg {...p}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></IconSvg>;
     const AlertCircleIcon = (p) => <IconSvg {...p}><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></IconSvg>;
-    const FileTextIcon = (p) => <IconSvg {...p}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></IconSvg>;
     const RadioIcon = (p) => <IconSvg {...p}><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></IconSvg>;
     const ShieldCheckIcon = (p) => <IconSvg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></IconSvg>;
     const PlayIcon = (p) => <IconSvg {...p}><polygon points="5 3 19 12 5 21 5 3"/></IconSvg>;
@@ -69,9 +67,11 @@
     const UploadIcon = (p) => <IconSvg {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></IconSvg>;
     const Link2Icon = (p) => <IconSvg {...p}><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></IconSvg>;
     const WifiIcon = (p) => <IconSvg {...p}><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" x2="12.01" y1="20" y2="20"/></IconSvg>;
-    const TagIcon = (p) => <IconSvg {...p}><path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2Z"/><path d="M7 7h.01"/></IconSvg>;
-    const TruckIcon = (p) => <IconSvg {...p}><path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/></IconSvg>;
     const RotateCcwIcon = (p) => <IconSvg {...p}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></IconSvg>;
+    const PhoneIcon = (p) => <IconSvg {...p}><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></IconSvg>;
+    const HomeIcon = (p) => <IconSvg {...p}><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></IconSvg>;
+    const CameraIcon = (p) => <IconSvg {...p}><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></IconSvg>;
+    const AlertTriangleIcon = (p) => <IconSvg {...p}><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></IconSvg>;
 
     // --- INITIAL SNAPSHOT DATA ---
     const MOCK_DELIVERIES = [
@@ -119,60 +119,7 @@
         dropoffCoords: "29.98703, 31.15300",
         customerName: "Youssef Ashraaf",
         items: [{ name: "منقوشة ميكس جبن", qty: 2, price: "244.00 EGP" }],
-        transitions: [
-          { state: "queued", time: "21:30:01", by: "order_create_post_processing_worker" },
-          { state: "dispatched", time: "21:30:21", by: "auto_dispatching (AI)" },
-          { state: "left_pickup", time: "22:09:04", by: "courier_app" }
-        ]
-      },
-      {
-        uid: "mock_active_2",
-        id: "4741714149",
-        orderCode: "HF_EG4741714149",
-        isPrimary: true,
-        vendor: "بلبن، المنيل",
-        vo: "9084",
-        deadline: "-51min",
-        isLate: true,
-        courier: "Hassan Moustafa Abdelnaem Amin _EL EZZ",
-        courierId: 2314203,
-        status: "Near Dropoff",
-        time_in: "-51min",
-        time_at: "November 24, 1:26 am",
-        zone: "Manial nesting, Tahrir nesting",
-        allZones: ["Manial nesting", "Tahrir nesting", "Manial sp", "Tahrir"],
-        city: "Cairo",
-        instructions: ["Restaurants"],
-        tab: "Active",
-        distance: "3.88 km",
-        orderValue: "197.99 EGP",
-        valueLimit: "850.00 EGP",
-        capacity: 18,
-        utilizationText: "197.99 EGP (Price)",
-        isCash: false,
-        isCard: false,
-        isCorporate: false,
-        isReviewed: true,
-        isHighUtil: false,
-        isReturning: false,
-        isDarkstore: false,
-        verticalType: "restaurants",
-        restrictions: ["Bike-Standard box"],
-        tags: ["external_address_id:178203258", "proof_of_pickup", "signature_proof", "stv_4mins"],
-        sentToVendorAt: "November 24, 1:02 am",
-        confirmedAt: "November 24, 1:02 am",
-        scheduledPickupAt: "November 24, 1:18 am",
-        scheduledDropoffAt: "November 24, 1:26 am",
-        pickupAddress: "المنيل الرئيسي",
-        pickupCoords: "30.02338, 31.22592",
-        dropoffAddress: "مستشفى الطلبة جامعة القاهرة",
-        dropoffCoords: "29.99424, 31.21202",
-        customerName: "Customer #178203258",
-        items: [{ name: "قشطوطة مانجو", qty: 2, price: "197.99 EGP" }],
-        transitions: [
-          { state: "queued", time: "01:02:11", by: "system" },
-          { state: "near_dropoff", time: "01:24:30", by: "gps_geofence" }
-        ]
+        transitions: []
       }
     ];
 
@@ -261,12 +208,42 @@
       const d = new Date(isoDate);
       if (Number.isNaN(d.getTime())) return '-';
       return d.toLocaleString('en-US', {
-        month: 'long',
+        month: 'short',
         day: 'numeric',
         hour: 'numeric',
         minute: '2-digit',
         hour12: true
       });
+    }
+
+    function formatShortTimeWithSec(isoDate) {
+      if (!isoDate) return '-';
+      const d = new Date(isoDate);
+      if (Number.isNaN(d.getTime())) return '-';
+      return d.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+      });
+    }
+
+    function formatShortTimeNoSec(isoDate) {
+      if (!isoDate) return '-';
+      const d = new Date(isoDate);
+      if (Number.isNaN(d.getTime())) return '-';
+      return d.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+    }
+
+    function formatDurationSeconds(sec) {
+      if (sec === null || sec === undefined || Number.isNaN(Number(sec))) return '-';
+      const mins = Math.round(Number(sec) / 60);
+      if (mins < 60) return `${mins}m`;
+      return `${Math.floor(mins / 60)}h ${mins % 60}m`;
     }
 
     function formatUtilization(util) {
@@ -277,6 +254,157 @@
       return `${util.value} (${util.type || 'Unit'})`;
     }
 
+    function humanizeEventLabel(tr) {
+      const state = String(tr.to_state || tr.event_type || '').toLowerCase();
+      const map = {
+        queued: 'Queued',
+        dispatched: 'Dispatched',
+        courier_notified: 'Courier Notified',
+        accepted: 'Accepted',
+        near_pickup: 'Near Pickup',
+        picked_up: 'Picked Up',
+        left_pickup: 'Left Pickup',
+        near_dropoff: 'Near Dropoff',
+        completed: 'Completed',
+        undispatched: 'Undispatched',
+        pending: 'Pending',
+        scheduled: 'Scheduled'
+      };
+      if (map[state]) return map[state];
+      return state
+        .split('_')
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+    }
+
+    // تحليل سجل الطيارين الذين قبلوا الأوردر أو استلموه أو تم سحبه منهم
+    function extractCourierHistoryFromDeliveries(deliveriesArr, fallbackCourier, fallbackCourierId) {
+      const courierMap = new Map();
+
+      (deliveriesArr || []).forEach((del, delIdx) => {
+        const transitions = Array.isArray(del.transitions) ? del.transitions : [];
+        transitions.forEach((tr) => {
+          const cid = tr.courier_id || tr.metadata?.courier_id;
+          const cname = tr.courier_name || tr.metadata?.courier_name;
+          if (!cid && !cname) return;
+
+          const key = String(cid || cname);
+          if (!courierMap.has(key)) {
+            courierMap.set(key, {
+              courierId: cid || '-',
+              courierName: cname || `Courier #${cid}`,
+              deliveryId: del.id,
+              deliveryIndex: delIdx + 1,
+              events: [],
+              acceptedAt: null,
+              dispatchedAt: null,
+              notifiedAt: null,
+              pickedUpAt: null,
+              leftPickupAt: null,
+              undispatchedAt: null,
+              undispatchReason: null,
+              firstSeenAt: tr.created_at || null,
+              lastSeenAt: tr.created_at || null
+            });
+          }
+
+          const entry = courierMap.get(key);
+          const evType = String(tr.event_type || '').toLowerCase();
+          const toState = String(tr.to_state || '').toLowerCase();
+          const label = humanizeEventLabel(tr);
+
+          if (!entry.events.includes(label)) {
+            entry.events.push(label);
+          }
+
+          if (tr.created_at) {
+            if (!entry.firstSeenAt || new Date(tr.created_at) < new Date(entry.firstSeenAt)) {
+              entry.firstSeenAt = tr.created_at;
+            }
+            if (!entry.lastSeenAt || new Date(tr.created_at) > new Date(entry.lastSeenAt)) {
+              entry.lastSeenAt = tr.created_at;
+            }
+          }
+
+          if (toState === 'dispatched' || evType.includes('dispatched')) {
+            entry.dispatchedAt = tr.created_at || entry.dispatchedAt;
+          }
+          if (toState === 'courier_notified' || evType.includes('notified')) {
+            entry.notifiedAt = tr.created_at || entry.notifiedAt;
+          }
+          if (toState === 'accepted' || evType.includes('accepted')) {
+            entry.acceptedAt = tr.created_at || entry.acceptedAt;
+          }
+          if (toState === 'picked_up' || evType.includes('picked_up')) {
+            entry.pickedUpAt = tr.created_at || entry.pickedUpAt;
+          }
+          if (toState === 'left_pickup' || evType.includes('left_pickup')) {
+            entry.leftPickupAt = tr.created_at || entry.leftPickupAt;
+          }
+          if (tr.un_dispatch_type || tr.metadata?.undispatch_type || toState.includes('undispatch')) {
+            entry.undispatchedAt = tr.created_at || entry.undispatchedAt;
+            entry.undispatchReason = tr.un_dispatch_type || tr.metadata?.undispatch_type || 'undispatched';
+          }
+        });
+
+        // التأكد من وجود الطيار الحالي للرحلة حتى لو لم تظهر له transitions
+        if (del.courier_id || del.courier_name) {
+          const curKey = String(del.courier_id || del.courier_name);
+          if (!courierMap.has(curKey)) {
+            courierMap.set(curKey, {
+              courierId: del.courier_id || '-',
+              courierName: del.courier_name || `Courier #${del.courier_id}`,
+              deliveryId: del.id,
+              deliveryIndex: delIdx + 1,
+              events: [humanizeEventLabel({ to_state: del.status })],
+              acceptedAt: ['accepted', 'near_pickup', 'picked_up', 'left_pickup', 'near_dropoff', 'completed'].includes(String(del.status).toLowerCase())
+                ? del.event_timestamp
+                : null,
+              dispatchedAt: del.event_timestamp || null,
+              notifiedAt: null,
+              pickedUpAt: null,
+              leftPickupAt: null,
+              undispatchedAt: null,
+              undispatchReason: null,
+              firstSeenAt: del.event_timestamp || null,
+              lastSeenAt: del.event_timestamp || null
+            });
+          } else {
+            const existing = courierMap.get(curKey);
+            // إذا وصلت الحالة لما بعد القبول ولم يسجل حدث accepted صريح، نعتبره مقبولاً
+            if (
+              !existing.acceptedAt &&
+              ['accepted', 'near_pickup', 'picked_up', 'left_pickup', 'near_dropoff', 'completed'].includes(String(del.status).toLowerCase())
+            ) {
+              existing.acceptedAt = existing.pickedUpAt || existing.leftPickupAt || del.event_timestamp || existing.firstSeenAt;
+            }
+          }
+        }
+      });
+
+      // Fallback من بيانات الجدول الأساسية قبل وصول الـ Detail API
+      if (courierMap.size === 0 && fallbackCourier && fallbackCourier !== '-' && fallbackCourier !== 'Assigning...') {
+        courierMap.set(String(fallbackCourierId || fallbackCourier), {
+          courierId: fallbackCourierId || '-',
+          courierName: fallbackCourier,
+          deliveryId: '-',
+          deliveryIndex: 1,
+          events: ['Current Assigned'],
+          acceptedAt: null,
+          dispatchedAt: null,
+          notifiedAt: null,
+          pickedUpAt: null,
+          leftPickupAt: null,
+          undispatchedAt: null,
+          undispatchReason: null,
+          firstSeenAt: null,
+          lastSeenAt: null
+        });
+      }
+
+      return Array.from(courierMap.values());
+    }
+
     function mapHurrierRecordToDelivery(rec, tabName, idx = 0) {
       const order = rec.order || {};
       const verticalType = String(order.vertical_type || 'restaurants').toLowerCase().trim();
@@ -284,7 +412,6 @@
       const vendorLower = vendorName.toLowerCase();
       const tagsList = Array.isArray(order.tags) ? order.tags : [];
 
-      // Darkstores = طلبات مارت (Talabat Mart) بكل فروعه فقط، وفصل السوبرماركت العادي عنه
       const isTalabatMart =
         vendorLower.includes('talabat mart') ||
         vendorLower.includes('طلبات مارت') ||
@@ -327,6 +454,7 @@
 
       return {
         uid: uniqueDeliveryId,
+        deliveryId: rec.id ? String(rec.id) : '-',
         id: String(order.code || rec.id),
         orderCode: order.order_code || `HF_EG${order.code || rec.id}`,
         isPrimary: rec.is_primary !== false,
@@ -380,9 +508,7 @@
           : null,
         customerName: order.tags?.find((t) => typeof t === 'string' && t.startsWith('external_address_id:'))?.replace('external_address_id:', 'Customer #') || 'Customer',
         items: [{ name: `${order.vendor_name || 'Order'} #${order.vendor_order_number || ''}`, qty: 1, price: valEgp }],
-        transitions: [
-          { state: rec.status || 'queued', time: formatReadableTimestamp(order.restaurant_confirmed_at || order.send_to_restaurant_at), by: 'hurrier_live' }
-        ]
+        transitions: []
       };
     }
 
@@ -412,6 +538,976 @@
       );
     };
 
+    // --- FULL HURRIER ORDER DETAIL MODAL (READ-ONLY) ---
+    function OrderFullInspectionModal({ baseOrder, firebaseUrl, onClose }) {
+      const [fullData, setFullData] = useState(null);
+      const [loadingState, setLoadingState] = useState('loading'); // 'loading' | 'live' | 'unavailable'
+      const [detailSubTab, setDetailSubTab] = useState('deliveries'); // 'deliveries' | 'riders' | 'items'
+      const [showMoreDetails, setShowMoreDetails] = useState(false);
+      const [expandPickupInstr, setExpandPickupInstr] = useState(false);
+      const [expandedDeliveryIdx, setExpandedDeliveryIdx] = useState(0);
+      const [selectedTransitionInfo, setSelectedTransitionInfo] = useState(null);
+      const [copiedField, setCopiedField] = useState(null);
+
+      const copyText = (key, val) => {
+        if (!val) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(String(val)).catch(() => {});
+        }
+        setCopiedField(key);
+        setTimeout(() => setCopiedField(null), 1500);
+      };
+
+      const requestAndFetchOrderDetail = useCallback(async (forceNewRequest = false) => {
+        if (!baseOrder?.id) return;
+        const cleanBase = firebaseUrl.trim().replace(/\/+$/, '');
+        const cleanCode = String(baseOrder.id).replace(/^HF_EG/i, '').trim();
+        const fullOrderCode = baseOrder.orderCode || `HF_EG${cleanCode}`;
+
+        setLoadingState('loading');
+        try {
+          // 1. التحقق أولاً من وجود تفاصيل مخزنة مسبقاً في Firebase
+          const existingRes = await fetch(`${cleanBase}/hurrier_live/order_details/${encodeURIComponent(cleanCode)}.json`, { cache: 'no-store' });
+          const existingJson = existingRes.ok ? await existingRes.json() : null;
+
+          const isFresh = existingJson && existingJson.fetchedAt && (Date.now() - new Date(existingJson.fetchedAt).getTime() < 12000);
+          if (existingJson && (existingJson.order || (existingJson.deliveries && existingJson.deliveries.length > 0))) {
+            setFullData(existingJson);
+            if (isFresh && !forceNewRequest) {
+              setLoadingState('live');
+              return;
+            }
+          }
+
+          // 2. إرسال طلب سحب فوري لمتصفح Hurrier (يُنفذ خلال 1.5 ثانية)
+          await fetch(`${cleanBase}/hurrier_live/detail_requests/${encodeURIComponent(cleanCode)}.json`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              write_key: FIREBASE_WRITE_KEY,
+              code: cleanCode,
+              order_code: fullOrderCode,
+              status: 'pending',
+              requestedAt: new Date().toISOString()
+            })
+          });
+        } catch {
+          setLoadingState('unavailable');
+        }
+      }, [baseOrder, firebaseUrl]);
+
+      useEffect(() => {
+        if (!baseOrder?.id) return;
+        let cancelled = false;
+        const cleanBase = firebaseUrl.trim().replace(/\/+$/, '');
+        const cleanCode = String(baseOrder.id).replace(/^HF_EG/i, '').trim();
+
+        requestAndFetchOrderDetail(false);
+
+        const pollTimer = setInterval(async () => {
+          if (cancelled) return;
+          try {
+            const res = await fetch(`${cleanBase}/hurrier_live/order_details/${encodeURIComponent(cleanCode)}.json`, { cache: 'no-store' });
+            if (!res.ok) return;
+            const data = await res.json();
+            if (data && (data.order || (data.deliveries && data.deliveries.length > 0))) {
+              if (!cancelled) {
+                setFullData(data);
+                setLoadingState('live');
+              }
+            }
+          } catch {
+            // استمرار المحاولة
+          }
+        }, 1200);
+
+        return () => {
+          cancelled = true;
+          clearInterval(pollTimer);
+        };
+      }, [baseOrder, firebaseUrl, requestAndFetchOrderDetail]);
+
+      if (!baseOrder) return null;
+
+      const apiOrder = fullData?.order || null;
+      const apiDeliveries = Array.isArray(fullData?.deliveries) ? fullData.deliveries : [];
+      const apiNotes = Array.isArray(fullData?.dispatcher_notes) ? fullData.dispatcher_notes : [];
+
+      // دمج البيانات الحية مع البيانات الأساسية
+      const statusText = apiOrder?.status
+        ? apiOrder.status.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+        : baseOrder.status;
+      const sinceTransition = apiOrder?.current_state_transition
+        ? formatReadableTimestamp(apiOrder.current_state_transition)
+        : baseOrder.time_at;
+
+      const platformName = apiOrder?.platform || 'talabat';
+      const globalEntity = apiOrder?.global_entity_id || 'HF_EG';
+      const vendorCode = apiOrder?.vendor?.vendor_code || '-';
+      const vendorOrderNo = apiOrder?.vendor?.vendor_order_number || baseOrder.vo || '-';
+      const vendorName = apiOrder?.vendor?.vendor_name || baseOrder.vendor;
+      const orderValueDisplay = typeof apiOrder?.order_value === 'number'
+        ? `${(apiOrder.order_value / 100).toFixed(2)} EGP`
+        : baseOrder.orderValue;
+      const subtotalDisplay = typeof apiOrder?.subtotal === 'number'
+        ? `${(apiOrder.subtotal / 100).toFixed(2)} EGP`
+        : orderValueDisplay;
+      const deliveryFeeDisplay = typeof apiOrder?.delivery_fee === 'number'
+        ? `${(apiOrder.delivery_fee / 100).toFixed(2)} EGP`
+        : '-';
+      const codPickupDisplay = typeof apiOrder?.detail?.cod_pay_at_pickup === 'number'
+        ? `${(apiOrder.detail.cod_pay_at_pickup / 100).toFixed(2)} EGP`
+        : '-';
+      const codDropoffDisplay = typeof apiOrder?.detail?.cod_collect_at_drop_off === 'number'
+        ? `${(apiOrder.detail.cod_collect_at_drop_off / 100).toFixed(2)} EGP`
+        : baseOrder.isCash ? orderValueDisplay : '0.00 EGP';
+
+      const manhattanDist = apiOrder?.estimations?.distance_and_time_estimated_dte?.bike?.distances
+        ? `${(apiOrder.estimations.distance_and_time_estimated_dte.bike.distances / 1000).toFixed(2)} KM`
+        : baseOrder.distance;
+      const prepDuration = formatDurationSeconds(apiOrder?.detail?.prep_duration);
+      const courierDelay = formatDurationSeconds(apiOrder?.estimated_courier_delay);
+
+      // عناوين الاستلام والتسليم والعميل
+      const puAddr = apiOrder?.pickup_address || {};
+      const doAddr = apiOrder?.drop_off_address || {};
+      const customerInfo = apiOrder?.customer || {};
+
+      const customerName = customerInfo.customer_name || baseOrder.customerName || 'Customer';
+      const customerPhone = customerInfo.customer_phone_number || '-';
+      const pickupStreet = puAddr.street_address || baseOrder.pickupAddress || '-';
+      const dropoffStreet = doAddr.street_address || baseOrder.dropoffAddress || '-';
+
+      // مواعيد Time Checks
+      const orderedAt = formatReadableTimestamp(apiOrder?.placed_at || baseOrder.placedAt);
+      const sendToRestAt = formatShortTimeNoSec(apiOrder?.send_to_restaurant_at);
+      const restConfirmedAt = formatShortTimeNoSec(apiOrder?.restaurant_confirmed_at);
+      const pickupCommittedAt = formatShortTimeNoSec(apiOrder?.timing?.original_scheduled_pickup_at || apiOrder?.timing?.original_pickup_time);
+      const foodReadyAt = apiOrder?.food_is_ready_at ? formatShortTimeNoSec(apiOrder.food_is_ready_at) : '-';
+      const promisedDeliveryAt = formatReadableTimestamp(apiOrder?.estimations?.promised_delivery_time || apiOrder?.timing?.scheduled_drop_off_at);
+
+      // استخراج وقت الاستلام الفعلي من التحولات
+      let pickedUpTransitionTime = '-';
+      apiDeliveries.forEach((del) => {
+        (del.transitions || []).forEach((tr) => {
+          if (['picked_up', 'left_pickup'].includes(String(tr.to_state).toLowerCase()) && tr.created_at) {
+            pickedUpTransitionTime = formatShortTimeWithSec(tr.created_at);
+          }
+        });
+      });
+
+      // تحليل كل الطيارين الذين عملوا Accepted أو استلموا الأوردر
+      const riderHistory = extractCourierHistoryFromDeliveries(
+        apiDeliveries,
+        baseOrder.courier,
+        baseOrder.courierId
+      );
+      const acceptedRiders = riderHistory.filter((r) => Boolean(r.acceptedAt) || r.events.includes('Accepted'));
+      const hasMultiRiderWarning = riderHistory.length > 1 || acceptedRiders.length > 1;
+
+      // عناصر الطلب
+      const orderItems = Array.isArray(apiOrder?.detail?.order_items) && apiOrder.detail.order_items.length > 0
+        ? apiOrder.detail.order_items
+        : baseOrder.items || [];
+
+      // التاجات للعرض في الأعلى
+      const allTags = Array.isArray(apiOrder?.tags) ? apiOrder.tags : (baseOrder.tags || []);
+      const hasProofOfPickup = allTags.includes('proof_of_pickup');
+
+      return (
+        <div
+          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-2 sm:p-4 overflow-y-auto"
+          onClick={onClose}
+        >
+          <div
+            className="bg-[#f8f9fa] rounded-xl w-full max-w-[1440px] max-h-[95vh] shadow-2xl border border-gray-300 flex flex-col overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Top Hurrier Order Header */}
+            <div className="px-5 py-3.5 bg-white border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-2xl font-bold text-gray-900 tracking-tight">{baseOrder.id}</span>
+                <button
+                  type="button"
+                  onClick={() => copyText('headerId', baseOrder.id)}
+                  className="p-1 text-gray-400 hover:text-gray-700 rounded"
+                  title="Copy Order Code"
+                >
+                  {copiedField === 'headerId' ? <CheckIcon size={15} className="text-emerald-600" /> : <CopyIcon size={15} />}
+                </button>
+
+                <span className="text-xs font-mono text-gray-500 bg-gray-100 px-2 py-0.5 rounded border border-gray-200">
+                  {baseOrder.orderCode}
+                </span>
+
+                {(baseOrder.isCash || apiOrder?.is_cash_collection) && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800">
+                    <BanknoteIcon size={12} /> Cash Order
+                  </span>
+                )}
+
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-900">
+                  {baseOrder.isDarkstore ? <StoreIcon size={12} /> : <UtensilsIcon size={12} />}
+                  {baseOrder.isDarkstore ? 'Darkstores (Talabat Mart)' : baseOrder.verticalType}
+                </span>
+
+                {hasProofOfPickup && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-800">
+                    <CameraIcon size={12} /> Proof of pickup
+                  </span>
+                )}
+
+                {hasMultiRiderWarning && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800 border border-red-300">
+                    <AlertTriangleIcon size={12} /> {riderHistory.length} Riders / {acceptedRiders.length} Accepted
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                {loadingState === 'loading' ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                    <RefreshCwIcon size={12} className="animate-spin" /> جاري جلب سجل الطيارين والتفاصيل من Hurrier...
+                  </span>
+                ) : loadingState === 'live' ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" /> Live Order Details Synced
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                    Basic View
+                  </span>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => requestAndFetchOrderDetail(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 rounded text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50"
+                >
+                  <RefreshCwIcon size={13} /> Refresh
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="p-1.5 rounded-lg text-gray-500 hover:text-gray-800 hover:bg-gray-200/70"
+                  title="Close"
+                >
+                  <XIcon size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Scrollable Body */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5">
+
+              {/* DEDICATED BANNER: ALL RIDERS WHO ACCEPTED / HANDLED THE ORDER */}
+              <div className={`rounded-lg border p-4 shadow-sm ${
+                hasMultiRiderWarning
+                  ? 'bg-red-50/70 border-red-200'
+                  : 'bg-white border-gray-200'
+              }`}>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                  <div className="flex items-center gap-2">
+                    <UsersIcon size={18} className={hasMultiRiderWarning ? 'text-red-600' : 'text-blue-600'} />
+                    <h3 className="text-sm font-bold text-gray-900">
+                      سجل الطيارين على الأوردر (All Riders &amp; Accepted History)
+                    </h3>
+                    <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-gray-900 text-white">
+                      Total Riders: {riderHistory.length}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                      Accepted: {acceptedRiders.length}
+                    </span>
+                  </div>
+                  {hasMultiRiderWarning && (
+                    <span className="text-xs font-semibold text-red-700">
+                      ⚠️ تنبيه: تم إسناد/تحويل هذا الأوردر بين أكثر من طيار
+                    </span>
+                  )}
+                </div>
+
+                {riderHistory.length === 0 ? (
+                  <div className="text-xs text-gray-500 py-2">
+                    لم يتم إسناد أو قبول الأوردر من أي طيار حتى الآن (Queued / Pending).
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {riderHistory.map((r, i) => {
+                      const didAccept = Boolean(r.acceptedAt) || r.events.includes('Accepted');
+                      const wasUndispatched = Boolean(r.undispatchedAt);
+                      return (
+                        <div
+                          key={`${r.courierId}_${i}`}
+                          className={`p-3 rounded-lg border text-xs bg-white shadow-sm flex flex-col justify-between gap-2 ${
+                            didAccept && !wasUndispatched
+                              ? 'border-emerald-300 ring-1 ring-emerald-100'
+                              : wasUndispatched
+                              ? 'border-red-200 bg-red-50/20'
+                              : 'border-gray-200'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <div className="font-bold text-blue-700 text-sm leading-snug">
+                                  {r.courierName}
+                                </div>
+                                <div className="text-[11px] font-mono text-gray-400 mt-0.5">
+                                  ID: {r.courierId} {r.deliveryIndex > 1 ? `• Delivery #${r.deliveryIndex}` : ''}
+                                </div>
+                              </div>
+                              {didAccept ? (
+                                <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 whitespace-nowrap">
+                                  ✓ Accepted
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-600 whitespace-nowrap">
+                                  Not Accepted
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Event sequence pills */}
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {r.events.map((ev, idx) => (
+                                <span
+                                  key={idx}
+                                  className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                                    ev === 'Accepted'
+                                      ? 'bg-emerald-600 text-white'
+                                      : ev === 'Picked Up' || ev === 'Left Pickup'
+                                      ? 'bg-blue-600 text-white'
+                                      : 'bg-gray-100 text-gray-700'
+                                  }`}
+                                >
+                                  {ev}
+                                </span>
+                              ))}
+                              {wasUndispatched && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700">
+                                  Undispatched ({r.undispatchReason})
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="border-t border-gray-100 pt-2 text-[11px] text-gray-500 space-y-0.5 font-mono">
+                            {r.dispatchedAt && <div>Dispatched: {formatShortTimeWithSec(r.dispatchedAt)}</div>}
+                            {r.acceptedAt && <div className="text-emerald-700 font-semibold">Accepted At: {formatShortTimeWithSec(r.acceptedAt)}</div>}
+                            {r.pickedUpAt && <div>Picked Up: {formatShortTimeWithSec(r.pickedUpAt)}</div>}
+                            {r.undispatchedAt && <div className="text-red-600">Removed At: {formatShortTimeWithSec(r.undispatchedAt)}</div>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* 3-COLUMN HURRIER ORDER LAYOUT */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+                {/* LEFT COLUMN (3 cols): Important Details */}
+                <div className="lg:col-span-3 bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+                  <div className="px-4 py-3 border-b border-gray-200 font-bold text-gray-900 text-base">
+                    Important Details
+                  </div>
+                  <div className="divide-y divide-gray-100 text-xs">
+                    <div className="px-4 py-2.5 flex justify-between items-start gap-2">
+                      <span className="text-gray-500">Status</span>
+                      <div className="text-right">
+                        <div className="font-semibold text-gray-900">{statusText}</div>
+                        <div className="text-[11px] text-gray-400">(Since {sinceTransition})</div>
+                      </div>
+                    </div>
+                    <div className="px-4 py-2.5 flex justify-between items-center">
+                      <span className="text-gray-500">Platform</span>
+                      <span className="font-bold text-orange-600">{platformName}</span>
+                    </div>
+                    <div className="px-4 py-2.5 flex justify-between items-center">
+                      <span className="text-gray-500">Global Entity ID</span>
+                      <span className="font-semibold text-gray-800">{globalEntity}</span>
+                    </div>
+                    <div className="px-4 py-2.5 flex justify-between items-center">
+                      <span className="text-gray-500">Vendor code</span>
+                      <span className="font-semibold text-gray-800 font-mono">{vendorCode}</span>
+                    </div>
+                    <div className="px-4 py-2.5 flex justify-between items-center">
+                      <span className="text-gray-500">Vendor Order no.</span>
+                      <span className="font-semibold text-gray-800 font-mono">{vendorOrderNo}</span>
+                    </div>
+                    <div className="px-4 py-2.5 flex justify-between items-center">
+                      <span className="text-gray-500">Order Value</span>
+                      <span className="font-bold text-gray-900">{orderValueDisplay}</span>
+                    </div>
+                    <div className="px-4 py-2.5 flex justify-between items-center">
+                      <span className="text-gray-500">Manhattan distance</span>
+                      <span className="font-semibold text-gray-800">{manhattanDist}</span>
+                    </div>
+                    <div className="px-4 py-2.5 flex justify-between items-center">
+                      <span className="text-gray-500">Prep duration (TES)</span>
+                      <span className="font-semibold text-gray-800">{prepDuration}</span>
+                    </div>
+                    <div className="px-4 py-2.5 flex justify-between items-center">
+                      <span className="text-gray-500">Courier delay</span>
+                      <span className="font-semibold text-red-600">{courierDelay}</span>
+                    </div>
+
+                    {/* Collapsible More Details */}
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => setShowMoreDetails((p) => !p)}
+                        className="w-full px-4 py-3 flex items-center justify-between font-bold text-gray-800 hover:bg-gray-50"
+                      >
+                        <span>More Details</span>
+                        {showMoreDetails ? <ChevronUpIcon size={16} /> : <ChevronDownIcon size={16} />}
+                      </button>
+                      {showMoreDetails && (
+                        <div className="px-4 pb-3 space-y-2 bg-gray-50/70 border-t border-gray-100 pt-2">
+                          <div className="flex justify-between">
+                            <span className="text-gray-500">Subtotal:</span>
+                            <span className="font-medium text-gray-800">{subtotalDisplay}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-500">Delivery Fee:</span>
+                            <span className="font-medium text-gray-800">{deliveryFeeDisplay}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-500">COD Pay at Pickup:</span>
+                            <span className="font-medium text-gray-800">{codPickupDisplay}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-500">COD Collect at Dropoff:</span>
+                            <span className="font-semibold text-emerald-700">{codDropoffDisplay}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-500">Capacity / Util:</span>
+                            <span className="font-medium text-gray-800">{baseOrder.capacity} • {baseOrder.utilizationText}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* MIDDLE COLUMN (6 cols): Pick up and Drop off + Deadline Bar + Bottom Tabs */}
+                <div className="lg:col-span-6 space-y-4">
+                  {/* Pick up and Drop off Card */}
+                  <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-4 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-bold text-gray-900 text-base">Pick up and Drop off</span>
+                      {apiOrder?.drop_off_address?.updated_at && (
+                        <span className="text-[11px] text-gray-500 flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-red-500" />
+                          Customer details updated: {formatReadableTimestamp(apiOrder.drop_off_address.updated_at)}
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {/* Vendor Address Box */}
+                      <div className="border border-gray-200 rounded-lg p-3 text-xs space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-gray-800">Vendor Address</span>
+                          <button
+                            type="button"
+                            onClick={() => copyText('puAddr', pickupStreet)}
+                            className="text-blue-600 hover:text-blue-800"
+                            title="Copy Vendor Address"
+                          >
+                            {copiedField === 'puAddr' ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 text-blue-600 font-semibold">
+                          <StoreIcon size={14} />
+                          <span>{vendorName}</span>
+                        </div>
+
+                        <div className="flex items-start gap-1.5 text-gray-700">
+                          <MapPinIcon size={14} className="text-gray-400 flex-shrink-0 mt-0.5" />
+                          <span>{pickupStreet}</span>
+                        </div>
+
+                        <div className="text-gray-600 border-t border-gray-100 pt-1.5">
+                          {puAddr.city_name || baseOrder.city || 'Cairo'}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-gray-100 pt-1.5 text-[11px]">
+                          <div className="flex justify-between"><span className="text-gray-400">Apartment</span><span>{puAddr.apartment_number || 'NA'}</span></div>
+                          <div className="flex justify-between"><span className="text-gray-400">Zipcode</span><span>{puAddr.zip || 'NA'}</span></div>
+                          <div className="flex justify-between"><span className="text-gray-400">Building</span><span>{puAddr.building || 'NA'}</span></div>
+                          <div className="flex justify-between"><span className="text-gray-400">Intercom</span><span>{puAddr.intercom || 'NA'}</span></div>
+                          <div className="flex justify-between"><span className="text-gray-400">Floor</span><span>{puAddr.floor || 'NA'}</span></div>
+                          <div className="flex justify-between"><span className="text-gray-400">Entrance</span><span>{puAddr.entrance || 'NA'}</span></div>
+                        </div>
+
+                        {puAddr.special_instructions && (
+                          <div className="bg-blue-50/70 text-blue-900 p-2 rounded text-[11px]">
+                            <span className={expandPickupInstr ? '' : 'line-clamp-1'}>
+                              {puAddr.special_instructions.trim()}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setExpandPickupInstr((p) => !p)}
+                              className="text-blue-600 font-semibold ml-1 hover:underline"
+                            >
+                              {expandPickupInstr ? 'Show less' : '...Read more'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Customer Address Box */}
+                      <div className="border border-gray-200 rounded-lg p-3 text-xs space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-gray-800">Customer Address</span>
+                          <button
+                            type="button"
+                            onClick={() => copyText('doAddr', dropoffStreet)}
+                            className="text-blue-600 hover:text-blue-800"
+                            title="Copy Customer Address"
+                          >
+                            {copiedField === 'doAddr' ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+                          </button>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="flex items-center gap-1.5 font-semibold text-gray-800">
+                            <HomeIcon size={14} className="text-gray-500" />
+                            <span>{customerName}</span>
+                          </div>
+                          {customerPhone !== '-' && (
+                            <div className="flex items-center gap-1 font-mono text-gray-700">
+                              <PhoneIcon size={13} className="text-gray-500" />
+                              <span>{customerPhone}</span>
+                              <button
+                                type="button"
+                                onClick={() => copyText('custPhone', customerPhone)}
+                                className="text-blue-600 hover:text-blue-800"
+                                title="Copy Phone"
+                              >
+                                {copiedField === 'custPhone' ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex items-start gap-1.5 text-gray-700">
+                          <MapPinIcon size={14} className="text-gray-400 flex-shrink-0 mt-0.5" />
+                          <span>{dropoffStreet}</span>
+                        </div>
+
+                        {(doAddr.apartment_number || doAddr.floor || doAddr.building) && (
+                          <div className="grid grid-cols-3 gap-2 border-t border-gray-100 pt-1.5 text-[11px]">
+                            <div><span className="text-gray-400">Apt:</span> {doAddr.apartment_number || 'NA'}</div>
+                            <div><span className="text-gray-400">Floor:</span> {doAddr.floor || 'NA'}</div>
+                            <div><span className="text-gray-400">Bldg:</span> {doAddr.building || 'NA'}</div>
+                          </div>
+                        )}
+
+                        {doAddr.special_instructions && (
+                          <div className="bg-amber-50 text-amber-900 p-2 rounded text-[11px] border border-amber-100">
+                            {doAddr.special_instructions.trim()}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Visual Deadline Progress Bar (Exact Hurrier Style) */}
+                    <div className="flex items-center gap-3 pt-1">
+                      <div className="w-8 h-8 rounded border border-gray-200 flex items-center justify-center bg-gray-50 text-gray-600 flex-shrink-0">
+                        <StoreIcon size={16} />
+                      </div>
+                      <div
+                        className={`flex-1 h-7 rounded-full flex items-center justify-end px-4 text-xs font-bold text-white shadow-inner ${
+                          baseOrder.isLate ? 'bg-[#d32f2f]' : 'bg-emerald-600'
+                        }`}
+                      >
+                        <span className="flex items-center gap-1.5">
+                          Deadline {baseOrder.deadline}
+                          <span className="w-2 h-2 rounded-full bg-emerald-300 animate-pulse" />
+                        </span>
+                      </div>
+                      <div className="w-8 h-8 rounded border border-gray-200 flex items-center justify-center bg-gray-50 text-gray-600 flex-shrink-0">
+                        <HomeIcon size={16} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* RIGHT COLUMN (3 cols): Notes & Time Checks */}
+                <div className="lg:col-span-3 space-y-4">
+                  {/* Notes Card */}
+                  <div className="bg-[#fffbeb] rounded-lg border border-amber-200 shadow-sm p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-bold text-gray-900 text-sm">
+                        Notes ({apiNotes.length})
+                      </span>
+                      <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                        Read Only
+                      </span>
+                    </div>
+                    {apiNotes.length === 0 ? (
+                      <div className="text-xs text-gray-500 py-3 text-center">
+                        No dispatcher notes on this order.
+                      </div>
+                    ) : (
+                      <div className="space-y-2 max-h-36 overflow-y-auto text-xs">
+                        {apiNotes.map((n, idx) => (
+                          <div key={idx} className="bg-white p-2.5 rounded border border-amber-200/80">
+                            <div className="text-gray-800">{n.note || n.content || n.text}</div>
+                            <div className="text-[10px] text-gray-400 mt-1">
+                              {n.created_by || n.author || 'Dispatcher'} • {formatReadableTimestamp(n.created_at)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Time Checks Card (Exact Hurrier Fields) */}
+                  <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+                    <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-2 font-bold text-gray-900 text-sm">
+                      <ClockIcon size={15} className="text-amber-500" />
+                      <span>Time Checks</span>
+                    </div>
+                    <div className="divide-y divide-gray-100 text-xs">
+                      <div className="px-4 py-2.5 flex justify-between items-center">
+                        <span className="text-gray-600">Ordered at</span>
+                        <span className="font-semibold text-gray-900">{orderedAt}</span>
+                      </div>
+                      <div className="px-4 py-2.5 flex justify-between items-center">
+                        <span className="text-gray-600">Send to restaurant</span>
+                        <span className="font-semibold text-gray-900">{sendToRestAt}</span>
+                      </div>
+                      <div className="px-4 py-2.5 flex justify-between items-center">
+                        <span className="text-gray-600">Restaurant confirmed at</span>
+                        <span className="font-semibold text-gray-900">{restConfirmedAt}</span>
+                      </div>
+                      <div className="px-4 py-2.5 flex justify-between items-center">
+                        <span className="text-gray-600">Pickup - Committed</span>
+                        <span className="font-semibold text-gray-900">{pickupCommittedAt}</span>
+                      </div>
+                      <div className="px-4 py-2.5 flex justify-between items-center">
+                        <span className="text-gray-600">Food is ready at</span>
+                        <span className="font-semibold text-gray-900">{foodReadyAt}</span>
+                      </div>
+                      <div className="px-4 py-2.5 flex justify-between items-center">
+                        <span className="text-gray-600">Picked up at</span>
+                        <span className="font-semibold text-blue-700">{pickedUpTransitionTime}</span>
+                      </div>
+                      <div className="px-4 py-2.5 flex justify-between items-center">
+                        <span className="text-gray-600">Promised delivery time</span>
+                        <span className="font-semibold text-gray-900">{promisedDeliveryAt}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* BOTTOM FULL-WIDTH SECTION: DELIVERIES & TRANSITIONS TIMELINE (EXACT HURRIER TABLE) */}
+              <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+                <div className="px-4 border-b border-gray-200 flex items-center gap-6 text-sm font-semibold">
+                  <button
+                    type="button"
+                    onClick={() => setDetailSubTab('deliveries')}
+                    className={`py-3 border-b-2 transition-colors ${
+                      detailSubTab === 'deliveries'
+                        ? 'border-blue-600 text-blue-600'
+                        : 'border-transparent text-gray-500 hover:text-gray-800'
+                    }`}
+                  >
+                    Deliveries ({apiDeliveries.length || 1})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDetailSubTab('items')}
+                    className={`py-3 border-b-2 transition-colors ${
+                      detailSubTab === 'items'
+                        ? 'border-blue-600 text-blue-600'
+                        : 'border-transparent text-gray-500 hover:text-gray-800'
+                    }`}
+                  >
+                    Order Items ({orderItems.length})
+                  </button>
+                </div>
+
+                {detailSubTab === 'items' ? (
+                  <div className="p-4 overflow-x-auto">
+                    <table className="w-full text-left text-xs whitespace-nowrap">
+                      <thead>
+                        <tr className="border-b border-gray-200 text-gray-500 font-semibold bg-gray-50">
+                          <th className="py-2.5 px-3">ITEM</th>
+                          <th className="py-2.5 px-3">QUANTITY</th>
+                          <th className="py-2.5 px-3">VOLUME (L)</th>
+                          <th className="py-2.5 px-3">WEIGHT (KG)</th>
+                          <th className="py-2.5 px-3">PRICE</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 text-sm">
+                        {orderItems.map((it, idx) => (
+                          <tr key={idx}>
+                            <td className="py-3 px-3 font-medium text-gray-900">{it.item || it.name}</td>
+                            <td className="py-3 px-3">{it.quantity || it.qty || 1}</td>
+                            <td className="py-3 px-3 text-gray-500">{it.volume ?? 0}</td>
+                            <td className="py-3 px-3 text-gray-500">{it.weight ?? 0}</td>
+                            <td className="py-3 px-3 font-semibold text-gray-800">
+                              {typeof it.price === 'number' ? `${(it.price / 100).toFixed(2)} EGP` : it.price}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-gray-200">
+                    {(apiDeliveries.length > 0
+                      ? apiDeliveries
+                      : [
+                          {
+                            id: baseOrder.deliveryId || baseOrder.id,
+                            status: baseOrder.status,
+                            starting_points: (baseOrder.allZones || []).map((name) => ({ name })),
+                            courier_id: baseOrder.courierId,
+                            courier_name: baseOrder.courier,
+                            utilization: baseOrder.capacity,
+                            is_primary: baseOrder.isPrimary,
+                            transitions: []
+                          }
+                        ]
+                    ).map((del, dIdx) => {
+                      const isExpanded = expandedDeliveryIdx === dIdx;
+                      const zoneNames = Array.isArray(del.starting_points)
+                        ? del.starting_points.map((sp) => (typeof sp === 'string' ? sp : sp.name)).join(', ')
+                        : baseOrder.zone;
+                      const transitions = Array.isArray(del.transitions) ? del.transitions : [];
+
+                      return (
+                        <div key={del.id || dIdx}>
+                          {/* Delivery Header Strip (matching image_7a4f8a.png bottom) */}
+                          <div
+                            onClick={() => setExpandedDeliveryIdx(isExpanded ? -1 : dIdx)}
+                            className="px-4 py-3 bg-gray-50/70 hover:bg-gray-100/70 cursor-pointer flex flex-wrap items-center justify-between gap-4 text-xs"
+                          >
+                            <div className="flex items-center gap-2">
+                              {isExpanded ? <ChevronUpIcon size={16} /> : <ChevronDownIcon size={16} />}
+                              <div>
+                                <div className="text-[10px] text-gray-400 uppercase">ID</div>
+                                <div className="font-mono font-semibold text-gray-800">{del.id}</div>
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="text-[10px] text-gray-400 uppercase">Status</div>
+                              <div className="font-bold text-gray-900">{humanizeEventLabel({ to_state: del.status })}</div>
+                            </div>
+
+                            <div className="max-w-[240px]">
+                              <div className="text-[10px] text-gray-400 uppercase">Zones</div>
+                              <div className="text-gray-700 truncate">{zoneNames || '-'}</div>
+                            </div>
+
+                            <div>
+                              <div className="text-[10px] text-gray-400 uppercase">Courier</div>
+                              <div className="font-semibold text-blue-600">{del.courier_name || '-'}</div>
+                            </div>
+
+                            <div>
+                              <div className="text-[10px] text-gray-400 uppercase">Utilization</div>
+                              <div className="font-semibold text-gray-800">{del.utilization ?? '-'}</div>
+                            </div>
+                          </div>
+
+                          {/* Transitions Timeline Table (matching image_7a4fc5.png column-for-column) */}
+                          {isExpanded && (
+                            <div className="overflow-x-auto">
+                              {transitions.length === 0 ? (
+                                <div className="py-8 text-center text-xs text-gray-500">
+                                  {loadingState === 'loading'
+                                    ? 'جاري تحميل سجل التحولات الكامل (Queued / Dispatched / Accepted / Picked Up)...'
+                                    : 'لا توجد تحولات مسجلة بعد لهذا الأوردر.'}
+                                </div>
+                              ) : (
+                                <table className="w-full text-left text-xs whitespace-nowrap">
+                                  <thead>
+                                    <tr className="bg-gray-100/80 border-b border-gray-200 text-gray-600 font-bold text-[11px] uppercase">
+                                      <th className="py-2.5 px-4">TIME</th>
+                                      <th className="py-2.5 px-4">EVENT</th>
+                                      <th className="py-2.5 px-4">COURIER</th>
+                                      <th className="py-2.5 px-3 text-center">LOC</th>
+                                      <th className="py-2.5 px-3">EST.ACCEPT TIME</th>
+                                      <th className="py-2.5 px-3">EST.PICKUP ARRIVAL</th>
+                                      <th className="py-2.5 px-3">EST.PICKUP DEPARTURE</th>
+                                      <th className="py-2.5 px-3">EST.DROPOFF ARRIVAL</th>
+                                      <th className="py-2.5 px-3">EST.DROPOFF DEPARTURE</th>
+                                      <th className="py-2.5 px-3 text-center">INFO</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-100">
+                                    {transitions.map((tr, tIdx) => {
+                                      const evTitle = humanizeEventLabel(tr);
+                                      const isAcceptedRow = evTitle === 'Accepted';
+                                      const isUndispatchRow = Boolean(tr.un_dispatch_type || tr.metadata?.undispatch_type);
+                                      const dispatchSub = tr.dispatch_type
+                                        ? tr.dispatch_type.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+                                        : tr.un_dispatch_type
+                                        ? tr.un_dispatch_type.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+                                        : '';
+                                      const loc = tr.courier_location;
+
+                                      return (
+                                        <tr
+                                          key={tr.id || tIdx}
+                                          className={`hover:bg-gray-50 ${
+                                            isAcceptedRow
+                                              ? 'bg-emerald-50/40'
+                                              : isUndispatchRow
+                                              ? 'bg-red-50/40'
+                                              : ''
+                                          }`}
+                                        >
+                                          <td className="py-3 px-4 font-mono text-gray-700">
+                                            {formatShortTimeWithSec(tr.created_at)}
+                                          </td>
+                                          <td className="py-3 px-4">
+                                            <div className="flex items-center gap-2">
+                                              <span
+                                                className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                                                  isAcceptedRow
+                                                    ? 'bg-emerald-600'
+                                                    : isUndispatchRow
+                                                    ? 'bg-red-600'
+                                                    : 'bg-blue-600'
+                                                }`}
+                                              />
+                                              <div>
+                                                <div
+                                                  className={`font-semibold ${
+                                                    isAcceptedRow
+                                                      ? 'text-emerald-700'
+                                                      : isUndispatchRow
+                                                      ? 'text-red-700'
+                                                      : 'text-blue-600'
+                                                  }`}
+                                                >
+                                                  {evTitle}
+                                                </div>
+                                                {dispatchSub && (
+                                                  <div className="text-[11px] text-gray-500">{dispatchSub}</div>
+                                                )}
+                                              </div>
+                                            </div>
+                                          </td>
+                                          <td className="py-3 px-4">
+                                            {tr.courier_name ? (
+                                              <span className="text-blue-600 font-medium">{tr.courier_name}</span>
+                                            ) : (
+                                              <span className="text-gray-400">-</span>
+                                            )}
+                                          </td>
+                                          <td className="py-3 px-3 text-center">
+                                            {loc && loc.latitude && loc.longitude ? (
+                                              <a
+                                                href={`https://maps.google.com/?q=${loc.latitude},${loc.longitude}`}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                title={`Courier Location: ${loc.latitude}, ${loc.longitude}`}
+                                                className="inline-flex text-blue-600 hover:text-blue-800"
+                                              >
+                                                <MapPinIcon size={15} />
+                                              </a>
+                                            ) : (
+                                              <span className="text-gray-300 inline-flex">
+                                                <MapPinIcon size={15} />
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td className="py-3 px-3 font-mono text-gray-700">
+                                            {formatShortTimeNoSec(tr.expected_accept_time)}
+                                          </td>
+                                          <td className="py-3 px-3 font-mono text-gray-700">
+                                            {formatShortTimeNoSec(tr.estimated_pickup_arrival_at)}
+                                          </td>
+                                          <td className="py-3 px-3 font-mono text-gray-700">
+                                            {formatShortTimeNoSec(tr.estimated_pickup_departure_at)}
+                                          </td>
+                                          <td className="py-3 px-3 font-mono text-gray-700">
+                                            {formatShortTimeNoSec(tr.estimated_drop_off_arrival_at)}
+                                          </td>
+                                          <td className="py-3 px-3 font-mono text-gray-700">
+                                            {formatShortTimeNoSec(tr.estimated_drop_off_departure_at)}
+                                          </td>
+                                          <td className="py-3 px-3 text-center">
+                                            <button
+                                              type="button"
+                                              onClick={() => setSelectedTransitionInfo(tr)}
+                                              className="w-5 h-5 rounded-full bg-gray-800 text-white inline-flex items-center justify-center text-[10px] font-bold hover:bg-blue-600"
+                                              title="View Transition Metadata"
+                                            >
+                                              i
+                                            </button>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Transition Metadata Box (when clicking 'i' on any timeline row) */}
+              {selectedTransitionInfo && (
+                <div className="bg-gray-900 text-gray-100 rounded-lg p-4 text-xs space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-amber-400">
+                      Transition Metadata — {humanizeEventLabel(selectedTransitionInfo)} ({formatShortTimeWithSec(selectedTransitionInfo.created_at)})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTransitionInfo(null)}
+                      className="text-gray-400 hover:text-white"
+                    >
+                      <XIcon size={15} />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-[11px] bg-gray-800 p-3 rounded">
+                    <div>Performed By: <span className="text-emerald-400">{selectedTransitionInfo.performed_by || '-'}</span></div>
+                    <div>Dispatch Type: <span className="text-blue-300">{selectedTransitionInfo.dispatch_type || '-'}</span></div>
+                    <div>Undispatch Type: <span className="text-red-400">{selectedTransitionInfo.un_dispatch_type || selectedTransitionInfo.metadata?.undispatch_type || '-'}</span></div>
+                    <div>Previous Courier ID: <span className="text-amber-300">{selectedTransitionInfo.metadata?.redispatched_courier_id || '-'}</span></div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-5 py-2.5 bg-white border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
+              <span className="flex items-center gap-1.5">
+                <AlertCircleIcon size={14} className="text-amber-600" />
+                Read-Only Inspection Mode (Send to Vendor &amp; Cancel buttons disabled)
+              </span>
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-1.5 bg-gray-100 hover:bg-gray-200 rounded font-semibold text-gray-700"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     function App() {
       const initialFirebaseUrl = useMemo(() => {
         const params = new URLSearchParams(window.location.search);
@@ -422,8 +1518,8 @@
       const [searchQuery, setSearchQuery] = useState('');
       const [selectedCity, setSelectedCity] = useState('All Cities');
       const [selectedZoneFilter, setSelectedZoneFilter] = useState('All Zones');
-      const [quickFilter, setQuickFilter] = useState('all'); // 'all' | 'late' | 'cash' | 'card' | 'restaurants' | 'darkstores' | 'high_util' | 'returning' | 'not_reviewed'
-      const [issueStatusFilter, setIssueStatusFilter] = useState('all'); // 'all' | 'open' | 'picked'
+      const [quickFilter, setQuickFilter] = useState('all');
+      const [issueStatusFilter, setIssueStatusFilter] = useState('all');
       const [issueTypeFilter, setIssueTypeFilter] = useState('all');
       const [expandedZoneId, setExpandedZoneId] = useState(null);
       const [selectedOrder, setSelectedOrder] = useState(null);
@@ -709,7 +1805,6 @@
         setCountdown(refreshIntervalSec);
       };
 
-      // Filtered zones for Active Couriers & Dashboard
       const filteredZones = useMemo(() => {
         return zonesList.filter((c) => {
           const matchesCity = selectedCity === 'All Cities' || c.city === selectedCity;
@@ -724,7 +1819,6 @@
         });
       }, [zonesList, selectedCity, selectedZoneFilter, searchQuery]);
 
-      // Filtered deliveries for delivery tabs
       const filteredDeliveries = useMemo(() => {
         return deliveries.filter((d) => {
           const matchesTab = d.tab === activeTab;
@@ -760,7 +1854,6 @@
         });
       }, [deliveries, activeTab, selectedCity, selectedZoneFilter, quickFilter, searchQuery]);
 
-      // Filtered Issues
       const filteredIssues = useMemo(() => {
         return issuesList.filter((iss) => {
           const matchesStatus =
@@ -781,7 +1874,6 @@
         });
       }, [issuesList, issueStatusFilter, issueTypeFilter, searchQuery]);
 
-      // Top KPI summary computed for current delivery tab
       const currentTabMetrics = useMemo(() => {
         const total = filteredDeliveries.length;
         const late = filteredDeliveries.filter((d) => d.isLate).length;
@@ -809,7 +1901,6 @@
 
         return (
           <div className="mt-6 space-y-6">
-            {/* Top Summary KPI Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
               <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
                 <div className="text-xs font-semibold text-gray-500 uppercase">Total Queued</div>
@@ -837,7 +1928,6 @@
               </div>
             </div>
 
-            {/* Region Performance Table */}
             <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
               <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
@@ -898,7 +1988,6 @@
               </div>
             </div>
 
-            {/* Starting Points Breakdown */}
             <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
               <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
                 <span className="text-xs font-bold uppercase tracking-wider text-gray-600">
@@ -952,7 +2041,6 @@
 
       const renderIssuesWatchlist = () => (
         <div className="mt-6 space-y-4">
-          {/* Issue Status & Type Filters */}
           <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-50 p-3 rounded-lg border border-gray-200">
             <div className="flex items-center gap-2">
               {[
@@ -1086,13 +2174,11 @@
             const isHighDelay = parseFloat(item.delay) > 5;
             const isExpanded = expandedZoneId === item.id;
 
-            // Match individual couriers belonging to this starting point (or inferred from active deliveries)
             const zoneCouriersFromApi = individualCouriers.filter(
               (c) => String(c.starting_point_id) === String(item.id) ||
                      (c.starting_point_name && c.starting_point_name.toLowerCase() === item.zone.toLowerCase())
             );
 
-            // Also extract active couriers currently delivering in this zone from live deliveries
             const activeRidersInZone = [];
             const seenRiderIds = new Set();
             deliveries.forEach((d) => {
@@ -1108,7 +2194,8 @@
                   name: d.courier,
                   status: d.status,
                   orderId: d.id,
-                  vendor: d.vendor
+                  vendor: d.vendor,
+                  deliveryRef: d
                 });
               }
             });
@@ -1137,7 +2224,6 @@
 
                 {isExpanded && (
                   <div className="bg-gray-50/80 px-4 py-4 border-t border-gray-100 space-y-4">
-                    {/* Shift Breakdown Cards */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 text-xs">
                       <div className="bg-white p-3 rounded border border-gray-200">
                         <div className="text-gray-400 uppercase font-semibold">Starting</div>
@@ -1171,7 +2257,6 @@
                       </div>
                     </div>
 
-                    {/* Couriers Table inside Zone */}
                     {zoneCouriersFromApi.length > 0 ? (
                       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
                         <div className="px-3 py-2 bg-gray-100/70 border-b border-gray-200 text-xs font-bold text-gray-600">
@@ -1217,13 +2302,17 @@
                         </div>
                         <div className="divide-y divide-gray-100 text-xs">
                           {activeRidersInZone.map((r) => (
-                            <div key={r.id} className="px-3 py-2 flex items-center justify-between hover:bg-gray-50">
+                            <div
+                              key={r.id}
+                              onClick={() => setSelectedOrder(r.deliveryRef)}
+                              className="px-3 py-2 flex items-center justify-between hover:bg-gray-50 cursor-pointer"
+                            >
                               <div>
                                 <span className="font-mono text-gray-400 mr-2">#{r.id}</span>
                                 <span className="font-medium text-blue-600">{r.name}</span>
                               </div>
                               <div className="text-gray-500">
-                                Order <span className="font-mono font-semibold text-gray-700">{r.orderId}</span> ({r.status})
+                                Order <span className="font-mono font-semibold text-blue-600 underline">{r.orderId}</span> ({r.status})
                               </div>
                             </div>
                           ))}
@@ -1261,9 +2350,9 @@
                   </td>
                 </tr>
               ) : (
-                filteredDeliveries.map((item) => (
+                filteredDeliveries.map((item, idx) => (
                   <tr
-                    key={item.id}
+                    key={item.uid || `${item.id}_${idx}`}
                     onClick={() => setSelectedOrder(item)}
                     className="hover:bg-gray-50 cursor-pointer"
                   >
@@ -1307,9 +2396,9 @@
                   </td>
                 </tr>
               ) : (
-                filteredDeliveries.map((item) => (
+                filteredDeliveries.map((item, idx) => (
                   <tr
-                    key={item.id}
+                    key={item.uid || `${item.id}_${idx}`}
                     onClick={() => setSelectedOrder(item)}
                     className="hover:bg-gray-50 cursor-pointer"
                   >
@@ -1356,7 +2445,6 @@
 
         return (
           <div className="mt-4 space-y-4">
-            {/* Quick Slice & Filter Bar for Delivery Tables */}
             <div className="flex flex-wrap items-center justify-between gap-3 bg-gray-50 px-4 py-2.5 rounded-lg border border-gray-200">
               <div className="flex flex-wrap items-center gap-1.5 text-xs">
                 {filterChips.map((chip) => (
@@ -1382,7 +2470,6 @@
               </div>
             </div>
 
-            {/* Deliveries Table */}
             <div className="w-full overflow-x-auto">
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead>
@@ -1551,7 +2638,6 @@
 
           {/* Main Content Area */}
           <div className="flex-1 flex flex-col min-w-0 bg-white">
-            {/* Top Header */}
             <header className="h-14 flex items-center justify-between px-6 border-b border-gray-200 bg-white gap-3">
               <div className="flex items-center gap-3 text-xs text-gray-500">
                 <button
@@ -1599,7 +2685,6 @@
                   0.31.0
                 </div>
 
-                {/* Global Search */}
                 <div className="relative flex items-center">
                   <SearchIcon size={15} className="absolute left-3 text-gray-400" />
                   <input
@@ -1639,7 +2724,6 @@
                   <CoffeeIcon size={17} />
                 </button>
 
-                {/* Zone Filter Dropdown */}
                 <div className="border-l border-gray-200 pl-2.5">
                   <select
                     value={selectedZoneFilter}
@@ -1653,7 +2737,6 @@
                   </select>
                 </div>
 
-                {/* City Filter Dropdown */}
                 <div className="border-l border-gray-200 pl-2.5">
                   <select
                     value={selectedCity}
@@ -1673,7 +2756,6 @@
               </div>
             </header>
 
-            {/* Dynamic View Container */}
             <main className="flex-1 overflow-auto p-6 lg:p-8">
               <div className="max-w-[1500px] mx-auto">
                 <div className="flex items-center justify-between mb-2">
@@ -1705,237 +2787,13 @@
             </main>
           </div>
 
-          {/* Comprehensive Read-Only Order Inspection Drawer */}
+          {/* Full Hurrier Order Inspection Modal */}
           {selectedOrder && (
-            <div
-              className="fixed inset-0 bg-black/35 z-50 flex justify-end"
-              onClick={() => setSelectedOrder(null)}
-            >
-              <div
-                className="w-full max-w-xl bg-white h-full shadow-2xl border-l border-gray-200 flex flex-col overflow-hidden"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-lg font-bold text-gray-900">{selectedOrder.orderCode}</span>
-                      <span className="text-xs px-2 py-0.5 rounded bg-blue-100 text-blue-700 font-semibold">
-                        {selectedOrder.status}
-                      </span>
-                      <span
-                        className={`text-xs px-2 py-0.5 rounded font-semibold ${
-                          selectedOrder.isReviewed
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-red-100 text-red-800'
-                        }`}
-                      >
-                        {selectedOrder.isReviewed ? 'Reviewed' : 'Not Reviewed'}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      Order ID: {selectedOrder.id} • Vertical: <span className="capitalize font-medium">{selectedOrder.verticalType}</span>
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedOrder(null)}
-                    className="p-1.5 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-200/60"
-                  >
-                    <XIcon size={20} />
-                  </button>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-6 space-y-5 text-sm">
-                  {/* Top Financial & Logistics Metrics */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
-                      <div className="text-[11px] text-gray-500">Order Value</div>
-                      <div className="font-bold text-gray-900 mt-1">{selectedOrder.orderValue}</div>
-                    </div>
-                    <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
-                      <div className="text-[11px] text-gray-500">Distance</div>
-                      <div className="font-bold text-gray-900 mt-1">{selectedOrder.distance}</div>
-                    </div>
-                    <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
-                      <div className="text-[11px] text-gray-500">Deadline</div>
-                      <div className={`font-bold mt-1 ${selectedOrder.isLate ? 'text-[#e53935]' : 'text-gray-900'}`}>
-                        {selectedOrder.deadline}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-lg bg-gray-50 border border-gray-200">
-                      <div className="text-[11px] text-gray-500">Capacity / Util</div>
-                      <div className="font-bold text-gray-900 mt-1 text-xs">
-                        {selectedOrder.capacity} • {selectedOrder.utilizationText}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Timestamps Schedule */}
-                  <div className="bg-gray-50/70 p-3.5 rounded-lg border border-gray-200 grid grid-cols-2 gap-3 text-xs">
-                    <div>
-                      <span className="text-gray-400 block">Sent to Vendor:</span>
-                      <span className="font-semibold text-gray-800">{selectedOrder.sentToVendorAt || '-'}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-400 block">Vendor Confirmed:</span>
-                      <span className="font-semibold text-gray-800">{selectedOrder.confirmedAt || '-'}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-400 block">Scheduled Pickup:</span>
-                      <span className="font-semibold text-gray-800">{selectedOrder.scheduledPickupAt || '-'}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-400 block">Scheduled Dropoff:</span>
-                      <span className="font-semibold text-gray-800">{selectedOrder.scheduledDropoffAt || '-'}</span>
-                    </div>
-                  </div>
-
-                  {/* Courier & Customer */}
-                  <div className="space-y-3 border-t border-gray-100 pt-4">
-                    <div className="flex items-start gap-2.5">
-                      <UsersIcon size={16} className="text-gray-400 mt-0.5" />
-                      <div>
-                        <div className="text-xs text-gray-500">Assigned Courier</div>
-                        <div className="font-medium text-gray-900">
-                          {selectedOrder.courier}{' '}
-                          {selectedOrder.courierId && (
-                            <span className="text-xs text-gray-400 font-mono">(#{selectedOrder.courierId})</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex items-start gap-2.5">
-                      <UserIcon size={16} className="text-gray-400 mt-0.5" />
-                      <div>
-                        <div className="text-xs text-gray-500">Customer Reference</div>
-                        <div className="font-medium text-gray-900">{selectedOrder.customerName}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Pickup & Dropoff Addresses */}
-                  <div className="space-y-3 border-t border-gray-100 pt-4">
-                    <div className="flex items-start gap-2.5">
-                      <StoreIcon size={16} className="text-blue-600 mt-0.5" />
-                      <div className="flex-1">
-                        <div className="text-xs text-gray-500">
-                          Pickup ({selectedOrder.vendor} - VO #{selectedOrder.vo})
-                        </div>
-                        <div className="text-gray-800 mt-0.5">{selectedOrder.pickupAddress}</div>
-                        {selectedOrder.pickupCoords && (
-                          <a
-                            href={`https://maps.google.com/?q=${selectedOrder.pickupCoords.replace(/\s/g, '')}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-block text-[11px] text-blue-600 hover:underline font-mono mt-0.5"
-                          >
-                            📍 {selectedOrder.pickupCoords} (View Map)
-                          </a>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-start gap-2.5">
-                      <MapPinIcon size={16} className="text-emerald-600 mt-0.5" />
-                      <div className="flex-1">
-                        <div className="text-xs text-gray-500">Drop-off Address</div>
-                        <div className="text-gray-800 mt-0.5">{selectedOrder.dropoffAddress}</div>
-                        {selectedOrder.dropoffCoords && (
-                          <a
-                            href={`https://maps.google.com/?q=${selectedOrder.dropoffCoords.replace(/\s/g, '')}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-block text-[11px] text-emerald-700 hover:underline font-mono mt-0.5"
-                          >
-                            📍 {selectedOrder.dropoffCoords} (View Map)
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Eligible Starting Points */}
-                  {selectedOrder.allZones?.length > 0 && (
-                    <div className="border-t border-gray-100 pt-4">
-                      <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
-                        Eligible Starting Points ({selectedOrder.allZones.length})
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {selectedOrder.allZones.map((sp, i) => (
-                          <span key={i} className="px-2 py-0.5 rounded bg-blue-50 text-blue-800 text-xs border border-blue-100">
-                            {sp}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Vehicle Restrictions */}
-                  {selectedOrder.restrictions?.length > 0 && (
-                    <div className="border-t border-gray-100 pt-4">
-                      <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 flex items-center gap-1.5">
-                        <TruckIcon size={14} /> Allowed Vehicle Restrictions
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {selectedOrder.restrictions.map((r, i) => (
-                          <span key={i} className="px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-[11px] border border-gray-200">
-                            {r}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Order Tags */}
-                  {selectedOrder.tags?.length > 0 && (
-                    <div className="border-t border-gray-100 pt-4">
-                      <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 flex items-center gap-1.5">
-                        <TagIcon size={14} /> Order Tags &amp; Skills
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {selectedOrder.tags.map((t, i) => (
-                          <span key={i} className="px-2 py-0.5 rounded bg-amber-50/70 text-amber-900 font-mono text-[11px] border border-amber-200">
-                            {t}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Items */}
-                  <div className="border-t border-gray-100 pt-4">
-                    <div className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2 flex items-center gap-1.5">
-                      <FileTextIcon size={14} /> Order Summary
-                    </div>
-                    <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
-                      {selectedOrder.items?.map((it, idx) => (
-                        <div key={idx} className="p-3 flex justify-between items-center">
-                          <div>
-                            <span className="font-semibold text-gray-800">{it.qty}x</span>{' '}
-                            <span className="text-gray-700">{it.name}</span>
-                          </div>
-                          <span className="font-medium text-gray-900">{it.price}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
-                  <span className="flex items-center gap-1">
-                    <AlertCircleIcon size={14} className="text-amber-600" /> Read-Only Mode (All actions disabled)
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedOrder(null)}
-                    className="px-4 py-1.5 bg-white border border-gray-300 rounded font-medium text-gray-700 hover:bg-gray-100"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            </div>
+            <OrderFullInspectionModal
+              baseOrder={selectedOrder}
+              firebaseUrl={firebaseUrl}
+              onClose={() => setSelectedOrder(null)}
+            />
           )}
 
           {/* Live Sync Configuration Modal */}
@@ -1956,7 +2814,7 @@
                         البث اللحظي الشامل عبر Firebase (تحديث كل ثانيتين)
                       </h2>
                       <p className="text-xs text-gray-500">
-                        ينقل جميع أقسام Hurrier للموظفين للقراءة فقط بدون قيود سرعة
+                        ينقل جميع أقسام Hurrier وسجل الطيارين للموظفين للقراءة فقط
                       </p>
                     </div>
                   </div>
@@ -1998,7 +2856,7 @@
                   {modalTab === 'firebase' && (
                     <div className="space-y-4">
                       <div className="p-3.5 rounded-lg bg-emerald-50/70 border border-emerald-200 text-xs text-emerald-900 leading-relaxed">
-                        <strong>متصل بالبث اللحظي الشامل (2s):</strong> الداشبورد تفحص التغييرات كل <strong>ثانيتين</strong> من Firebase Realtime Database بصلاحية القراءة فقط للموظفين.
+                        <strong>متصل بالبث اللحظي الشامل (2s):</strong> الداشبورد تفحص التغييرات كل <strong>ثانيتين</strong>، وعند فتح أي أوردر يتم جلب سجل الطيارين (`Accepted` / `Dispatched`) والجدول الزمني الكامل فوراً.
                       </div>
 
                       <div>
