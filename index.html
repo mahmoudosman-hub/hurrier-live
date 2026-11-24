@@ -247,7 +247,12 @@
     }
 
     function normalizeText(v) {
-      return String(v || "").replace(/\s+/g, " ").trim();
+      return String(v || "")
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;/g, "&")
+        .replace(/&quot;/g, '"')
+        .replace(/\s+/g, " ")
+        .trim();
     }
 
     function isTalabatMartVendor(vendorName) {
@@ -285,14 +290,35 @@
       return `${sign}${absMins}min`;
     }
 
+    function formatDiffBetweenIsos(scheduledIso, estimatedIso) {
+      if (!scheduledIso || !estimatedIso) return "";
+      const s = new Date(scheduledIso).getTime();
+      const e = new Date(estimatedIso).getTime();
+      if (Number.isNaN(s) || Number.isNaN(e)) return "";
+      const diffMins = Math.round((s - e) / 60000);
+      return `${diffMins}min`;
+    }
+
     function formatReadableTimestamp(isoDate) {
       if (!isoDate) return "-";
       const d = new Date(isoDate);
       if (Number.isNaN(d.getTime())) return "-";
       return d.toLocaleString("en-US", {
+        weekday: "short",
         month: "short",
         day: "numeric",
-        hour: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true
+      });
+    }
+
+    function formatShortTimeOnly(isoDate) {
+      if (!isoDate) return "-";
+      const d = new Date(isoDate);
+      if (Number.isNaN(d.getTime())) return "-";
+      return d.toLocaleTimeString("en-US", {
+        hour: "2-digit",
         minute: "2-digit",
         hour12: true
       });
@@ -332,105 +358,98 @@
       return `Since ${dayPart} ${timePart}`;
     }
 
-    function formatDurationMinutes(minutes) {
-      if (minutes === null || minutes === undefined || minutes === "") return "-";
-      const n = Number(minutes);
-      if (Number.isNaN(n)) return String(minutes);
-      const abs = Math.abs(Math.round(n));
-      if (abs >= 60) {
-        const h = Math.floor(abs / 60);
-        const m = abs % 60;
-        return `${n < 0 ? "-" : ""}${h}h ${m}m`;
-      }
-      return `${Math.round(n)}m`;
+    function formatDurationSecondsToMin(secondsVal) {
+      if (secondsVal === null || secondsVal === undefined || secondsVal === "") return "-";
+      const s = Number(secondsVal);
+      if (Number.isNaN(s)) return String(secondsVal);
+      return `${Math.round(s / 60)}m`;
     }
 
-    function formatMoney(val, currency = "EGP") {
+    function formatPiastersMoney(val, currency = "EGP") {
       if (val === null || val === undefined || val === "") return "-";
       if (typeof val === "string" && /[A-Z]{3}|\$/.test(val)) return val;
       const num = Number(val);
       if (Number.isNaN(num)) return String(val);
-      return `${num.toFixed(2)} ${currency}`;
+      return `${(num / 100).toFixed(2)} ${currency}`;
+    }
+
+    function humanizeSnakeCase(str) {
+      return String(str || "")
+        .split("_")
+        .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : ""))
+        .join(" ")
+        .trim();
     }
 
     function extractCustomerInfoFromOrder(orderObj, doc) {
       const o = orderObj || {};
       const d = doc || {};
-      const cExtra1 = d.customerExtra || {};
-      const cExtra2 = d.customerExtra2 || {};
-      const detail = d.detail || {};
+      const apiOrder = d.order || d.detail || {};
 
       const cust =
+        apiOrder.customer ||
         o.customer ||
         o.customer_details ||
         o.recipient ||
-        cExtra1.customer ||
-        cExtra1.customer_details ||
-        cExtra1.recipient ||
-        cExtra1 ||
-        cExtra2.customer ||
-        cExtra2 ||
-        detail.customer ||
         {};
 
       const addr =
+        apiOrder.drop_off_address ||
+        o.drop_off_address ||
         o.dropoff_address ||
         o.delivery_address ||
         cust.address ||
-        cExtra1.dropoff_address ||
-        cExtra1.delivery_address ||
-        cExtra2.dropoff_address ||
-        detail.dropoff_address ||
         {};
 
       const fullName = normalizeText(
-        cust.full_name ||
+        cust.customer_name ||
+          cust.full_name ||
           [cust.first_name, cust.last_name].filter(Boolean).join(" ") ||
           cust.name ||
           addr.recipient_name ||
           addr.name ||
-          o.customer_name ||
-          o.recipient_name
+          o.customer_name
       );
 
       const tagCustId = Array.isArray(o.tags)
         ? o.tags.find((t) => String(t).startsWith("external_address_id:"))
         : "";
-      const fallbackName = tagCustId
+      const fallbackName = cust.customer_id
+        ? `Customer #${cust.customer_id}`
+        : tagCustId
         ? String(tagCustId).replace("external_address_id:", "Customer #")
         : "Customer";
 
       const phone = normalizeText(
-        cust.phone ||
+        cust.customer_phone_number ||
+          cust.phone ||
           cust.phone_number ||
           cust.mobile ||
           cust.mobile_number ||
           addr.phone ||
           addr.phone_number ||
-          o.customer_phone ||
-          cExtra1.phone ||
-          cExtra1.phone_number
+          o.customer_phone
       );
 
       const streetAddress = normalizeText(
         addr.street_address ||
-          addr.formatted_address ||
-          [addr.street, addr.area, addr.city].filter(Boolean).join(", ") ||
           addr.address_line_1 ||
+          addr.formatted_address ||
+          [addr.street, addr.area, addr.city_name || addr.city].filter(Boolean).join(", ") ||
           addr.address
       );
 
       return {
         name: fullName || fallbackName,
         phone: phone || "",
-        apartment: normalizeText(addr.apartment || addr.flat || addr.unit || cust.apartment) || "NA",
-        building: normalizeText(addr.building || addr.building_number || addr.house_number || cust.building) || "NA",
-        floor: normalizeText(addr.floor || addr.floor_number || cust.floor) || "NA",
-        zipcode: normalizeText(addr.zipcode || addr.postal_code) || "NA",
+        apartment: normalizeText(addr.apartment_number || addr.apartment || addr.flat || addr.unit) || "NA",
+        building: normalizeText(addr.building || addr.building_number || addr.house_number) || "NA",
+        floor: normalizeText(addr.floor || addr.floor_number) || "NA",
+        zipcode: normalizeText(addr.zip || addr.zipcode || addr.postal_code) || "NA",
         intercom: normalizeText(addr.intercom || addr.intercom_code) || "NA",
         entrance: normalizeText(addr.entrance || addr.gate) || "NA",
         streetAddress,
-        deliveryNote: normalizeText(addr.delivery_instructions || addr.instructions || addr.note || o.delivery_note) || "NA"
+        deliveryNote: normalizeText(addr.special_instructions || addr.delivery_instructions || addr.instructions || addr.note) || ""
       };
     }
 
@@ -446,21 +465,18 @@
 
       const instructions = [];
       if (order.is_cash_collection || rec?.is_cash_collection) instructions.push("Cash");
-      if (order.payment_method === "card" || order.is_online_payment) instructions.push("Card");
-      const vLabel = verticalMap[order.vertical_type] || (order.vertical_type ? String(order.vertical_type) : "Restaurants");
+      if (order.is_card_on_delivery || order.payment_method === "card" || order.is_online_payment) instructions.push("Card");
+      const vLabel = verticalMap[order.vertical_type] || (order.vertical_type ? humanizeSnakeCase(order.vertical_type) : "Restaurants");
       instructions.push(vLabel);
 
-      const statusLabel = String(rec?.status || "queued")
-        .split("_")
-        .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : ""))
-        .join(" ");
+      const statusLabel = humanizeSnakeCase(rec?.status || "queued");
 
       const targetIso = order.scheduled_dropoff_at || rec?.scheduled_dropoff_at;
       const deadlineStr = formatRelativeDeadline(targetIso, tabName === "Pre-order");
       const distKm = typeof rec?.distance === "number" ? `${(rec.distance / 1000).toFixed(2)} km` : "-";
       const valEgp =
         typeof order.order_value === "number"
-          ? `${(order.order_value > 5000 ? order.order_value / 100 : order.order_value).toFixed(2)} EGP`
+          ? `${(order.order_value / 100).toFixed(2)} EGP`
           : "-";
 
       const rawSps = Array.isArray(rec?.starting_points)
@@ -523,9 +539,7 @@
     function writeSessionStorageJson(key, val) {
       try {
         window.sessionStorage.setItem(key, JSON.stringify(val));
-      } catch {
-        // تجاهل
-      }
+      } catch {}
     }
 
     function App() {
@@ -590,7 +604,6 @@
       const prewarmedOrderIdsRef = useRef(new Set());
       const mainContainerRef = useRef(null);
 
-      // Persist employee session preferences across Refresh (F5)
       useEffect(() => {
         writeSessionStorageJson("hurrier_emp_name", employeeName);
       }, [employeeName]);
@@ -619,16 +632,14 @@
           ta.select();
           document.execCommand("copy");
           document.body.removeChild(ta);
-        } catch {
-          // تجاهل
-        }
+        } catch {}
         setCopiedText(key);
         setTimeout(() => setCopiedText(null), 1500);
       }, []);
 
       const requestOrderDetailsFromHurrier = useCallback(async (orderId, deliveryId = "") => {
         if (!orderId) return;
-        const cleanId = String(orderId).replace(/^HF_[A-Z]{2}/i, "").trim();
+        const cleanId = String(orderId).replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "").trim();
         if (!cleanId) return;
         const cleanDelId = String(deliveryId || "").trim();
         const requestToken = cleanDelId && cleanDelId !== cleanId ? `${cleanId}|${cleanDelId}` : cleanId;
@@ -642,9 +653,7 @@
             method: "PUT",
             body: JSON.stringify(nextList)
           });
-        } catch {
-          // تجاهل
-        }
+        } catch {}
       }, []);
 
       const handleOrderRowHover = useCallback(
@@ -652,20 +661,20 @@
           const orderId = item?.id;
           const delId = item?.rawRecord?.id || item?.rawRecord?.delivery_id || "";
           if (!orderId) return;
-          const cleanId = String(orderId).replace(/^HF_[A-Z]{2}/i, "").trim();
+          const cleanId = String(orderId).replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "").trim();
           if (!cleanId || prewarmedOrderIdsRef.current.has(cleanId)) return;
           if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
           hoverTimerRef.current = setTimeout(() => {
             prewarmedOrderIdsRef.current.add(cleanId);
             requestOrderDetailsFromHurrier(cleanId, delId);
-          }, 200);
+          }, 180);
         },
         [requestOrderDetailsFromHurrier]
       );
 
       const fetchSingleOrderDetailDoc = useCallback(async (orderId) => {
         if (!orderId) return;
-        const cleanId = String(orderId).replace(/^HF_[A-Z]{2}/i, "").trim();
+        const cleanId = String(orderId).replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "").trim();
         if (!cleanId) return;
         try {
           const res = await fetch(`${FIREBASE_DB_URL}/order_details/${cleanId}.json`, { cache: "no-store" });
@@ -675,9 +684,7 @@
               setLiveOrderDetailDoc(doc);
             }
           }
-        } catch {
-          // تجاهل
-        }
+        } catch {}
       }, []);
 
       useEffect(() => {
@@ -733,7 +740,6 @@
           .filter(Boolean);
       }, [selectedZoneIds]);
 
-      // Register & Heartbeat independent employee session in Firebase
       const registerOrHeartbeatSession = useCallback(async () => {
         if (!isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
         try {
@@ -747,9 +753,7 @@
               heartbeat_at: Date.now()
             })
           });
-        } catch {
-          // تجاهل
-        }
+        } catch {}
       }, [isZoneSetupConfirmed, selectedZoneIds, sessionId, employeeName, selectedZoneNames]);
 
       useEffect(() => {
@@ -776,9 +780,7 @@
             fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}.json`, { method: "DELETE" }),
             fetch(`${FIREBASE_DB_URL}/session_bundles/${sessionId}.json`, { method: "DELETE" })
           ]);
-        } catch {
-          // تجاهل
-        }
+        } catch {}
       }, [sessionId]);
 
       const applySessionBundle = useCallback((bundle) => {
@@ -1033,53 +1035,58 @@
         });
       }, [baseTabDeliveries, activeQuickFilter, selectedMartBranch, orderSortMode]);
 
+      // Exact parser matching Hurrier's /orders/detail, /orders/detail/deliveries, and /orders/dispatcher_notes
       const selectedOrderFullView = useMemo(() => {
         if (!selectedOrder) return null;
         const doc = liveOrderDetailDoc || {};
         const rec = selectedOrder.rawRecord || {};
         const recOrder = rec.order || {};
-        const detail = doc.detail || doc.detailFull || doc.detailShort || {};
-        const detailOrder = detail.order || {};
+        const apiOrder = doc.order || doc.detail || {};
         const orderObj = {
           ...rec,
           ...recOrder,
-          ...detail,
-          ...detailOrder
+          ...apiOrder
         };
+        const orderDetailObj = apiOrder.detail || recOrder.detail || {};
+        const timingObj = apiOrder.timing || recOrder.timing || {};
+        const estimationsObj = apiOrder.estimations || recOrder.estimations || {};
+        const vendorObj = apiOrder.vendor || recOrder.vendor || {};
 
         const customerInfo = extractCustomerInfoFromOrder(orderObj, doc);
 
-        const vendorName = orderObj.vendor_name || selectedOrder.vendor || "Unknown Vendor";
-        const vendorOrderNo = orderObj.vendor_order_number || selectedOrder.vo || "-";
-        const globalEntityId = orderObj.global_entity_id || detail.global_entity_id || "HF_EG";
-        const platformName = orderObj.platform || (isTalabatMartVendor(vendorName) ? "talabat" : "TB_OT");
-        const vendorCode = orderObj.vendor_code || orderObj.vendor_id || "-";
-
-        const rawOrderValue = orderObj.order_value ?? orderObj.total_price ?? orderObj.amount;
-        const orderValueStr = rawOrderValue !== undefined ? formatMoney(rawOrderValue, "EGP") : selectedOrder.orderValue;
-        const cashPickupStr = formatMoney(orderObj.cash_at_pickup ?? orderObj.collection_amount ?? 0, "EGP");
-        const cashDropoffStr = formatMoney(
-          orderObj.cash_at_dropoff ?? (selectedOrder.instructions.includes("Cash") ? rawOrderValue || 0 : 0),
-          "EGP"
+        const vendorName = normalizeText(
+          vendorObj.vendor_name || orderObj.vendor_name || orderObj.restaurant_name || selectedOrder.vendor || "Unknown Vendor"
         );
+        const vendorOrderNo = vendorObj.vendor_order_number || orderObj.vendor_order_number || selectedOrder.vo || "-";
+        const globalEntityId = orderObj.global_entity_id || "HF_EG";
+        const platformName = orderObj.platform || (isTalabatMartVendor(vendorName) ? "talabat" : "TB_OT");
+        const vendorCode = vendorObj.vendor_code || orderObj.vendor_code || orderObj.vendor_id || "-";
 
-        const rawDist = orderObj.manhattan_distance ?? rec.distance ?? orderObj.distance;
+        const rawOrderValue = orderObj.order_value ?? recOrder.order_value;
+        const orderValueStr = rawOrderValue !== undefined ? formatPiastersMoney(rawOrderValue, "EGP") : selectedOrder.orderValue;
+
+        const dteMeters =
+          estimationsObj.pickup_to_drop_off_distance ??
+          estimationsObj.distance_and_time_estimated_dte?.bike?.distances ??
+          estimationsObj.distance_and_time_estimated_dte?.car?.distances ??
+          rec.distance;
         const distanceStr =
-          typeof rawDist === "number"
-            ? `${(rawDist > 50 ? rawDist / 1000 : rawDist).toFixed(2)} KM`
+          typeof dteMeters === "number"
+            ? `${(dteMeters > 50 ? dteMeters / 1000 : dteMeters).toFixed(2)} KM`
             : selectedOrder.distance;
 
-        const prepDurationStr = formatDurationMinutes(
-          orderObj.prep_duration ?? orderObj.tes ?? orderObj.preparation_time ?? 5
+        const prepDurationStr = formatDurationSecondsToMin(
+          orderDetailObj.prep_duration ?? orderObj.prep_duration
         );
-        const courierDelayStr = formatDurationMinutes(orderObj.courier_delay ?? rec.courier_delay ?? 0);
+        const courierDelayStr = formatDurationSecondsToMin(
+          orderObj.estimated_courier_delay ?? orderObj.courier_delay ?? 0
+        );
 
         const pickupAddrObj =
-          orderObj.pickup_address || detail.pickup_address || recOrder.pickup_address || rec.pickup_address || {};
+          apiOrder.pickup_address || recOrder.pickup_address || rec.pickup_address || {};
         const dropoffAddrObj =
-          orderObj.dropoff_address ||
-          orderObj.delivery_address ||
-          detail.dropoff_address ||
+          apiOrder.drop_off_address ||
+          apiOrder.dropoff_address ||
           recOrder.dropoff_address ||
           rec.dropoff_address ||
           {};
@@ -1087,40 +1094,39 @@
         const pickupAddressStr =
           normalizeText(
             pickupAddrObj.street_address ||
-              pickupAddrObj.formatted_address ||
               pickupAddrObj.address_line_1 ||
-              pickupAddrObj.address ||
-              orderObj.pickup_address_text
+              pickupAddrObj.formatted_address ||
+              pickupAddrObj.address
           ) || "-";
 
         const pickupAreaBanner = normalizeText(
-          [
-            pickupAddrObj.city ? `City: ${pickupAddrObj.city}` : selectedOrder.city ? `City: ${selectedOrder.city}` : "",
-            pickupAddrObj.area || pickupAddrObj.district ? `Area: ${pickupAddrObj.area || pickupAddrObj.district}` : ""
-          ]
-            .filter(Boolean)
-            .join(" ")
+          pickupAddrObj.special_instructions ||
+            [
+              pickupAddrObj.city_name || pickupAddrObj.city ? `City: ${pickupAddrObj.city_name || pickupAddrObj.city}` : "",
+              pickupAddrObj.district || pickupAddrObj.area ? `Area: ${pickupAddrObj.district || pickupAddrObj.area}` : ""
+            ]
+              .filter(Boolean)
+              .join(" ")
         );
 
         const dropoffAddressStr =
           customerInfo.streetAddress ||
           normalizeText(
             dropoffAddrObj.street_address ||
-              dropoffAddrObj.formatted_address ||
               dropoffAddrObj.address_line_1 ||
-              dropoffAddrObj.address ||
-              orderObj.dropoff_address_text
+              dropoffAddrObj.formatted_address ||
+              dropoffAddrObj.address
           ) ||
           "-";
 
         const customerUpdatedStr = formatReadableTimestamp(
-          orderObj.customer_details_updated_at || dropoffAddrObj.updated_at || orderObj.updated_at
+          dropoffAddrObj.updated_at || orderObj.customer_details_updated_at || orderObj.updated_at
         );
 
         const orderBadges = [...selectedOrder.instructions];
         if (
-          orderObj.proof_of_pickup ||
-          rec.proof_of_pickup ||
+          orderObj.show_proof_of_pickup ||
+          orderObj.proof_of_pickup_link ||
           (Array.isArray(orderObj.tags) && orderObj.tags.some((t) => /proof_of_pickup/i.test(String(t))))
         ) {
           if (!orderBadges.includes("Proof of pickup")) orderBadges.push("Proof of pickup");
@@ -1135,35 +1141,25 @@
         rawDeliveries.forEach((del, dIdx) => {
           const delId = del.id || del.delivery_id || selectedOrder.id;
           const delStatusRaw = del.status || selectedOrder.status || "Active";
-          const delStatusLabel = String(delStatusRaw)
-            .split("_")
-            .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-            .join(" ");
+          const delStatusLabel = humanizeSnakeCase(delStatusRaw);
           const delZones = Array.isArray(del.starting_points)
             ? del.starting_points.map((sp) => (typeof sp === "object" ? sp?.name || sp?.id : sp)).filter(Boolean).join(", ")
             : selectedOrder.zone;
           const delCourier = del.courier_name || del.courier?.name || selectedOrder.courier || "-";
-          const delUtilization = del.utilization ?? del.courier_utilization ?? "-";
+          const delUtilization = del.utilization ?? del.capacity ?? "-";
           const transitions = Array.isArray(del.transitions) ? del.transitions : [];
           const delEvents = [];
 
           transitions.forEach((tr, tIdx) => {
-            const stateRaw = String(tr.to_state || tr.state || tr.event || tr.event_name || tr.status || "").toLowerCase();
-            const eventLabel =
-              tr.event_label ||
-              stateRaw
-                .split("_")
-                .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-                .join(" ") ||
-              "Event";
+            const stateRaw = String(tr.to_state || tr.state || tr.status || "").toLowerCase();
+            const eventTypeRaw = String(tr.event_type || "").toLowerCase();
+            const eventLabel = stateRaw ? humanizeSnakeCase(stateRaw) : humanizeSnakeCase(eventTypeRaw || "Event");
 
             const rawTimeVal =
               tr.created_at ||
+              tr.metadata?.performed_at ||
               tr.timestamp ||
-              tr.event_timestamp ||
-              tr.occurred_at ||
-              tr.time ||
-              tr.metadata?.performed_at;
+              tr.event_timestamp;
 
             if (stateRaw && rawTimeVal && !transitionTimeByState.has(stateRaw)) {
               transitionTimeByState.set(stateRaw, rawTimeVal);
@@ -1173,47 +1169,41 @@
             const courierName =
               tr.courier_name ||
               tr.courier?.name ||
-              tr.rider_name ||
               tr.metadata?.courier_name ||
               (stateRaw === "queued" && tIdx === 0 ? "-" : delCourier) ||
               "-";
 
             const subReasonRaw =
+              tr.un_dispatch_type ||
+              tr.dispatch_type ||
+              tr.metadata?.undispatch_type ||
+              tr.metadata?.dispatch_type ||
               tr.reason ||
-              tr.sub_reason ||
-              tr.trigger ||
-              tr.triggered_by ||
-              tr.source ||
-              tr.actor ||
-              tr.metadata?.reason ||
-              tr.metadata?.source ||
               "";
-            const subLabel = String(subReasonRaw)
-              .split("_")
-              .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : ""))
-              .join(" ")
-              .trim();
+            const subLabel = humanizeSnakeCase(subReasonRaw);
 
-            const estObj = tr.estimates || tr.estimated_times || tr.metadata || tr;
             const estAcceptTime = formatShortEstTime(
-              estObj.est_accept_time || estObj.estimated_accept_at || estObj.accept_eta
+              tr.expected_accept_time || tr.metadata?.expected_accept_time
             );
             const estPickupArrival = formatShortEstTime(
-              estObj.est_pickup_arrival || estObj.estimated_pickup_arrival_at || estObj.pickup_arrival_eta
+              tr.estimated_pickup_arrival_at || tr.metadata?.estimated_pickup_arrival_at
             );
             const estPickupDeparture = formatShortEstTime(
-              estObj.est_pickup_departure || estObj.estimated_pickup_departure_at || estObj.pickup_departure_eta
+              tr.estimated_pickup_departure_at || tr.metadata?.estimated_pickup_departure_at
             );
             const estDropoffArrival = formatShortEstTime(
-              estObj.est_dropoff_arrival || estObj.estimated_dropoff_arrival_at || estObj.dropoff_arrival_eta
+              tr.estimated_drop_off_arrival_at || tr.metadata?.estimated_dropoff_arrival_at
             );
             const rawDropDep =
-              estObj.est_dropoff_departure ||
-              estObj.estimated_dropoff_departure_at ||
-              estObj.dropoff_departure_eta ||
-              estObj.promised_delivery_at;
+              tr.estimated_drop_off_departure_at || tr.metadata?.estimated_dropoff_departure_at;
             const estDropoffDeparture = formatShortEstTime(rawDropDep);
-            const estDropoffDelta = rawDropDep ? formatRelativeDeadline(rawDropDep, false) : "";
+            const estDropoffDelta = formatDiffBetweenIsos(tr.scheduled_drop_off_at, rawDropDep);
+
+            const locObj = tr.courier_location;
+            const locUrl =
+              locObj && typeof locObj.latitude === "number" && typeof locObj.longitude === "number"
+                ? `https://www.google.com/maps?q=${locObj.latitude},${locObj.longitude}`
+                : "";
 
             if (courierName && courierName !== "-" && courierName !== "Assigning...") {
               const entry = riderMap.get(courierName) || {
@@ -1247,12 +1237,13 @@
             }
 
             const evObj = {
-              key: `${dIdx}-${tIdx}`,
+              key: `${dIdx}-${tr.id || tIdx}`,
               deliveryId: delId,
               timeSec,
               eventLabel,
               subLabel,
               courierName,
+              locUrl,
               estAcceptTime,
               estPickupArrival,
               estPickupDeparture,
@@ -1279,51 +1270,44 @@
         });
 
         const orderedAtRaw =
+          orderObj.placed_at ||
           orderObj.ordered_at ||
           orderObj.created_at ||
-          orderObj.placed_at ||
-          transitionTimeByState.get("queued") ||
-          transitionTimeByState.get("new");
+          transitionTimeByState.get("queued");
         const sentToRestRaw =
           orderObj.send_to_restaurant_at ||
-          orderObj.sent_to_restaurant_at ||
-          orderObj.sent_to_vendor_at;
+          recOrder.send_to_restaurant_at;
         const restConfirmedRaw =
           orderObj.restaurant_confirmed_at ||
-          orderObj.vendor_confirmed_at ||
-          orderObj.confirmed_at;
+          recOrder.restaurant_confirmed_at;
         const pickupCommittedRaw =
-          orderObj.pickup_committed_at ||
-          orderObj.committed_pickup_at ||
-          orderObj.scheduled_pickup_at;
+          timingObj.original_scheduled_pickup_at ||
+          timingObj.original_pickup_time ||
+          recOrder.original_scheduled_pickup_at;
         const foodReadyRaw =
-          orderObj.food_ready_at ||
           orderObj.food_is_ready_at ||
-          orderObj.prepared_at ||
-          orderObj.ready_for_pickup_at;
+          orderObj.food_ready_at;
         const pickedUpRaw =
-          orderObj.picked_up_at ||
-          rec.picked_up_at ||
           transitionTimeByState.get("picked_up") ||
-          transitionTimeByState.get("left_pickup");
+          transitionTimeByState.get("left_pickup") ||
+          orderObj.picked_up_at;
         const promisedDeliveryRaw =
-          orderObj.scheduled_dropoff_at ||
-          orderObj.promised_delivery_at ||
-          orderObj.promised_dropoff_at ||
-          rec.scheduled_dropoff_at;
+          estimationsObj.promised_delivery_time ||
+          timingObj.scheduled_drop_off_at ||
+          recOrder.scheduled_dropoff_at;
 
         const timeChecks = [
           { label: "Ordered at", value: formatReadableTimestamp(orderedAtRaw) },
-          { label: "Send to restaurant", value: formatReadableTimestamp(sentToRestRaw) },
-          { label: "Restaurant confirmed at", value: formatReadableTimestamp(restConfirmedRaw) },
-          { label: "Pickup - Committed", value: formatReadableTimestamp(pickupCommittedRaw) },
-          { label: "Food is ready at", value: formatReadableTimestamp(foodReadyRaw) },
+          { label: "Send to restaurant", value: formatShortTimeOnly(sentToRestRaw) },
+          { label: "Restaurant confirmed at", value: formatShortTimeOnly(restConfirmedRaw) },
+          { label: "Pickup - Committed", value: formatShortTimeOnly(pickupCommittedRaw) },
+          { label: "Food is ready at", value: formatShortTimeOnly(foodReadyRaw) },
           { label: "Picked up at", value: pickedUpRaw ? formatExactTimeSeconds(pickedUpRaw) : "-" },
           { label: "Promised delivery time", value: formatReadableTimestamp(promisedDeliveryRaw) }
         ];
 
         const statusSinceStr = formatSinceTimestamp(
-          orderObj.status_updated_at || rec.updated_at || pickedUpRaw || orderedAtRaw
+          orderObj.current_state_transition || orderObj.event_timestamp || pickedUpRaw || orderedAtRaw
         );
 
         const ridersHistory = Array.from(riderMap.values());
@@ -1336,10 +1320,46 @@
             }))
           : [];
         const orderIssues = Array.isArray(doc.order_issues) ? doc.order_issues : [];
-        const items =
-          Array.isArray(orderObj.items) && orderObj.items.length > 0
-            ? orderObj.items
-            : [{ name: `${vendorName} #${vendorOrderNo}`, quantity: 1, price: orderValueStr }];
+
+        // Parse real Order Items from order.detail.order_items (prices in piasters -> divide by 100)
+        const rawOrderItems = Array.isArray(orderDetailObj.order_items) ? orderDetailObj.order_items : [];
+        const parsedItems = rawOrderItems.length > 0
+          ? rawOrderItems.map((it, idx) => ({
+              id: it.id || idx + 1,
+              name: normalizeText(it.item || it.name || it.title || "Item"),
+              quantity: Number(it.quantity || it.qty || 1),
+              volume: Number(it.volume || 0),
+              weight: Number(it.weight || 0),
+              priceFormatted: formatPiastersMoney(it.price, "EGP"),
+              subItems: Array.isArray(it.sub_items) ? it.sub_items : []
+            }))
+          : [
+              {
+                id: 1,
+                name: `${vendorName} #${vendorOrderNo}`,
+                quantity: 1,
+                volume: 0,
+                weight: 0,
+                priceFormatted: orderValueStr,
+                subItems: []
+              }
+            ];
+
+        const totalItemsQty = parsedItems.reduce((acc, it) => acc + it.quantity, 0);
+        const totalItemsVol = parsedItems.reduce((acc, it) => acc + it.volume, 0) || Number(orderObj.total_volume || 0);
+        const totalItemsWeight = parsedItems.reduce((acc, it) => acc + it.weight, 0) || Number(orderObj.total_weight || 0);
+
+        const itemsSummary = {
+          totalQty: totalItemsQty,
+          totalVolume: totalItemsVol.toFixed(3),
+          totalWeight: totalItemsWeight.toFixed(3),
+          subtotal: orderObj.subtotal !== undefined ? formatPiastersMoney(orderObj.subtotal, "EGP") : orderValueStr,
+          deliveryFee: orderObj.delivery_fee !== undefined ? formatPiastersMoney(orderObj.delivery_fee, "EGP") : "0.00 EGP",
+          total: orderValueStr,
+          payAtPickup: formatPiastersMoney(orderDetailObj.cod_pay_at_pickup ?? 0, "EGP"),
+          collectAtDropoff: formatPiastersMoney(orderDetailObj.cod_collect_at_drop_off ?? 0, "EGP"),
+          deliveryBags: orderObj.total_bags ?? 0
+        };
 
         return {
           ...selectedOrder,
@@ -1361,8 +1381,6 @@
           platformName,
           vendorCode,
           orderValue: orderValueStr,
-          cashPickupStr,
-          cashDropoffStr,
           distance: distanceStr,
           prepDurationStr,
           courierDelayStr,
@@ -1376,7 +1394,9 @@
           ridersHistory,
           notes,
           orderIssues,
-          items,
+          items: parsedItems,
+          itemsSummary,
+          proofOfPickupLink: orderObj.proof_of_pickup_link || "",
           isLoadedFromApi: Boolean(liveOrderDetailDoc)
         };
       }, [selectedOrder, liveOrderDetailDoc]);
@@ -2059,7 +2079,6 @@
         return (
           <div className="min-h-screen w-full bg-slate-50 flex flex-col items-center justify-center p-4 sm:p-6 text-gray-800">
             <div className="w-full max-w-4xl bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden flex flex-col max-h-[92vh]">
-              {/* Gate Header */}
               <div className="px-6 py-5 bg-gradient-to-r from-slate-900 to-slate-800 text-white flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <span className="text-2xl">🚴‍♂️</span>
@@ -2082,7 +2101,6 @@
                 </span>
               </div>
 
-              {/* Employee Name / Desk Input */}
               <div className="px-6 py-3.5 bg-blue-50/50 border-b border-blue-100 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 text-xs font-bold text-blue-900">
                   <span>👤 اسم الموظف / رقم المكتب (اختياري):</span>
@@ -2096,7 +2114,6 @@
                 />
               </div>
 
-              {/* Quick Area Presets */}
               <div className="px-6 py-3.5 bg-gray-50 border-b border-gray-200 space-y-2">
                 <div className="text-xs font-bold text-gray-600">
                   اختيار سريع لمناطق القاهرة (Quick Presets):
@@ -2130,7 +2147,6 @@
                 </div>
               </div>
 
-              {/* Search & Bulk Actions */}
               <div className="px-6 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3 bg-white">
                 <div className="relative flex-1 min-w-[240px]">
                   <input
@@ -2172,7 +2188,6 @@
                 </div>
               </div>
 
-              {/* Zones Checkbox Grid */}
               <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 bg-slate-50/50">
                 {filteredZonesForModal.map((z) => {
                   const checked = selectedZoneIds.includes(Number(z.id));
@@ -2208,7 +2223,6 @@
                 })}
               </div>
 
-              {/* Gate Footer */}
               <div className="px-6 py-4 bg-white border-t border-gray-200 flex flex-wrap items-center justify-between gap-3">
                 <div className="text-xs text-gray-600">
                   الزونات المختارة حالياً:{" "}
@@ -2235,7 +2249,6 @@
       // --- 2) MAIN EMPLOYEE LIVE DASHBOARD ---
       return (
         <div className="flex h-screen w-full bg-white overflow-hidden text-gray-800">
-          {/* Left Navigation Sidebar */}
           <aside className="w-[240px] flex-shrink-0 border-r border-gray-200 flex flex-col h-full bg-white z-10">
             <div className="h-14 flex items-center justify-between px-4 border-b border-gray-200">
               <div className="flex items-center gap-2 font-bold text-lg tracking-tight text-gray-900">
@@ -2284,9 +2297,7 @@
             </nav>
           </aside>
 
-          {/* Main Content Area */}
           <div className="flex-1 flex flex-col min-w-0 bg-white">
-            {/* Top Header */}
             <header className="min-h-[56px] py-2 flex flex-wrap items-center justify-between px-6 border-b border-gray-200 bg-white gap-3">
               <div className="flex flex-wrap items-center gap-2.5 text-xs">
                 <span
@@ -2361,7 +2372,6 @@
               </div>
             </header>
 
-            {/* Selected Zones Strip */}
             <div className="px-6 py-2 bg-slate-50 border-b border-gray-200 flex items-center gap-2 overflow-x-auto text-xs">
               <span className="font-bold text-gray-600 flex-shrink-0">الزونات النشطة:</span>
               {selectedZonesDisplayList.map((z) => (
@@ -2374,7 +2384,6 @@
               ))}
             </div>
 
-            {/* Dynamic Main View */}
             <main ref={mainContainerRef} className="flex-1 overflow-auto p-5 sm:p-7">
               <div className="max-w-[1440px] mx-auto">
                 <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
@@ -2415,10 +2424,10 @@
               onClick={() => setSelectedOrder(null)}
             >
               <div
-                className="bg-[#f5f6f8] rounded-xl w-full max-w-[1400px] max-h-[94vh] shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
+                className="bg-[#f5f6f8] rounded-xl w-full max-w-[1440px] max-h-[94vh] shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
-                {/* Top White Header Bar (Matches Hurrier Order Header) */}
+                {/* Top White Header Bar */}
                 <div className="px-6 py-3.5 bg-white border-b border-gray-200 flex flex-wrap items-center justify-between gap-3 shadow-sm">
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="text-2xl font-bold text-gray-900 tracking-tight">
@@ -2524,7 +2533,6 @@
 
                   {/* CENTER COLUMN: Pick up and Drop off + Deliveries / Issues / Routes / Order Items */}
                   <div className="lg:col-span-6 space-y-4">
-                    {/* Pick up and Drop off Card */}
                     <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2.5">
@@ -2560,7 +2568,7 @@
                             📍 {selectedOrderFullView.pickupAddress}
                           </div>
                           {selectedOrderFullView.pickupAreaBanner && (
-                            <div className="px-2.5 py-1.5 rounded bg-blue-50 text-blue-900 font-medium text-[11px]">
+                            <div className="px-2.5 py-1.5 rounded bg-blue-50 text-blue-900 font-medium text-[11px] leading-snug">
                               📋 {selectedOrderFullView.pickupAreaBanner}
                             </div>
                           )}
@@ -2630,8 +2638,8 @@
                             </span>
                           </div>
 
-                          {selectedOrderFullView.deliveryNote && selectedOrderFullView.deliveryNote !== "NA" && (
-                            <div className="px-2 py-1 rounded bg-amber-50 text-amber-900 text-[11px]">
+                          {selectedOrderFullView.deliveryNote && (
+                            <div className="px-2.5 py-1.5 rounded bg-blue-50/70 text-gray-800 text-[11px] leading-relaxed">
                               📝 {selectedOrderFullView.deliveryNote}
                             </div>
                           )}
@@ -2726,6 +2734,7 @@
                                           <th className="py-2.5 px-3">TIME</th>
                                           <th className="py-2.5 px-3">EVENT</th>
                                           <th className="py-2.5 px-3">COURIER</th>
+                                          <th className="py-2.5 px-2 text-center">LOC</th>
                                           <th className="py-2.5 px-2.5">EST.ACCEPT TIME</th>
                                           <th className="py-2.5 px-2.5">EST.PICKUP ARRIVAL</th>
                                           <th className="py-2.5 px-2.5">EST.PICKUP DEPARTURE</th>
@@ -2764,6 +2773,21 @@
                                             </td>
                                             <td className="py-2.5 px-3 text-blue-600 font-medium max-w-[150px] truncate" title={ev.courierName}>
                                               {ev.courierName}
+                                            </td>
+                                            <td className="py-2.5 px-2 text-center">
+                                              {ev.locUrl ? (
+                                                <a
+                                                  href={ev.locUrl}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  className="text-blue-600 hover:text-blue-800 font-bold"
+                                                  title="فتح موقع الطيار على الخريطة"
+                                                >
+                                                  📍
+                                                </a>
+                                              ) : (
+                                                <span className="text-gray-300">-</span>
+                                              )}
                                             </td>
                                             <td className="py-2.5 px-2.5 font-mono text-gray-700">{ev.estAcceptTime}</td>
                                             <td className="py-2.5 px-2.5 font-mono text-gray-700">{ev.estPickupArrival}</td>
@@ -2831,22 +2855,54 @@
                           <div className="border border-gray-200 rounded-lg overflow-hidden">
                             <table className="w-full text-left text-xs">
                               <thead>
-                                <tr className="bg-gray-50 border-b border-gray-200 text-gray-500 font-semibold">
-                                  <th className="py-2.5 px-4">QTY</th>
+                                <tr className="bg-gray-50 border-b border-gray-200 text-gray-500 font-bold text-[11px] uppercase">
                                   <th className="py-2.5 px-4">ITEM</th>
+                                  <th className="py-2.5 px-3 text-center">QUANTITY</th>
+                                  <th className="py-2.5 px-3 text-center">VOLUME (L)</th>
+                                  <th className="py-2.5 px-3 text-center">WEIGHT (KG)</th>
                                   <th className="py-2.5 px-4 text-right">PRICE</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-100">
-                                {selectedOrderFullView.items.map((it, idx) => (
-                                  <tr key={idx}>
-                                    <td className="py-3 px-4 font-bold text-gray-800">{it.quantity || it.qty || 1}x</td>
-                                    <td className="py-3 px-4 text-gray-800">{it.name || it.title || "Item"}</td>
-                                    <td className="py-3 px-4 text-right font-semibold text-gray-900">
-                                      {typeof it.price === "number" ? formatMoney(it.price, "EGP") : it.price || "-"}
-                                    </td>
+                                {selectedOrderFullView.items.map((it) => (
+                                  <tr key={it.id} className="hover:bg-gray-50/70">
+                                    <td className="py-3 px-4 text-gray-900 font-medium">{it.name}</td>
+                                    <td className="py-3 px-3 text-center font-bold text-gray-800">{it.quantity}</td>
+                                    <td className="py-3 px-3 text-center font-mono text-gray-600">{it.volume}</td>
+                                    <td className="py-3 px-3 text-center font-mono text-gray-600">{it.weight}</td>
+                                    <td className="py-3 px-4 text-right font-semibold text-gray-900">{it.priceFormatted}</td>
                                   </tr>
                                 ))}
+
+                                {/* Hurrier Totals Summary Rows */}
+                                <tr className="bg-gray-50/70 font-bold text-gray-900 border-t-2 border-gray-200">
+                                  <td className="py-2.5 px-4">Subtotal</td>
+                                  <td className="py-2.5 px-3 text-center">{selectedOrderFullView.itemsSummary.totalQty}</td>
+                                  <td className="py-2.5 px-3 text-center font-mono">{selectedOrderFullView.itemsSummary.totalVolume}</td>
+                                  <td className="py-2.5 px-3 text-center font-mono">{selectedOrderFullView.itemsSummary.totalWeight}</td>
+                                  <td className="py-2.5 px-4 text-right">{selectedOrderFullView.itemsSummary.subtotal}</td>
+                                </tr>
+                                <tr>
+                                  <td colSpan={4} className="py-2.5 px-4 text-gray-700 font-medium">Delivery Fee</td>
+                                  <td className="py-2.5 px-4 text-right font-semibold text-gray-800">{selectedOrderFullView.itemsSummary.deliveryFee}</td>
+                                </tr>
+                                <tr className="bg-gray-50/50 font-bold text-gray-900">
+                                  <td colSpan={4} className="py-2.5 px-4">Total</td>
+                                  <td className="py-2.5 px-4 text-right">{selectedOrderFullView.itemsSummary.total}</td>
+                                </tr>
+                                <tr>
+                                  <td colSpan={4} className="py-2.5 px-4 text-gray-700 font-medium">Pay at Pickup</td>
+                                  <td className="py-2.5 px-4 text-right font-semibold text-gray-800">{selectedOrderFullView.itemsSummary.payAtPickup}</td>
+                                </tr>
+                                <tr>
+                                  <td colSpan={4} className="py-2.5 px-4 text-gray-700 font-medium">Collect at Drop off</td>
+                                  <td className="py-2.5 px-4 text-right font-semibold text-gray-800">{selectedOrderFullView.itemsSummary.collectAtDropoff}</td>
+                                </tr>
+                                <tr>
+                                  <td className="py-2.5 px-4 text-gray-700 font-medium">Delivery Bags</td>
+                                  <td className="py-2.5 px-3 text-center font-bold text-gray-900">{selectedOrderFullView.itemsSummary.deliveryBags}</td>
+                                  <td colSpan={3}></td>
+                                </tr>
                               </tbody>
                             </table>
                           </div>
@@ -2857,7 +2913,6 @@
 
                   {/* RIGHT COLUMN: Time Checks + Yellow Notes Card */}
                   <div className="lg:col-span-3 space-y-4">
-                    {/* Time Checks Card */}
                     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
                       <div className="px-4 py-3 bg-gray-50/70 border-b border-gray-200 flex items-center gap-2">
                         <span className="text-amber-500">🕒</span>
@@ -2873,7 +2928,6 @@
                       </div>
                     </div>
 
-                    {/* Yellow Notes Card (Read-Only) */}
                     <div className="bg-[#fef9e7] rounded-lg border border-[#f9e79f] p-4 shadow-sm space-y-3">
                       <div className="flex items-center justify-between border-b border-[#f7dc6f] pb-2.5">
                         <div className="flex items-center gap-2">
