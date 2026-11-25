@@ -334,8 +334,10 @@
     function isRiderIdLikeQuery(q) {
       const trimmed = String(q || "").trim();
       if (!trimmed || isPhoneLikeQuery(trimmed)) return false;
-      // Hurrier Rider User IDs & Courier IDs are typically 4 to 9 digits (Order IDs are 10 digits starting with 47...)
-      return /^\d{4,9}$/.test(trimmed);
+      // Hurrier Rider User IDs & Courier IDs are 3 to 9 digits, or 10 digits not starting with Order prefix 47
+      if (/^\d{3,9}$/.test(trimmed)) return true;
+      if (/^\d{10}$/.test(trimmed) && !trimmed.startsWith("47")) return true;
+      return false;
     }
 
     function formatRelativeDeadline(isoDate, isPreorder = false) {
@@ -4923,13 +4925,17 @@
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {combinedRiderSearchResults.map((rider, idx) => {
                           const stLower = String(rider.status || "").toLowerCase();
-                          const statusBadgeClass = stLower.includes("work")
-                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                            : stLower.includes("break")
-                            ? "bg-amber-50 text-amber-800 border-amber-200"
-                            : stLower.includes("end")
-                            ? "bg-orange-50 text-orange-700 border-orange-200"
-                            : "bg-gray-100 text-gray-700 border-gray-300";
+                          const isNotWorking = stLower.includes("not") || stLower.includes("offline") || stLower.includes("inactive");
+                          const statusBadgeClass =
+                            stLower.includes("work") && !isNotWorking
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              : isNotWorking
+                              ? "bg-red-50 text-red-700 border-red-200"
+                              : stLower.includes("break")
+                              ? "bg-amber-50 text-amber-800 border-amber-200"
+                              : stLower.includes("end")
+                              ? "bg-orange-50 text-orange-700 border-orange-200"
+                              : "bg-gray-100 text-gray-700 border-gray-300";
 
                           const riderActiveOrdersCount = deliveries.filter(
                             (d) =>
@@ -4947,7 +4953,7 @@
                                 <div className="min-w-0">
                                   <button
                                     type="button"
-                                    onClick={(e) => openCourierModal(e, rider.courierId, rider.name)}
+                                    onClick={(e) => openCourierModal(e, rider.courierId || rider.userId, rider.name)}
                                     className="text-sm font-bold text-blue-600 hover:underline text-left break-words"
                                   >
                                     {rider.name}
@@ -4979,11 +4985,16 @@
                                         </button>
                                       </span>
                                     )}
+                                    {rider.vehicle && rider.vehicle !== "-" && (
+                                      <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700 font-medium">
+                                        🛵 {rider.vehicle}
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
 
                                 <span className={`px-2.5 py-0.5 rounded-full font-bold border flex-shrink-0 ${statusBadgeClass}`}>
-                                  {humanizeSnakeCase(rider.status || "Working")}
+                                  {humanizeSnakeCase(rider.status || "Not Working")}
                                 </span>
                               </div>
 
@@ -5015,20 +5026,26 @@
                                 </div>
 
                                 <div className="flex items-center gap-1.5">
+                                  {riderActiveOrdersCount > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSearchQuery(rider.name);
+                                        setCurrentPage(1);
+                                      }}
+                                      className="px-2.5 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-bold"
+                                      title="عرض كل أوردرات هذا الرايدر في الجدول"
+                                    >
+                                      أوردراته ({riderActiveOrdersCount})
+                                    </button>
+                                  ) : (
+                                    <span className="px-2.5 py-1 rounded bg-gray-100 text-gray-600 border border-gray-200 font-semibold">
+                                      بدون أوردرات جارية (0)
+                                    </span>
+                                  )}
                                   <button
                                     type="button"
-                                    onClick={() => {
-                                      setSearchQuery(rider.name);
-                                      setCurrentPage(1);
-                                    }}
-                                    className="px-2.5 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-bold"
-                                    title="عرض كل أوردرات هذا الرايدر في الجدول"
-                                  >
-                                    أوردراته ({riderActiveOrdersCount})
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={(e) => openCourierModal(e, rider.courierId, rider.name)}
+                                    onClick={(e) => openCourierModal(e, rider.courierId || rider.userId, rider.name)}
                                     className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-white font-bold"
                                   >
                                     👤 ملف الرايدر
