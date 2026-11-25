@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v7.3 — Secured Google Whitelist</title>
+  <title>Hurrier Live Operations Dashboard v7.4 — Mobile &amp; Desktop Secured</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,7 +38,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v7.1...
+      Loading Hurrier Live Operations Dashboard v7.4...
     </div>
   </div>
 
@@ -803,6 +803,11 @@
       const [newAllowedLabel, setNewAllowedLabel] = useState("");
       const [adminSaving, setAdminSaving] = useState(false);
 
+      // Mobile UI & Sign-In Double-Tap Guard States
+      const [isSigningIn, setIsSigningIn] = useState(false);
+      const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+      const [mobileViewMode, setMobileViewMode] = useState("cards"); // "cards" | "table"
+
       const sessionId = useMemo(() => {
         const existing = readSessionStorageJson("hurrier_emp_session_id", "");
         if (existing) return existing;
@@ -1054,20 +1059,30 @@
       }, [firebaseApiKey]);
 
       const handleGoogleSignIn = useCallback(async () => {
+        if (isSigningIn) return;
+        setIsSigningIn(true);
         setAuthErrorMsg("");
         try {
           const provider = new window.firebase.auth.GoogleAuthProvider();
           provider.setCustomParameters({ prompt: "select_account" });
           await window.firebase.auth().signInWithPopup(provider);
         } catch (err) {
-          setAuthErrorMsg(err?.message || "تعذر إتمام تسجيل الدخول بحساب Google");
+          if (err?.code === "auth/cancelled-popup-request" || err?.code === "auth/popup-closed-by-user") {
+            setAuthErrorMsg("تم إغلاق نافذة تسجيل الدخول أو الضغط مرتين — اضغط ضغطة واحدة وانتظر ثواني.");
+          } else {
+            setAuthErrorMsg(err?.message || "تعذر إتمام تسجيل الدخول بحساب Google");
+          }
+        } finally {
+          setIsSigningIn(false);
         }
-      }, []);
+      }, [isSigningIn]);
 
       const handleGoogleSignOut = useCallback(async () => {
         try {
-          await fbAuthFetch(`active_sessions/${sessionId}`, { method: "DELETE" }).catch(() => {});
-          await fbAuthFetch(`session_bundles/${sessionId}`, { method: "DELETE" }).catch(() => {});
+          await Promise.all([
+            fbAuthFetch(`active_sessions/${sessionId}`, { method: "DELETE" }),
+            fbAuthFetch(`session_bundles/${sessionId}`, { method: "DELETE" })
+          ]);
         } catch {}
         try {
           window.localStorage.removeItem(AUTH_BRIDGE_STORAGE_KEY);
@@ -2978,10 +2993,77 @@
                 <strong className="text-gray-800">{completedTotalPages}</strong> •{" "}
                 <strong>{visibleCompletedOrders.length}</strong> / 50 per page
               </div>
+              <button
+                type="button"
+                onClick={() => setMobileViewMode((prev) => (prev === "cards" ? "table" : "cards"))}
+                className="md:hidden px-2.5 py-1 rounded-lg border border-gray-300 bg-white text-gray-700 font-bold text-[11px]"
+              >
+                {mobileViewMode === "cards" ? "📊 عرض كجدول" : "📱 عرض كبطاقات"}
+              </button>
             </div>
           </div>
 
-          <div className="w-full overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm">
+          {/* Mobile Smart Cards for Completed Orders (< 768px) */}
+          <div className={`${mobileViewMode === "cards" ? "block md:hidden" : "hidden"} space-y-2.5`}>
+            {isCompletedLoading && visibleCompletedOrders.length === 0 ? (
+              <div className="p-8 text-center bg-white border border-gray-200 rounded-xl text-blue-600 font-semibold text-xs">
+                {isExactOrderIdPattern(completedSearchInput)
+                  ? `⚡ جاري البحث المباشر السريع عن الأوردر #${completedSearchInput.trim()}...`
+                  : `⏳ جاري سحب Completed Orders ليوم ${completedDate}...`}
+              </div>
+            ) : visibleCompletedOrders.length === 0 ? (
+              <div className="p-8 text-center bg-white border border-gray-200 rounded-xl text-gray-500 text-xs">
+                لا توجد أوردرات مكتملة (Completed Orders) مطابقة للبحث أو التاريخ المحدد.
+              </div>
+            ) : (
+              visibleCompletedOrders.map((item) => (
+                <div
+                  key={`m-comp-${item.uid}`}
+                  onClick={() => setSelectedOrder(item)}
+                  className="p-3.5 bg-white border border-gray-200 rounded-xl shadow-sm active:bg-blue-50/40 space-y-2 text-xs"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-indigo-600 font-bold text-sm">{item.id}</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          copyToClipboard(`comp-${item.id}`, item.id);
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 font-semibold"
+                      >
+                        {copiedText === `comp-${item.id}` ? "✓" : "⧉"}
+                      </button>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[11px]">
+                      {item.placedAtFormatted} • {item.orderDuration}
+                    </span>
+                  </div>
+                  <div className="text-gray-800 font-semibold truncate">
+                    🏪 {item.vendor} <span className="text-gray-400 font-normal">(VO #{item.vo})</span>
+                  </div>
+                  <div className="text-[11px] text-blue-700 font-medium truncate">📍 {item.zone}</div>
+                  <div className="pt-1.5 border-t border-gray-100 flex items-center justify-between gap-2">
+                    {item.courier && item.courier !== "-" ? (
+                      <button
+                        type="button"
+                        onClick={(e) => openCourierModal(e, item.courierId, item.courier)}
+                        className="text-blue-600 font-bold truncate text-left"
+                      >
+                        🚴‍♂️ {item.courier}
+                      </button>
+                    ) : (
+                      <span className="text-gray-400">-</span>
+                    )}
+                    <span className="font-mono text-gray-500 flex-shrink-0">{item.distance}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className={`${mobileViewMode === "cards" ? "hidden md:block" : "block"} w-full overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm`}>
             <table className="w-full text-left text-xs whitespace-nowrap">
               <thead>
                 <tr className="border-b border-gray-200 text-gray-600 font-bold text-[11px] uppercase bg-gray-50/70">
@@ -3332,6 +3414,13 @@
                 >
                   {orderSortMode === "hurrier_order" ? "Order: Hurrier Default" : "Order: Live Today First"}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setMobileViewMode((prev) => (prev === "cards" ? "table" : "cards"))}
+                  className="md:hidden px-2.5 py-1 rounded border border-gray-300 bg-white text-gray-700 font-bold"
+                >
+                  {mobileViewMode === "cards" ? "📊 جدول" : "📱 بطاقات"}
+                </button>
                 <div>
                   Page <strong className="text-gray-800">{currentPage}</strong> of{" "}
                   <strong className="text-gray-800">{totalPages}</strong>{" "}
@@ -3390,7 +3479,205 @@
               </div>
             )}
 
-            <div className="w-full overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm">
+            {/* Mobile Smart Order Cards (< 768px) */}
+            <div className={`${mobileViewMode === "cards" ? "block md:hidden" : "hidden"} space-y-2.5`}>
+              {paginatedDeliveries.length === 0 ? (
+                <div className="p-8 text-center bg-white border border-gray-200 rounded-xl text-gray-500 text-xs space-y-2.5">
+                  {connectionStatus === "connecting" || connectionStatus === "waiting" ? (
+                    <span className="text-blue-600 font-semibold">
+                      جاري سحب أوردرات الزونات المختارة من Hurrier...
+                    </span>
+                  ) : (
+                    <>
+                      <div>
+                        لا توجد أوردرات في قسم <span className="font-semibold">{activeTab}</span> للزونات المختارة حالياً.
+                      </div>
+                      {searchQuery.trim() && (
+                        <button
+                          type="button"
+                          onClick={() => handleJumpToCompletedOrderSearch(searchQuery)}
+                          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold shadow-sm"
+                        >
+                          ⚡ بحث سريع عن "{searchQuery.trim()}" في Completed Orders
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              ) : (
+                paginatedDeliveries.map((item) => {
+                  const isNegative = item.deadline.includes("-") || item.deadline === "Late";
+                  const posMinsMatch = !isNegative ? /^(\d+)min$/.exec(item.deadline) : null;
+                  const posMins = posMinsMatch ? Number(posMinsMatch[1]) : 0;
+                  const deadlineColor = isNegative
+                    ? "bg-[#e53935] text-white"
+                    : posMins > 5 && posMins <= 20
+                    ? "bg-[#f59e0b] text-white"
+                    : "bg-gray-100 text-gray-800";
+
+                  const prioritizedZones = [...(item.zonesList || [])].sort((a, b) => {
+                    const aMatch = selectedZoneNames.some((s) => normalizeText(a).toLowerCase().includes(s));
+                    const bMatch = selectedZoneNames.some((s) => normalizeText(b).toLowerCase().includes(s));
+                    if (aMatch === bMatch) return 0;
+                    return aMatch ? -1 : 1;
+                  });
+                  const shownZones = prioritizedZones.slice(0, 2);
+                  const extraZonesCount = Math.max(0, prioritizedZones.length - shownZones.length);
+                  const canCopyFollowup = hasValidAssignedRider(item);
+                  const isRowSelected = selectedOrderUids.has(item.uid);
+
+                  return (
+                    <div
+                      key={`m-card-${item.uid}`}
+                      onClick={() => setSelectedOrder(item)}
+                      className={`p-3.5 rounded-xl border transition-all shadow-sm space-y-2.5 text-xs ${
+                        isRowSelected
+                          ? "bg-blue-50/80 border-blue-400"
+                          : "bg-white border-gray-200 active:bg-gray-50"
+                      }`}
+                    >
+                      {/* Row 1: Checkbox + Order ID + Copy Buttons | Deadline + Status */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {canCopyFollowup && (
+                            <input
+                              type="checkbox"
+                              checked={isRowSelected}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => toggleOrderSelection(e, item)}
+                              className="w-4 h-4 rounded text-blue-600 flex-shrink-0"
+                            />
+                          )}
+                          <span className="text-blue-600 font-bold text-[15px] tracking-tight">
+                            {item.id}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              copyToClipboard(item.id, item.id);
+                            }}
+                            className="px-1.5 py-1 rounded bg-gray-100 text-gray-700 font-semibold"
+                            title="نسخ رقم الأوردر"
+                          >
+                            {copiedText === item.id ? "✓" : "⧉"}
+                          </button>
+                          {canCopyFollowup && (
+                            <button
+                              type="button"
+                              onClick={(e) => handleCopySingleFollowup(e, item)}
+                              className={`px-2 py-1 rounded font-bold border ${
+                                copiedText === `followup:${item.uid}`
+                                  ? "bg-emerald-50 text-emerald-700 border-emerald-300"
+                                  : "bg-blue-50 text-blue-700 border-blue-200"
+                              }`}
+                            >
+                              {copyingFollowupState === `single:${item.uid}`
+                                ? "⏳"
+                                : copiedText === `followup:${item.uid}`
+                                ? "✓ تم"
+                                : "📋 متابعة"}
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          <span className={`px-2.5 py-0.5 rounded-md text-xs font-bold ${deadlineColor}`}>
+                            {item.deadline}
+                          </span>
+                          <span className="font-bold text-gray-900 text-[11px]">{item.status}</span>
+                        </div>
+                      </div>
+
+                      {/* Row 2: Vendor + VO + Zone */}
+                      <div className="space-y-1">
+                        <div className="text-gray-800 font-semibold leading-snug">
+                          🏪 {item.vendor}{" "}
+                          <span className="text-gray-400 font-normal">(VO #{item.vo})</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className="text-blue-700 font-semibold truncate">
+                            📍 {shownZones.join(", ") || item.zone}
+                            {extraZonesCount > 0 ? ` (+${extraZonesCount})` : ""}
+                          </span>
+                          <span className="text-gray-500 font-mono flex-shrink-0">
+                            {item.distance} • {item.orderValue}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Row 3: Courier + Payment/Vertical Pills */}
+                      <div className="pt-2 border-t border-gray-100 flex flex-wrap items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          {item.courier === "-" ||
+                          item.courier === "Assigning..." ||
+                          item.courier === "Pending Acceptance" ? (
+                            <span className="text-gray-500 font-medium">🚴‍♂️ {item.courier}</span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => openCourierModal(e, item.courierId, item.courier)}
+                              className="text-left text-blue-600 font-bold underline decoration-blue-300 leading-snug break-words"
+                            >
+                              🚴‍♂️ {item.courier}
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1 flex-wrap flex-shrink-0">
+                          {item.instructions.map((inst, idx) => (
+                            <span
+                              key={idx}
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                                inst === "Cash"
+                                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                  : inst === "Card"
+                                  ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+                                  : "bg-gray-50 text-gray-700 border-gray-200"
+                              }`}
+                            >
+                              {inst}
+                            </span>
+                          ))}
+                          {item.isSplit && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200">
+                              Split
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Sticky Bottom Bulk-Copy Bar on Mobile (< 768px) */}
+            {selectedWithRiderList.length > 0 && (
+              <div className="fixed bottom-0 inset-x-0 z-40 md:hidden bg-slate-900/95 backdrop-blur border-t border-slate-700 px-4 py-3 flex items-center justify-between gap-2 shadow-2xl">
+                <button
+                  type="button"
+                  disabled={copyingFollowupState === "loading:selected"}
+                  onClick={() => handleCopyBulkFollowup("selected", selectedWithRiderList)}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 active:bg-emerald-700 text-white font-bold text-xs shadow-sm flex items-center justify-center gap-2"
+                >
+                  {copyingFollowupState === "loading:selected"
+                    ? "⏳ جاري سحب أرقام الموبايل..."
+                    : copyingFollowupState?.startsWith("done:selected:")
+                    ? `✓ تم نسخ (${selectedWithRiderList.length}) أوردر`
+                    : `📋 نسخ المحدد (${selectedWithRiderList.length})`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedOrderUids(new Set())}
+                  className="py-2.5 px-3.5 rounded-xl bg-slate-800 text-slate-200 font-bold text-xs border border-slate-600"
+                >
+                  ✕ إلغاء
+                </button>
+              </div>
+            )}
+
+            <div className={`${mobileViewMode === "cards" ? "hidden md:block" : "block"} w-full overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm`}>
               <table className="w-full text-left text-sm whitespace-nowrap">
                 <thead>
                   <tr className="border-b border-gray-200 text-gray-500 font-semibold tracking-wide text-xs bg-gray-50/70">
@@ -3764,7 +4051,7 @@
                   <span className="text-2xl">🚴‍♂️</span>
                   <div>
                     <h1 className="text-lg font-bold tracking-tight">Hurrier Live Operations</h1>
-                    <p className="text-xs text-slate-300">v7.1 • Secured Google Access</p>
+                    <p className="text-xs text-slate-300">v7.4 • Secured Google Access</p>
                   </div>
                 </div>
                 <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
@@ -3825,8 +4112,13 @@
 
                     <button
                       type="button"
+                      disabled={isSigningIn}
                       onClick={handleGoogleSignIn}
-                      className="w-full py-3 px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-800 font-bold text-sm shadow-sm flex items-center justify-center gap-3 transition-all"
+                      className={`w-full py-3 px-4 rounded-xl border border-gray-300 font-bold text-sm shadow-sm flex items-center justify-center gap-3 transition-all ${
+                        isSigningIn
+                          ? "bg-gray-100 text-gray-500 cursor-wait"
+                          : "bg-white hover:bg-gray-50 text-gray-800"
+                      }`}
                     >
                       <svg className="w-5 h-5" viewBox="0 0 24 24">
                         <path
@@ -3846,8 +4138,12 @@
                           d="M12 24c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.1-6.7-5l-3.7 2.8C3.5 21.4 7.4 24 12 24z"
                         />
                       </svg>
-                      <span>Sign in with Google</span>
+                      <span>{isSigningIn ? "⏳ جاري فتح نافذة Google..." : "Sign in with Google"}</span>
                     </button>
+
+                    <p className="text-[11px] text-gray-400">
+                      على الموبايل: يُفضّل الفتح في متصفح Chrome أو Safari مباشرة.
+                    </p>
 
                     {authErrorMsg && (
                       <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
@@ -3895,7 +4191,7 @@
                         تحديد زونات الموظف قبل بدء السحب (Independent Zone Gate)
                       </h1>
                       <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v7.1 • {userRole === "admin" ? "Admin" : "Employee"}
+                        ★ v7.4 • {userRole === "admin" ? "Admin" : "Employee"}
                       </span>
                     </div>
                     <p className="text-xs text-slate-300 mt-0.5">
@@ -4165,7 +4461,78 @@
       // --- 2) MAIN EMPLOYEE LIVE DASHBOARD ---
       return (
         <div className="flex h-screen w-full bg-white overflow-hidden text-gray-800">
-          <aside className="w-[240px] flex-shrink-0 border-r border-gray-200 flex flex-col h-full bg-white z-10">
+          {/* Mobile Slide-Over Navigation Drawer (< 768px) */}
+          {isMobileMenuOpen && (
+            <div
+              className="fixed inset-0 bg-black/50 z-50 md:hidden flex"
+              onClick={() => setIsMobileMenuOpen(false)}
+            >
+              <div
+                className="w-[275px] max-w-[82vw] bg-white h-full shadow-2xl flex flex-col overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="h-14 flex items-center justify-between px-4 border-b border-gray-200 bg-slate-900 text-white">
+                  <div className="flex items-center gap-2 font-bold text-base">
+                    <span className="text-xl">🚴‍♂️</span>
+                    <span>Hurrier Mobile</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className="p-1.5 rounded-lg text-slate-300 hover:text-white text-lg font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="px-4 py-3 bg-slate-50 border-b border-gray-200 text-xs space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-emerald-700">★ v7.4 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                    <button
+                      type="button"
+                      onClick={handleGoogleSignOut}
+                      className="px-2 py-0.5 rounded bg-red-50 text-red-600 font-bold border border-red-200"
+                    >
+                      خروج
+                    </button>
+                  </div>
+                  <div className="text-gray-700 font-semibold truncate">
+                    👤 {employeeName || currentUser?.email}
+                  </div>
+                </div>
+
+                <nav className="flex-1 overflow-y-auto py-2 flex flex-col">
+                  {SIDEBAR_ITEMS.map((item) => {
+                    const isActive = activeTab === item.id;
+                    const countVal = effectiveTabCounts[item.id];
+                    return (
+                      <button
+                        key={`mob-nav-${item.id}`}
+                        type="button"
+                        onClick={() => {
+                          setActiveTab(item.id);
+                          setCurrentPage(1);
+                          setIsMobileMenuOpen(false);
+                        }}
+                        className={`flex items-center justify-between px-5 py-3 text-sm font-medium w-full text-left transition-colors ${
+                          isActive
+                            ? "border-l-4 border-blue-600 text-blue-600 bg-blue-50/70 font-bold"
+                            : "border-l-4 border-transparent text-gray-700 active:bg-gray-100"
+                        } ${item.className || ""}`}
+                      >
+                        <span>
+                          {item.label} {countVal !== undefined && `(${countVal})`}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </nav>
+              </div>
+            </div>
+          )}
+
+          {/* Desktop Fixed Left Sidebar (>= 768px - 100% Unchanged) */}
+          <aside className="hidden md:flex w-[240px] flex-shrink-0 border-r border-gray-200 flex-col h-full bg-white z-10">
             <div className="h-14 flex items-center justify-between px-4 border-b border-gray-200">
               <div className="flex items-center gap-2 font-bold text-lg tracking-tight text-gray-900">
                 <span className="text-xl">🚴‍♂️</span>
@@ -4178,7 +4545,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v7.1 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                <span className="font-bold text-emerald-700">★ v7.4 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                 <button
                   type="button"
                   onClick={handleGoogleSignOut}
@@ -4221,7 +4588,123 @@
           </aside>
 
           <div className="flex-1 flex flex-col min-w-0 bg-white">
-            <header className="min-h-[56px] py-2 flex flex-wrap items-center justify-between px-6 border-b border-gray-200 bg-white gap-3">
+            {/* Mobile Compact One-Handed Header (< 768px) */}
+            <header className="flex flex-col md:hidden px-3.5 py-2.5 border-b border-gray-200 bg-white gap-2 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileMenuOpen(true)}
+                    className="p-2 rounded-lg border border-gray-300 bg-gray-50 text-gray-800 font-bold text-base leading-none"
+                    aria-label="Open Menu"
+                  >
+                    ☰
+                  </button>
+
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-bold border ${
+                      connectionStatus === "live"
+                        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                        : connectionStatus === "error"
+                        ? "bg-red-50 text-red-700 border-red-200"
+                        : "bg-amber-50 text-amber-700 border-amber-200"
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        connectionStatus === "live"
+                          ? "bg-emerald-500 animate-pulse"
+                          : connectionStatus === "error"
+                          ? "bg-red-500"
+                          : "bg-amber-500"
+                      }`}
+                    />
+                    {connectionStatus === "live" ? "LIVE" : "..."}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={handleChangeZones}
+                    className="px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 text-[11px] font-bold"
+                  >
+                    🔄 الزونات ({selectedZoneIds.length})
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  {userRole === "admin" && (
+                    <button
+                      type="button"
+                      onClick={() => setIsAdminModalOpen(true)}
+                      className="p-1.5 rounded-lg bg-amber-50 text-amber-800 border border-amber-300 text-xs font-bold"
+                      title="إدارة الإيميلات"
+                    >
+                      🛡️
+                    </button>
+                  )}
+                  <select
+                    value={selectedCity}
+                    onChange={(e) => setSelectedCity(e.target.value)}
+                    className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 text-xs font-semibold text-gray-700 focus:outline-none"
+                  >
+                    <option value="All Cities">All</option>
+                    <option value="Cairo">Cairo</option>
+                    <option value="Alexandria">Alex</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Full-width Mobile Search Input */}
+              <div className="flex items-center gap-1.5">
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && searchQuery.trim()) {
+                        triggerLiveRiderSearch(searchQuery.trim());
+                        if (filteredDeliveries.length === 0 && isExactOrderIdPattern(searchQuery.trim())) {
+                          handleJumpToCompletedOrderSearch(searchQuery);
+                        }
+                      }
+                    }}
+                    placeholder="بحث: Order ID, Rider ID, رقم الهاتف..."
+                    className="w-full pl-3 pr-8 py-2 border border-gray-300 rounded-xl text-xs bg-gray-50/60 focus:bg-white focus:outline-none focus:border-blue-500"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery("");
+                        setRiderSearchReq(null);
+                        setRiderSearchResults([]);
+                        setIsRiderSearching(false);
+                      }}
+                      className="absolute right-2.5 top-2 text-gray-500 text-xs font-bold"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {searchQuery.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => triggerLiveRiderSearch(searchQuery.trim())}
+                    className="px-2.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold flex-shrink-0"
+                  >
+                    🔍 رايدر
+                  </button>
+                )}
+              </div>
+            </header>
+
+            {/* Desktop Header (>= 768px - 100% Unchanged) */}
+            <header className="hidden md:flex min-h-[56px] py-2 flex-wrap items-center justify-between px-6 border-b border-gray-200 bg-white gap-3">
               <div className="flex flex-wrap items-center gap-2.5 text-xs">
                 <span
                   className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-bold border ${
@@ -4343,7 +4826,7 @@
               </div>
             </header>
 
-            <main ref={mainContainerRef} className="flex-1 overflow-auto p-6 sm:p-8">
+            <main ref={mainContainerRef} className="flex-1 overflow-auto p-3.5 sm:p-6 md:p-8 pb-24 md:pb-8">
               <div className="max-w-[1440px] mx-auto">
                 <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
                   <div className="flex flex-wrap items-center gap-3">
@@ -4912,7 +5395,7 @@
                     </div>
 
                     <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-                      <div className="px-4 border-b border-gray-200 flex items-center gap-6 text-sm font-semibold bg-white">
+                      <div className="px-4 border-b border-gray-200 flex items-center gap-5 sm:gap-6 text-xs sm:text-sm font-semibold bg-white overflow-x-auto whitespace-nowrap">
                         {[
                           { id: "Deliveries", label: `Deliveries ${selectedOrderFullView.structuredDeliveries.length}` },
                           { id: "Issues", label: `Issues ${selectedOrderFullView.orderIssues.length || ""}`.trim() },
@@ -5290,8 +5773,8 @@
                       )}
                       {selectedCourierFullView.courierId &&
                         selectedCourierFullView.courierId !== selectedCourierFullView.userId && (
-                          <span className="text-xs text-gray-400 font-mono">
-                            (Courier #{selectedCourierFullView.courierId})
+                          <span className="text-xs text-gray-500 font-mono">
+                            (Courier ID: #{selectedCourierFullView.courierId})
                           </span>
                         )}
                     </div>
@@ -5306,7 +5789,25 @@
                   </button>
                 </div>
 
-                <div className="p-6 space-y-4 text-sm">
+                <div className="p-4 sm:p-6 space-y-4 text-sm">
+                  {selectedCourierFullView.phone && (
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <a
+                        href={`tel:${selectedCourierFullView.phone}`}
+                        className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm"
+                      >
+                        📞 اتصال مباشر
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard("riderPhoneTop", selectedCourierFullView.phone)}
+                        className="py-2.5 px-3 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-bold text-xs flex items-center justify-center gap-1.5"
+                      >
+                        {copiedText === "riderPhoneTop" ? "✓ تم النسخ" : `⧉ نسخ ${selectedCourierFullView.phone}`}
+                      </button>
+                    </div>
+                  )}
+
                   <div className="p-4 rounded-lg bg-gray-100/90 border border-gray-200 space-y-1">
                     <div className="text-xs text-gray-500 font-medium">Status</div>
                     <div className="text-base font-bold text-gray-900">{selectedCourierFullView.statusLabel}</div>
