@@ -1439,6 +1439,18 @@
                     if (ph) {
                       keys.forEach((ck) => courierPhoneCacheRef.current.set(ck, ph));
                       resolvedMap.set(it.uid, ph);
+                      if (it.courierId) {
+                        const uId = String(doc?.user_id || doc?.courier?.user_id || doc?.userId || "");
+                        setKnownCouriersMeta((prev) => ({
+                          ...prev,
+                          [String(it.courierId)]: {
+                            ...(prev[String(it.courierId)] || {}),
+                            userId: uId || prev[String(it.courierId)]?.userId || "",
+                            phone: ph,
+                            name: normalizeText(doc?.courierName || doc?.courier?.name || it.courier || "")
+                          }
+                        }));
+                      }
                       return;
                     }
                   }
@@ -3700,6 +3712,48 @@
 
       const activeHeaderCount = effectiveTabCounts[activeTab];
 
+      const combinedRiderSearchResults = useMemo(() => {
+        if (!riderSearchReq || !riderSearchReq.query) return [];
+        const rawQ = String(riderSearchReq.query).trim();
+        const qLower = rawQ.toLowerCase();
+        const qPhone = normalizePhoneDigits(rawQ);
+
+        const mergedMap = new Map();
+        const addRider = (rObj) => {
+          if (!rObj) return;
+          const key = String(rObj.courierId || rObj.userId || rObj.name || "").toLowerCase();
+          if (!key) return;
+          if (!mergedMap.has(key)) {
+            mergedMap.set(key, rObj);
+          }
+        };
+
+        (Array.isArray(riderSearchResults) ? riderSearchResults : []).forEach(addRider);
+
+        Object.entries(knownCouriersMeta || {}).forEach(([cid, meta]) => {
+          if (!meta) return;
+          const mPhone = normalizePhoneDigits(meta.phone || "");
+          const phoneMatch =
+            (qPhone.core10 && mPhone.core10 === qPhone.core10) ||
+            (qPhone.rawDigits.length >= 7 && mPhone.rawDigits.includes(qPhone.rawDigits));
+          const idMatch =
+            String(cid) === rawQ || (meta.userId && String(meta.userId) === rawQ);
+          const nameMatch = meta.name && meta.name.toLowerCase().includes(qLower);
+
+          if (phoneMatch || idMatch || nameMatch) {
+            addRider({
+              courierId: String(cid),
+              userId: String(meta.userId || cid),
+              name: meta.name || `Courier #${cid}`,
+              phone: meta.phone || "",
+              status: "Working"
+            });
+          }
+        });
+
+        return Array.from(mergedMap.values());
+      }, [riderSearchReq, riderSearchResults, knownCouriersMeta]);
+
       // --- 0) GOOGLE SIGN-IN & GMAIL WHITELIST GATE ---
       if (authState !== "authorized") {
         return (
@@ -4348,11 +4402,11 @@
                       </button>
                     </div>
 
-                    {isRiderSearching && riderSearchResults.length === 0 ? (
+                    {isRiderSearching && combinedRiderSearchResults.length === 0 ? (
                       <div className="py-3 text-xs font-semibold text-blue-700 animate-pulse">
                         ⏳ جاري البحث في قاعدة مناديب Hurrier (User ID / Courier ID / رقم الهاتف)...
                       </div>
-                    ) : riderSearchResults.length === 0 ? (
+                    ) : combinedRiderSearchResults.length === 0 ? (
                       <div className="py-2 text-xs text-gray-600 flex flex-wrap items-center justify-between gap-2">
                         <span>
                           لم يتم العثور على رايدر مطابق لـ <strong>"{riderSearchReq.query}"</strong> في Hurrier.
@@ -4367,7 +4421,7 @@
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {riderSearchResults.map((rider, idx) => {
+                        {combinedRiderSearchResults.map((rider, idx) => {
                           const stLower = String(rider.status || "").toLowerCase();
                           const statusBadgeClass = stLower.includes("work")
                             ? "bg-emerald-50 text-emerald-700 border-emerald-200"
