@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v7.1 — Secured Google Whitelist</title>
+  <title>Hurrier Live Operations Dashboard v7.3 — Secured Google Whitelist</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -306,6 +306,36 @@
         .replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "")
         .trim();
       return /^\d{7,14}(-\d+)?$/.test(clean);
+    }
+
+    function normalizePhoneDigits(rawStr) {
+      const digits = String(rawStr || "").replace(/\D/g, "");
+      if (!digits) return { rawDigits: "", core10: "" };
+      let core = digits;
+      if (core.startsWith("0020") && core.length >= 13) {
+        core = core.slice(4);
+      } else if (core.startsWith("20") && core.length === 12 && core[2] === "1") {
+        core = core.slice(2);
+      } else if (core.startsWith("0") && core.length === 11 && core[1] === "1") {
+        core = core.slice(1);
+      }
+      const core10 = core.length === 10 && core.startsWith("1") ? core : "";
+      return { rawDigits: digits, core10 };
+    }
+
+    function isPhoneLikeQuery(q) {
+      const trimmed = String(q || "").trim();
+      if (!trimmed) return false;
+      const { rawDigits, core10 } = normalizePhoneDigits(trimmed);
+      if (core10.length === 10) return true;
+      return rawDigits.length >= 9 && /^(\+?20|0020|01)/.test(trimmed.replace(/[\s\-()]+/g, ""));
+    }
+
+    function isRiderIdLikeQuery(q) {
+      const trimmed = String(q || "").trim();
+      if (!trimmed || isPhoneLikeQuery(trimmed)) return false;
+      // Hurrier Rider User IDs & Courier IDs are typically 4 to 9 digits (Order IDs are 10 digits starting with 47...)
+      return /^\d{4,9}$/.test(trimmed);
     }
 
     function formatRelativeDeadline(isoDate, isPreorder = false) {
@@ -823,6 +853,10 @@
 
       const [selectedOrderUids, setSelectedOrderUids] = useState(() => new Set());
       const [copyingFollowupState, setCopyingFollowupState] = useState(null);
+      const [riderSearchReq, setRiderSearchReq] = useState(null);
+      const [riderSearchResults, setRiderSearchResults] = useState([]);
+      const [isRiderSearching, setIsRiderSearching] = useState(false);
+      const [knownCouriersMeta, setKnownCouriersMeta] = useState({});
       const [deliveries, setDeliveries] = useState([]);
       const [completedOrders, setCompletedOrders] = useState([]);
       const [completedTotalCount, setCompletedTotalCount] = useState(0);
@@ -1336,8 +1370,21 @@
                 const doc = await res.json();
                 if (doc && typeof doc === "object") {
                   const ph = normalizeText(doc?.courier?.phone_number || doc?.courier?.phone || doc?.courier?.mobile || "");
+                  const uId = String(doc?.user_id || doc?.courier?.user_id || doc?.userId || "");
+                  const cId = String(doc?.courierId || doc?.courier?.id || courierObj.id || "");
                   if (ph) {
                     keys.forEach((ck) => courierPhoneCacheRef.current.set(ck, ph));
+                  }
+                  if (cId && (ph || uId)) {
+                    setKnownCouriersMeta((prev) => ({
+                      ...prev,
+                      [cId]: {
+                        ...(prev[cId] || {}),
+                        userId: uId || prev[cId]?.userId || "",
+                        phone: ph || prev[cId]?.phone || "",
+                        name: normalizeText(doc?.courierName || doc?.courier?.name || courierObj.name || "")
+                      }
+                    }));
                   }
                   setLiveCourierDetailDoc(doc);
                   return;
@@ -1590,6 +1637,7 @@
               zone_ids: selectedZoneIds.map(Number).filter(isRealHurrierZoneId),
               zone_names: selectedZoneNames,
               completed_req: completedReqPayload,
+              rider_search_req: riderSearchReq,
               heartbeat_at: Date.now()
             })
           });
@@ -1610,6 +1658,7 @@
         completedSpecificZoneId,
         completedCityFilter,
         completedSearchQuery,
+        riderSearchReq,
         fbAuthFetch
       ]);
 
@@ -1619,6 +1668,47 @@
         const hbTimer = setInterval(registerOrHeartbeatSession, 15000);
         return () => clearInterval(hbTimer);
       }, [authState, isZoneSetupConfirmed, selectedZoneIds, registerOrHeartbeatSession]);
+
+      const triggerLiveRiderSearch = useCallback((rawQ) => {
+        const trimmed = String(rawQ || "").trim();
+        if (!trimmed) {
+          setRiderSearchReq(null);
+          setRiderSearchResults([]);
+          setIsRiderSearching(false);
+          return;
+        }
+        setIsRiderSearching(true);
+        setRiderSearchReq({
+          query: trimmed,
+          requested_at: Date.now()
+        });
+      }, []);
+
+      // Auto-trigger live rider search when typing a Phone Number or Rider ID (4-9 digits)
+      useEffect(() => {
+        const trimmed = searchQuery.trim();
+        if (!trimmed) {
+          setRiderSearchReq(null);
+          setRiderSearchResults([]);
+          setIsRiderSearching(false);
+          return;
+        }
+        if (isPhoneLikeQuery(trimmed) || isRiderIdLikeQuery(trimmed)) {
+          const timer = setTimeout(() => {
+            triggerLiveRiderSearch(trimmed);
+          }, 300);
+          return () => clearTimeout(timer);
+        } else if (riderSearchReq && riderSearchReq.query !== trimmed) {
+          setRiderSearchReq(null);
+          setRiderSearchResults([]);
+          setIsRiderSearching(false);
+        }
+      }, [searchQuery, triggerLiveRiderSearch]);
+
+      useEffect(() => {
+        if (authState !== "authorized" || !isZoneSetupConfirmed || !riderSearchReq) return;
+        registerOrHeartbeatSession();
+      }, [authState, isZoneSetupConfirmed, riderSearchReq, registerOrHeartbeatSession]);
 
       useEffect(() => {
         if (authState !== "authorized" || !isZoneSetupConfirmed || activeTab !== "Completed") return;
@@ -1714,6 +1804,35 @@
           setCompletedOrders(compRecs.map(mapHurrierCompletedRecord));
           setCompletedTotalCount(Number(bundle.completed.metadata?.total_count ?? compRecs.length));
           setIsCompletedLoading(false);
+        }
+
+        if (bundle.rider_search_result && typeof bundle.rider_search_result === "object") {
+          const resList = Array.isArray(bundle.rider_search_result.results)
+            ? bundle.rider_search_result.results
+            : [];
+          setRiderSearchResults(resList);
+          setIsRiderSearching(false);
+          if (resList.length > 0) {
+            setKnownCouriersMeta((prev) => {
+              const next = { ...prev };
+              resList.forEach((r) => {
+                if (r.courierId) {
+                  next[String(r.courierId)] = {
+                    userId: String(r.userId || ""),
+                    phone: String(r.phone || ""),
+                    name: String(r.name || "")
+                  };
+                  if (r.phone) {
+                    courierPhoneCacheRef.current.set(sanitizeCourierKey(r.courierId), r.phone);
+                  }
+                }
+                if (r.name && r.phone) {
+                  courierPhoneCacheRef.current.set(sanitizeCourierKey(r.name.toLowerCase()), r.phone);
+                }
+              });
+              return next;
+            });
+          }
         }
 
         if (bundle.stats && Array.isArray(bundle.stats.cities)) {
@@ -1856,19 +1975,45 @@
       );
 
       const baseTabDeliveries = useMemo(() => {
-        const q = searchQuery.trim().toLowerCase();
+        const rawQ = searchQuery.trim();
+        const q = rawQ.toLowerCase();
+        const qPhone = normalizePhoneDigits(rawQ);
+        const matchedRiderIdsFromSearch = new Set(
+          riderSearchResults.flatMap((r) => [String(r.courierId || ""), String(r.userId || "")]).filter(Boolean)
+        );
+        const matchedRiderNamesFromSearch = new Set(
+          riderSearchResults.map((r) => normalizeText(r.name).toLowerCase()).filter(Boolean)
+        );
+
         return deliveries.filter((d) => {
           const matchesTab = d.tab === activeTab;
           const matchesZone = matchesZoneFilter(d);
+          if (!q) return matchesTab && matchesZone;
+
+          const cIdStr = String(d.courierId || "");
+          const cMeta = cIdStr ? knownCouriersMeta[cIdStr] : null;
+          const metaPhone = cMeta?.phone ? normalizePhoneDigits(cMeta.phone) : { rawDigits: "", core10: "" };
+
+          const matchesPhone =
+            (qPhone.core10 && metaPhone.core10 === qPhone.core10) ||
+            (qPhone.rawDigits.length >= 6 && metaPhone.rawDigits.includes(qPhone.rawDigits));
+
+          const matchesRiderMeta =
+            (cIdStr && (cIdStr === rawQ || matchedRiderIdsFromSearch.has(cIdStr))) ||
+            (cMeta?.userId && (String(cMeta.userId) === rawQ || matchedRiderIdsFromSearch.has(String(cMeta.userId)))) ||
+            matchedRiderNamesFromSearch.has(normalizeText(d.courier).toLowerCase());
+
           const matchesSearch =
-            !q ||
             d.id.toLowerCase().includes(q) ||
+            String(d.vo || "").toLowerCase().includes(q) ||
             d.vendor.toLowerCase().includes(q) ||
             d.courier.toLowerCase().includes(q) ||
-            d.zone.toLowerCase().includes(q);
+            d.zone.toLowerCase().includes(q) ||
+            matchesPhone ||
+            matchesRiderMeta;
           return matchesTab && matchesZone && matchesSearch;
         });
-      }, [deliveries, activeTab, matchesZoneFilter, searchQuery]);
+      }, [deliveries, activeTab, matchesZoneFilter, searchQuery, riderSearchResults, knownCouriersMeta]);
 
       const martBranchesSummary = useMemo(() => {
         const martOrders = baseTabDeliveries.filter((d) => isTalabatMartVendor(d.vendor));
@@ -4082,23 +4227,42 @@
                       setCurrentPage(1);
                     }}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && searchQuery.trim() && filteredDeliveries.length === 0) {
-                        handleJumpToCompletedOrderSearch(searchQuery);
+                      if (e.key === "Enter" && searchQuery.trim()) {
+                        triggerLiveRiderSearch(searchQuery.trim());
+                        if (filteredDeliveries.length === 0 && isExactOrderIdPattern(searchQuery.trim())) {
+                          handleJumpToCompletedOrderSearch(searchQuery);
+                        }
                       }
                     }}
-                    placeholder="Search Order ID, VO, Courier, Zone..."
-                    className="pl-3.5 pr-7 py-1.5 border border-gray-300 rounded-lg text-xs sm:text-sm w-56 sm:w-64 focus:outline-none focus:border-blue-500"
+                    placeholder="Order ID, Rider ID, Phone, VO, Courier..."
+                    className="pl-3.5 pr-7 py-1.5 border border-gray-300 rounded-lg text-xs sm:text-sm w-60 sm:w-72 focus:outline-none focus:border-blue-500"
                   />
                   {searchQuery && (
                     <button
                       type="button"
-                      onClick={() => setSearchQuery("")}
+                      onClick={() => {
+                        setSearchQuery("");
+                        setRiderSearchReq(null);
+                        setRiderSearchResults([]);
+                        setIsRiderSearching(false);
+                      }}
                       className="absolute right-2 text-gray-400 hover:text-gray-700 text-xs"
                     >
                       ✕
                     </button>
                   )}
                 </div>
+
+                {searchQuery.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => triggerLiveRiderSearch(searchQuery.trim())}
+                    className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition-colors"
+                    title="بحث مباشر عن الرايدر بـ User ID أو Courier ID أو رقم الهاتف في كل Hurrier"
+                  >
+                    🔍 بحث رايدر
+                  </button>
+                )}
 
                 {searchQuery.trim() && activeTab !== "Completed" && (
                   <button
@@ -4111,42 +4275,36 @@
                   </button>
                 )}
 
-                <select
-                  value={selectedCity}
-                  onChange={(e) => setSelectedCity(e.target.value)}
-                  className="px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs font-semibold text-gray-700 bg-white focus:outline-none"
-                >
-                  <option value="Cairo">Cairo</option>
-                  <option value="All Cities">All Cities</option>
-                  <option value="Alexandria">Alexandria</option>
-                </select>
+                <div className="border-l border-gray-200 pl-3">
+                  <select
+                    value={selectedCity}
+                    onChange={(e) => setSelectedCity(e.target.value)}
+                    className="bg-transparent text-xs sm:text-sm font-semibold text-gray-700 cursor-pointer focus:outline-none pr-1 py-1"
+                  >
+                    <option value="All Cities">All Cities</option>
+                    <option value="Cairo">Cairo</option>
+                    <option value="Alexandria">Alexandria</option>
+                  </select>
+                </div>
               </div>
             </header>
 
-            <div className="px-6 py-2 bg-slate-50 border-b border-gray-200 flex items-center gap-2 overflow-x-auto text-xs">
-              <span className="font-bold text-gray-600 flex-shrink-0">الزونات النشطة:</span>
-              {selectedZonesDisplayList.map((z) => (
-                <span
-                  key={z.id}
-                  className="px-2.5 py-0.5 rounded-full bg-white border border-blue-200 text-blue-800 font-medium flex-shrink-0"
-                >
-                  {z.name} <span className="text-gray-400 font-mono">({z.id})</span>
-                </span>
-              ))}
-            </div>
-
-            <main ref={mainContainerRef} className="flex-1 overflow-auto p-5 sm:p-7">
+            <main ref={mainContainerRef} className="flex-1 overflow-auto p-6 sm:p-8">
               <div className="max-w-[1440px] mx-auto">
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                  <h1 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
-                    {activeTab === "Active Couriers"
-                      ? "Active Couriers"
-                      : activeTab === "Completed"
-                      ? "Completed Orders"
-                      : activeTab === "Dashboard" || activeTab === "Dispatcher Dashboard" || activeTab === "Issues"
-                      ? activeTab
-                      : `${activeTab} Deliveries ${activeHeaderCount !== undefined ? `(${activeHeaderCount})` : ""}`}
-                  </h1>
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <h1 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
+                      {activeTab === "Active Couriers"
+                        ? "Active Couriers"
+                        : activeTab === "Dashboard" || activeTab === "Dispatcher Dashboard"
+                        ? activeTab
+                        : activeTab === "Completed"
+                        ? "Completed Orders"
+                        : activeTab === "Issues"
+                        ? `Issues (${issuesList.length})`
+                        : `${activeTab} Deliveries ${activeHeaderCount !== undefined ? `(${activeHeaderCount})` : ""}`}
+                    </h1>
+                  </div>
 
                   <button
                     type="button"
@@ -4154,14 +4312,182 @@
                       if (activeTab === "Completed") {
                         setIsCompletedLoading(true);
                         registerOrHeartbeatSession();
+                      } else {
+                        fetchMySessionBundleFromFirebase();
                       }
-                      fetchMySessionBundleFromFirebase();
                     }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 rounded-lg text-xs sm:text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1 border border-gray-300 rounded-lg text-xs sm:text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
                   >
                     ↻ Refresh
                   </button>
                 </div>
+
+                {/* Live Rider Search Results Banner (Phone / User ID / Courier ID) */}
+                {riderSearchReq && (
+                  <div className="mb-4 p-4 rounded-xl bg-gradient-to-r from-slate-50 to-blue-50/60 border border-blue-200 shadow-sm space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+                        <span className="px-2 py-0.5 rounded bg-blue-600 text-white">🚴‍♂️ Live Rider Search</span>
+                        <span>
+                          نتائج البحث عن المندوب:{" "}
+                          <code className="px-1.5 py-0.5 rounded bg-white border border-gray-200 text-blue-700">
+                            {riderSearchReq.query}
+                          </code>
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRiderSearchReq(null);
+                          setRiderSearchResults([]);
+                          setIsRiderSearching(false);
+                        }}
+                        className="text-xs text-gray-500 hover:text-gray-800 font-semibold px-2 py-0.5 rounded hover:bg-white"
+                      >
+                        ✕ إغلاق بطاقة الرايدر
+                      </button>
+                    </div>
+
+                    {isRiderSearching && riderSearchResults.length === 0 ? (
+                      <div className="py-3 text-xs font-semibold text-blue-700 animate-pulse">
+                        ⏳ جاري البحث في قاعدة مناديب Hurrier (User ID / Courier ID / رقم الهاتف)...
+                      </div>
+                    ) : riderSearchResults.length === 0 ? (
+                      <div className="py-2 text-xs text-gray-600 flex flex-wrap items-center justify-between gap-2">
+                        <span>
+                          لم يتم العثور على رايدر مطابق لـ <strong>"{riderSearchReq.query}"</strong> في Hurrier.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => triggerLiveRiderSearch(riderSearchReq.query)}
+                          className="px-2.5 py-1 rounded bg-white border border-gray-300 text-gray-700 font-semibold hover:bg-gray-50"
+                        >
+                          ↻ إعادة المحاولة
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {riderSearchResults.map((rider, idx) => {
+                          const stLower = String(rider.status || "").toLowerCase();
+                          const statusBadgeClass = stLower.includes("work")
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : stLower.includes("break")
+                            ? "bg-amber-50 text-amber-800 border-amber-200"
+                            : stLower.includes("end")
+                            ? "bg-orange-50 text-orange-700 border-orange-200"
+                            : "bg-gray-100 text-gray-700 border-gray-300";
+
+                          const riderActiveOrdersCount = deliveries.filter(
+                            (d) =>
+                              matchesZoneFilter(d) &&
+                              (String(d.courierId || "") === String(rider.courierId) ||
+                                normalizeText(d.courier).toLowerCase() === normalizeText(rider.name).toLowerCase())
+                          ).length;
+
+                          return (
+                            <div
+                              key={`${rider.courierId || rider.userId || idx}`}
+                              className="p-3.5 rounded-xl bg-white border border-gray-200 shadow-sm flex flex-col justify-between gap-3 text-xs"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => openCourierModal(e, rider.courierId, rider.name)}
+                                    className="text-sm font-bold text-blue-600 hover:underline text-left break-words"
+                                  >
+                                    {rider.name}
+                                  </button>
+                                  <div className="flex flex-wrap items-center gap-2 mt-1 text-gray-600">
+                                    {rider.userId && (
+                                      <span className="inline-flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded font-mono">
+                                        User ID: <strong className="text-gray-900">#{rider.userId}</strong>
+                                        <button
+                                          type="button"
+                                          onClick={() => copyToClipboard(`rs-uid-${rider.userId}`, rider.userId)}
+                                          className="text-blue-600 hover:text-blue-800 ml-0.5"
+                                          title="نسخ User ID"
+                                        >
+                                          {copiedText === `rs-uid-${rider.userId}` ? "✓" : "⧉"}
+                                        </button>
+                                      </span>
+                                    )}
+                                    {rider.courierId && rider.courierId !== rider.userId && (
+                                      <span className="inline-flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded font-mono">
+                                        Courier ID: <strong className="text-gray-900">#{rider.courierId}</strong>
+                                        <button
+                                          type="button"
+                                          onClick={() => copyToClipboard(`rs-cid-${rider.courierId}`, rider.courierId)}
+                                          className="text-blue-600 hover:text-blue-800 ml-0.5"
+                                          title="نسخ Courier ID"
+                                        >
+                                          {copiedText === `rs-cid-${rider.courierId}` ? "✓" : "⧉"}
+                                        </button>
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <span className={`px-2.5 py-0.5 rounded-full font-bold border flex-shrink-0 ${statusBadgeClass}`}>
+                                  {humanizeSnakeCase(rider.status || "Working")}
+                                </span>
+                              </div>
+
+                              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-100">
+                                <div className="flex items-center gap-2">
+                                  {rider.phone ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => copyToClipboard(`rs-ph-${rider.phone}`, rider.phone)}
+                                        className="inline-flex items-center gap-1 font-mono font-bold text-gray-900 bg-gray-50 hover:bg-gray-100 px-2.5 py-1 rounded border border-gray-200"
+                                        title="نسخ رقم الموبايل"
+                                      >
+                                        <span>📞 {rider.phone}</span>
+                                        <span className="text-blue-600">
+                                          {copiedText === `rs-ph-${rider.phone}` ? "✓" : "⧉"}
+                                        </span>
+                                      </button>
+                                      <a
+                                        href={`tel:${rider.phone}`}
+                                        className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+                                      >
+                                        اتصال
+                                      </a>
+                                    </>
+                                  ) : (
+                                    <span className="text-gray-400">رقم الهاتف غير مسجل</span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSearchQuery(rider.name);
+                                      setCurrentPage(1);
+                                    }}
+                                    className="px-2.5 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 font-bold"
+                                    title="عرض كل أوردرات هذا الرايدر في الجدول"
+                                  >
+                                    أوردراته ({riderActiveOrdersCount})
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => openCourierModal(e, rider.courierId, rider.name)}
+                                    className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-white font-bold"
+                                  >
+                                    👤 ملف الرايدر
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {activeTab === "Dashboard"
                   ? renderDashboardView()
