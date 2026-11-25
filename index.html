@@ -3,11 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v6.2 — Fast Completed Search + Persistent Copy</title>
+  <title>Hurrier Live Operations Dashboard v7.1 — Secured Google Whitelist</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Official Firebase App & Auth Compat SDKs (Google Sign-In) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
   <style>
     body {
       margin: 0;
@@ -35,7 +38,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v6.2...
+      Loading Hurrier Live Operations Dashboard v7.1...
     </div>
   </div>
 
@@ -43,7 +46,32 @@
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
+    const FIREBASE_PROJECT_ID = "hurrier-live";
+    const FIREBASE_AUTH_DOMAIN = "hurrier-live.firebaseapp.com";
+    const DEFAULT_FIREBASE_WEB_API_KEY = "AIzaSyAUFa71qNOwspBovGSE3pCfTDkoH5MLMps";
+    const AUTH_BRIDGE_STORAGE_KEY = "hurrier_fb_bridge_auth";
     const PAGE_SIZE = 50;
+
+    function emailToFirebaseKey(email) {
+      return String(email || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\./g, ",");
+    }
+
+    function getStoredFirebaseApiKey() {
+      if (
+        DEFAULT_FIREBASE_WEB_API_KEY &&
+        DEFAULT_FIREBASE_WEB_API_KEY !== "PASTE_YOUR_FIREBASE_WEB_API_KEY_HERE"
+      ) {
+        return DEFAULT_FIREBASE_WEB_API_KEY.trim();
+      }
+      try {
+        return String(window.localStorage.getItem("hurrier_firebase_web_api_key") || "").trim();
+      } catch {
+        return "";
+      }
+    }
 
     const ALL_ZONES_CATALOG = [
       { id: 10231, name: "Hybrid fleet mokattam easy sports", city: "Cairo" },
@@ -728,6 +756,23 @@
     }
 
     function App() {
+      // --- AUTHENTICATION & GMAIL WHITELIST STATE ---
+      const [firebaseApiKey, setFirebaseApiKey] = useState(() => getStoredFirebaseApiKey());
+      const [apiKeyDraft, setApiKeyDraft] = useState("");
+      const [authState, setAuthState] = useState("checking"); // "needs_api_key" | "checking" | "signed_out" | "unauthorized" | "authorized"
+      const [currentUser, setCurrentUser] = useState(null);
+      const [userRole, setUserRole] = useState("employee"); // "admin" | "employee"
+      const [authErrorMsg, setAuthErrorMsg] = useState("");
+      const firebaseUserRef = useRef(null);
+
+      // Admin Access Management Modal State
+      const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
+      const [allowedEmailsList, setAllowedEmailsList] = useState([]);
+      const [newAllowedEmail, setNewAllowedEmail] = useState("");
+      const [newAllowedRole, setNewAllowedRole] = useState("employee");
+      const [newAllowedLabel, setNewAllowedLabel] = useState("");
+      const [adminSaving, setAdminSaving] = useState(false);
+
       const sessionId = useMemo(() => {
         const existing = readSessionStorageJson("hurrier_emp_session_id", "");
         if (existing) return existing;
@@ -813,6 +858,272 @@
       const prewarmedOrderIdsRef = useRef(new Set());
       const mainContainerRef = useRef(null);
 
+      // Authenticated Firebase Fetch Helper (attaches fresh Google ID Token automatically)
+      const fbAuthFetch = useCallback(
+        async (path, options = {}) => {
+          const cleanPath = String(path || "").replace(/^\/+/, "");
+          let idToken = "";
+          if (firebaseUserRef.current && typeof firebaseUserRef.current.getIdToken === "function") {
+            try {
+              idToken = await firebaseUserRef.current.getIdToken();
+            } catch {}
+          }
+          const authQuery = idToken ? `?auth=${encodeURIComponent(idToken)}` : "";
+          return fetch(`${FIREBASE_DB_URL}/${cleanPath}.json${authQuery}`, options);
+        },
+        []
+      );
+
+      // Initialize Firebase Auth & Listen to Google Sign-In State
+      useEffect(() => {
+        if (!firebaseApiKey) {
+          setAuthState("needs_api_key");
+          return;
+        }
+
+        try {
+          if (window.firebase && (!window.firebase.apps || window.firebase.apps.length === 0)) {
+            window.firebase.initializeApp({
+              apiKey: firebaseApiKey,
+              authDomain: FIREBASE_AUTH_DOMAIN,
+              databaseURL: FIREBASE_DB_URL,
+              projectId: FIREBASE_PROJECT_ID
+            });
+          }
+        } catch (err) {
+          setAuthErrorMsg(err?.message || "Firebase init error");
+          setAuthState("needs_api_key");
+          return;
+        }
+
+        const auth = window.firebase.auth();
+        const unsubscribe = auth.onAuthStateChanged(async (user) => {
+          firebaseUserRef.current = user;
+          if (!user) {
+            setCurrentUser(null);
+            setUserRole("employee");
+            setAuthState("signed_out");
+            try {
+              window.localStorage.removeItem(AUTH_BRIDGE_STORAGE_KEY);
+            } catch {}
+            return;
+          }
+
+          setAuthState("checking");
+          setAuthErrorMsg("");
+          const emailLower = String(user.email || "").trim().toLowerCase();
+          const emailKey = emailToFirebaseKey(emailLower);
+
+          try {
+            const idToken = await user.getIdToken();
+            const res = await fetch(
+              `${FIREBASE_DB_URL}/allowed_emails.json?auth=${encodeURIComponent(idToken)}`,
+              { cache: "no-store" }
+            );
+
+            if (!res.ok) {
+              throw new Error(`Firebase Auth HTTP ${res.status}`);
+            }
+
+            const allowedMap = await res.json();
+
+            // Bootstrap: If allowed_emails is empty (first ever login), register this Google account as Owner Admin
+            if (!allowedMap || typeof allowedMap !== "object" || Object.keys(allowedMap).length === 0) {
+              const firstAdminRecord = {
+                email: emailLower,
+                role: "admin",
+                label: user.displayName || "Primary Admin",
+                added_by: "system_bootstrap",
+                created_at: new Date().toISOString()
+              };
+              const initRes = await fetch(
+                `${FIREBASE_DB_URL}/allowed_emails/${encodeURIComponent(emailKey)}.json?auth=${encodeURIComponent(idToken)}`,
+                {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(firstAdminRecord)
+                }
+              );
+              if (!initRes.ok) {
+                throw new Error("تعذر تهيئة حساب الأدمن الأول");
+              }
+              setCurrentUser({
+                email: emailLower,
+                displayName: user.displayName || emailLower,
+                photoURL: user.photoURL || ""
+              });
+              setUserRole("admin");
+              if (!employeeName) setEmployeeName(user.displayName || emailLower.split("@")[0]);
+              setAuthState("authorized");
+              try {
+                window.localStorage.setItem(
+                  AUTH_BRIDGE_STORAGE_KEY,
+                  JSON.stringify({
+                    apiKey: firebaseApiKey,
+                    email: emailLower,
+                    role: "admin",
+                    idToken,
+                    refreshToken: user.refreshToken,
+                    expiresAt: Date.now() + 55 * 60 * 1000
+                  })
+                );
+              } catch {}
+              return;
+            }
+
+            const entry = allowedMap[emailKey];
+            if (!entry || typeof entry !== "object") {
+              setCurrentUser({
+                email: emailLower,
+                displayName: user.displayName || emailLower,
+                photoURL: user.photoURL || ""
+              });
+              setAuthState("unauthorized");
+              try {
+                window.localStorage.removeItem(AUTH_BRIDGE_STORAGE_KEY);
+              } catch {}
+              return;
+            }
+
+            const resolvedRole = entry.role === "admin" ? "admin" : "employee";
+            setCurrentUser({
+              email: emailLower,
+              displayName: user.displayName || entry.label || emailLower,
+              photoURL: user.photoURL || ""
+            });
+            setUserRole(resolvedRole);
+            if (!employeeName) setEmployeeName(user.displayName || entry.label || emailLower.split("@")[0]);
+            setAuthState("authorized");
+
+            if (resolvedRole === "admin") {
+              try {
+                window.localStorage.setItem(
+                  AUTH_BRIDGE_STORAGE_KEY,
+                  JSON.stringify({
+                    apiKey: firebaseApiKey,
+                    email: emailLower,
+                    role: resolvedRole,
+                    idToken,
+                    refreshToken: user.refreshToken,
+                    expiresAt: Date.now() + 55 * 60 * 1000
+                  })
+                );
+              } catch {}
+            }
+          } catch (err) {
+            setAuthErrorMsg(err?.message || "حدث خطأ أثناء التحقق من الصلاحيات");
+            setAuthState("signed_out");
+          }
+        });
+
+        return () => unsubscribe();
+      }, [firebaseApiKey]);
+
+      const handleGoogleSignIn = useCallback(async () => {
+        setAuthErrorMsg("");
+        try {
+          const provider = new window.firebase.auth.GoogleAuthProvider();
+          provider.setCustomParameters({ prompt: "select_account" });
+          await window.firebase.auth().signInWithPopup(provider);
+        } catch (err) {
+          setAuthErrorMsg(err?.message || "تعذر إتمام تسجيل الدخول بحساب Google");
+        }
+      }, []);
+
+      const handleGoogleSignOut = useCallback(async () => {
+        try {
+          await fbAuthFetch(`active_sessions/${sessionId}`, { method: "DELETE" }).catch(() => {});
+          await fbAuthFetch(`session_bundles/${sessionId}`, { method: "DELETE" }).catch(() => {});
+        } catch {}
+        try {
+          window.localStorage.removeItem(AUTH_BRIDGE_STORAGE_KEY);
+          await window.firebase.auth().signOut();
+        } catch {}
+      }, [fbAuthFetch, sessionId]);
+
+      const loadAllowedEmailsForAdmin = useCallback(async () => {
+        if (userRole !== "admin") return;
+        try {
+          const res = await fbAuthFetch("allowed_emails", { cache: "no-store" });
+          if (res.ok) {
+            const data = await res.json();
+            const arr =
+              data && typeof data === "object"
+                ? Object.entries(data).map(([k, v]) => ({
+                    key: k,
+                    email: v?.email || k.replace(/,/g, "."),
+                    role: v?.role === "admin" ? "admin" : "employee",
+                    label: v?.label || "",
+                    addedBy: v?.added_by || ""
+                  }))
+                : [];
+            arr.sort((a, b) => (a.role === b.role ? a.email.localeCompare(b.email) : a.role === "admin" ? -1 : 1));
+            setAllowedEmailsList(arr);
+          }
+        } catch {}
+      }, [userRole, fbAuthFetch]);
+
+      useEffect(() => {
+        if (isAdminModalOpen && userRole === "admin") {
+          loadAllowedEmailsForAdmin();
+        }
+      }, [isAdminModalOpen, userRole, loadAllowedEmailsForAdmin]);
+
+      const handleAddOrUpdateAllowedEmail = useCallback(
+        async (e) => {
+          if (e) e.preventDefault();
+          const cleanEmail = String(newAllowedEmail || "").trim().toLowerCase();
+          if (!cleanEmail || !cleanEmail.includes("@")) return;
+          setAdminSaving(true);
+          try {
+            const eKey = emailToFirebaseKey(cleanEmail);
+            await fbAuthFetch(`allowed_emails/${encodeURIComponent(eKey)}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                email: cleanEmail,
+                role: newAllowedRole === "admin" ? "admin" : "employee",
+                label: normalizeText(newAllowedLabel),
+                added_by: currentUser?.email || "admin",
+                updated_at: new Date().toISOString()
+              })
+            });
+            setNewAllowedEmail("");
+            setNewAllowedLabel("");
+            setNewAllowedRole("employee");
+            await loadAllowedEmailsForAdmin();
+          } finally {
+            setAdminSaving(false);
+          }
+        },
+        [newAllowedEmail, newAllowedRole, newAllowedLabel, currentUser, fbAuthFetch, loadAllowedEmailsForAdmin]
+      );
+
+      const handleToggleEmailRole = useCallback(
+        async (entry) => {
+          if (!entry || entry.email === currentUser?.email) return;
+          const nextRole = entry.role === "admin" ? "employee" : "admin";
+          await fbAuthFetch(`allowed_emails/${encodeURIComponent(entry.key)}/role`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(nextRole)
+          });
+          await loadAllowedEmailsForAdmin();
+        },
+        [currentUser, fbAuthFetch, loadAllowedEmailsForAdmin]
+      );
+
+      const handleDeleteAllowedEmail = useCallback(
+        async (entry) => {
+          if (!entry || entry.email === currentUser?.email) return;
+          await fbAuthFetch(`allowed_emails/${encodeURIComponent(entry.key)}`, {
+            method: "DELETE"
+          });
+          await loadAllowedEmailsForAdmin();
+        },
+        [currentUser, fbAuthFetch, loadAllowedEmailsForAdmin]
+      );
+
       useEffect(() => {
         writeSessionStorageJson("hurrier_emp_name", employeeName);
       }, [employeeName]);
@@ -862,24 +1173,27 @@
         setTimeout(() => setCopiedText(null), 1800);
       }, []);
 
-      const requestOrderDetailsFromHurrier = useCallback(async (orderId, deliveryId = "") => {
-        if (!orderId) return;
-        const cleanId = String(orderId).replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "").trim();
-        if (!cleanId) return;
-        const cleanDelId = String(deliveryId || "").trim();
-        const requestToken = cleanDelId && cleanDelId !== cleanId ? `${cleanId}|${cleanDelId}` : cleanId;
-        try {
-          const curRes = await fetch(`${FIREBASE_DB_URL}/config/requested_order_details.json`, { cache: "no-store" });
-          const curList = curRes.ok ? await curRes.json() : [];
-          const nextList = Array.from(
-            new Set([requestToken, ...(Array.isArray(curList) ? curList.map(String) : [])])
-          ).slice(0, 12);
-          await fetch(`${FIREBASE_DB_URL}/config/requested_order_details.json`, {
-            method: "PUT",
-            body: JSON.stringify(nextList)
-          });
-        } catch {}
-      }, []);
+      const requestOrderDetailsFromHurrier = useCallback(
+        async (orderId, deliveryId = "") => {
+          if (!orderId) return;
+          const cleanId = String(orderId).replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "").trim();
+          if (!cleanId) return;
+          const cleanDelId = String(deliveryId || "").trim();
+          const requestToken = cleanDelId && cleanDelId !== cleanId ? `${cleanId}|${cleanDelId}` : cleanId;
+          try {
+            const curRes = await fbAuthFetch("config/requested_order_details", { cache: "no-store" });
+            const curList = curRes.ok ? await curRes.json() : [];
+            const nextList = Array.from(
+              new Set([requestToken, ...(Array.isArray(curList) ? curList.map(String) : [])])
+            ).slice(0, 12);
+            await fbAuthFetch("config/requested_order_details", {
+              method: "PUT",
+              body: JSON.stringify(nextList)
+            });
+          } catch {}
+        },
+        [fbAuthFetch]
+      );
 
       const handleOrderRowHover = useCallback(
         (item) => {
@@ -902,13 +1216,13 @@
             if (cKey && !prewarmedCourierKeysRef.current.has(cKey)) {
               prewarmedCourierKeysRef.current.add(cKey);
               const token = `${cId}|${cName}`;
-              fetch(`${FIREBASE_DB_URL}/config/requested_courier_details.json`, { cache: "no-store" })
+              fbAuthFetch("config/requested_courier_details", { cache: "no-store" })
                 .then((r) => (r.ok ? r.json() : []))
                 .then((curList) => {
                   const nextList = Array.from(
                     new Set([token, ...(Array.isArray(curList) ? curList.map(String) : [])])
                   ).slice(0, 30);
-                  return fetch(`${FIREBASE_DB_URL}/config/requested_courier_details.json`, {
+                  return fbAuthFetch("config/requested_courier_details", {
                     method: "PUT",
                     body: JSON.stringify(nextList)
                   });
@@ -917,23 +1231,26 @@
             }
           }
         },
-        [requestOrderDetailsFromHurrier]
+        [requestOrderDetailsFromHurrier, fbAuthFetch]
       );
 
-      const fetchSingleOrderDetailDoc = useCallback(async (orderId) => {
-        if (!orderId) return;
-        const cleanId = String(orderId).replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "").trim();
-        if (!cleanId) return;
-        try {
-          const res = await fetch(`${FIREBASE_DB_URL}/order_details/${cleanId}.json`, { cache: "no-store" });
-          if (res.ok) {
-            const doc = await res.json();
-            if (doc && typeof doc === "object") {
-              setLiveOrderDetailDoc(doc);
+      const fetchSingleOrderDetailDoc = useCallback(
+        async (orderId) => {
+          if (!orderId) return;
+          const cleanId = String(orderId).replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "").trim();
+          if (!cleanId) return;
+          try {
+            const res = await fbAuthFetch(`order_details/${cleanId}`, { cache: "no-store" });
+            if (res.ok) {
+              const doc = await res.json();
+              if (doc && typeof doc === "object") {
+                setLiveOrderDetailDoc(doc);
+              }
             }
-          }
-        } catch {}
-      }, []);
+          } catch {}
+        },
+        [fbAuthFetch]
+      );
 
       useEffect(() => {
         if (!selectedOrder) {
@@ -955,23 +1272,26 @@
         return () => clearInterval(pollTimer);
       }, [selectedOrder, fetchSingleOrderDetailDoc, requestOrderDetailsFromHurrier]);
 
-      const requestCourierDetailsFromHurrier = useCallback(async (courierId, courierName = "") => {
-        const cleanId = String(courierId || "").trim();
-        const cleanName = normalizeText(courierName);
-        if (!cleanId && !cleanName) return;
-        const token = `${cleanId}|${cleanName}`;
-        try {
-          const curRes = await fetch(`${FIREBASE_DB_URL}/config/requested_courier_details.json`, { cache: "no-store" });
-          const curList = curRes.ok ? await curRes.json() : [];
-          const nextList = Array.from(
-            new Set([token, ...(Array.isArray(curList) ? curList.map(String) : [])])
-          ).slice(0, 12);
-          await fetch(`${FIREBASE_DB_URL}/config/requested_courier_details.json`, {
-            method: "PUT",
-            body: JSON.stringify(nextList)
-          });
-        } catch {}
-      }, []);
+      const requestCourierDetailsFromHurrier = useCallback(
+        async (courierId, courierName = "") => {
+          const cleanId = String(courierId || "").trim();
+          const cleanName = normalizeText(courierName);
+          if (!cleanId && !cleanName) return;
+          const token = `${cleanId}|${cleanName}`;
+          try {
+            const curRes = await fbAuthFetch("config/requested_courier_details", { cache: "no-store" });
+            const curList = curRes.ok ? await curRes.json() : [];
+            const nextList = Array.from(
+              new Set([token, ...(Array.isArray(curList) ? curList.map(String) : [])])
+            ).slice(0, 12);
+            await fbAuthFetch("config/requested_courier_details", {
+              method: "PUT",
+              body: JSON.stringify(nextList)
+            });
+          } catch {}
+        },
+        [fbAuthFetch]
+      );
 
       const handleCourierHover = useCallback(
         (courierId, courierName) => {
@@ -998,115 +1318,74 @@
         });
       }, []);
 
-      const fetchSingleCourierDetailDoc = useCallback(async (courierObj) => {
-        if (!courierObj) return;
-        const keys = Array.from(
-          new Set(
-            [
-              courierObj.id ? sanitizeCourierKey(courierObj.id) : "",
-              courierObj.name ? sanitizeCourierKey(courierObj.name.toLowerCase()) : ""
-            ].filter(Boolean)
-          )
-        );
-        for (const k of keys) {
-          try {
-            const res = await fetch(`${FIREBASE_DB_URL}/courier_details/${k}.json`, { cache: "no-store" });
-            if (res.ok) {
-              const doc = await res.json();
-              if (doc && typeof doc === "object") {
-                const ph = normalizeText(doc?.courier?.phone_number || doc?.courier?.phone || doc?.courier?.mobile || "");
-                if (ph) {
-                  keys.forEach((ck) => courierPhoneCacheRef.current.set(ck, ph));
-                }
-                setLiveCourierDetailDoc(doc);
-                return;
-              }
-            }
-          } catch {}
-        }
-      }, []);
-
-      const resolveCourierPhonesForItems = useCallback(async (itemsList) => {
-        const assignedItems = (Array.isArray(itemsList) ? itemsList : []).filter(hasValidAssignedRider);
-        if (assignedItems.length === 0) return new Map();
-
-        const resolvedMap = new Map();
-        const missingItems = [];
-
-        const getKeysForItem = (it) =>
-          Array.from(
+      const fetchSingleCourierDetailDoc = useCallback(
+        async (courierObj) => {
+          if (!courierObj) return;
+          const keys = Array.from(
             new Set(
               [
-                it.courierId ? sanitizeCourierKey(it.courierId) : "",
-                it.courier ? sanitizeCourierKey(normalizeText(it.courier).toLowerCase()) : ""
+                courierObj.id ? sanitizeCourierKey(courierObj.id) : "",
+                courierObj.name ? sanitizeCourierKey(courierObj.name.toLowerCase()) : ""
               ].filter(Boolean)
             )
           );
-
-        for (const it of assignedItems) {
-          const keys = getKeysForItem(it);
-          const cachedPhone = keys.map((k) => courierPhoneCacheRef.current.get(k)).find(Boolean);
-          if (cachedPhone) {
-            resolvedMap.set(it.uid, cachedPhone);
-          } else {
-            missingItems.push(it);
-          }
-        }
-
-        if (missingItems.length === 0) return resolvedMap;
-
-        const stillMissing = [];
-        await Promise.all(
-          missingItems.map(async (it) => {
-            const keys = getKeysForItem(it);
-            for (const k of keys) {
-              try {
-                const res = await fetch(`${FIREBASE_DB_URL}/courier_details/${k}.json`, { cache: "no-store" });
-                if (res.ok) {
-                  const doc = await res.json();
+          for (const k of keys) {
+            try {
+              const res = await fbAuthFetch(`courier_details/${k}`, { cache: "no-store" });
+              if (res.ok) {
+                const doc = await res.json();
+                if (doc && typeof doc === "object") {
                   const ph = normalizeText(doc?.courier?.phone_number || doc?.courier?.phone || doc?.courier?.mobile || "");
                   if (ph) {
                     keys.forEach((ck) => courierPhoneCacheRef.current.set(ck, ph));
-                    resolvedMap.set(it.uid, ph);
-                    return;
                   }
+                  setLiveCourierDetailDoc(doc);
+                  return;
                 }
-              } catch {}
+              }
+            } catch {}
+          }
+        },
+        [fbAuthFetch]
+      );
+
+      const resolveCourierPhonesForItems = useCallback(
+        async (itemsList) => {
+          const assignedItems = (Array.isArray(itemsList) ? itemsList : []).filter(hasValidAssignedRider);
+          if (assignedItems.length === 0) return new Map();
+
+          const resolvedMap = new Map();
+          const missingItems = [];
+
+          const getKeysForItem = (it) =>
+            Array.from(
+              new Set(
+                [
+                  it.courierId ? sanitizeCourierKey(it.courierId) : "",
+                  it.courier ? sanitizeCourierKey(normalizeText(it.courier).toLowerCase()) : ""
+                ].filter(Boolean)
+              )
+            );
+
+          for (const it of assignedItems) {
+            const keys = getKeysForItem(it);
+            const cachedPhone = keys.map((k) => courierPhoneCacheRef.current.get(k)).find(Boolean);
+            if (cachedPhone) {
+              resolvedMap.set(it.uid, cachedPhone);
+            } else {
+              missingItems.push(it);
             }
-            stillMissing.push(it);
-          })
-        );
+          }
 
-        if (stillMissing.length === 0) return resolvedMap;
+          if (missingItems.length === 0) return resolvedMap;
 
-        try {
-          const tokens = Array.from(
-            new Set(
-              stillMissing.map((it) => `${it.courierId ? String(it.courierId).trim() : ""}|${normalizeText(it.courier)}`)
-            )
-          );
-          const curRes = await fetch(`${FIREBASE_DB_URL}/config/requested_courier_details.json`, { cache: "no-store" });
-          const curList = curRes.ok ? await curRes.json() : [];
-          const nextList = Array.from(
-            new Set([...tokens, ...(Array.isArray(curList) ? curList.map(String) : [])])
-          ).slice(0, 30);
-          await fetch(`${FIREBASE_DB_URL}/config/requested_courier_details.json`, {
-            method: "PUT",
-            body: JSON.stringify(nextList)
-          });
-        } catch {}
-
-        for (let attempt = 0; attempt < 9; attempt++) {
-          await new Promise((r) => setTimeout(r, 380));
-          const remaining = stillMissing.filter((it) => !resolvedMap.has(it.uid));
-          if (remaining.length === 0) break;
-
+          const stillMissing = [];
           await Promise.all(
-            remaining.map(async (it) => {
+            missingItems.map(async (it) => {
               const keys = getKeysForItem(it);
               for (const k of keys) {
                 try {
-                  const res = await fetch(`${FIREBASE_DB_URL}/courier_details/${k}.json`, { cache: "no-store" });
+                  const res = await fbAuthFetch(`courier_details/${k}`, { cache: "no-store" });
                   if (res.ok) {
                     const doc = await res.json();
                     const ph = normalizeText(doc?.courier?.phone_number || doc?.courier?.phone || doc?.courier?.mobile || "");
@@ -1118,12 +1397,59 @@
                   }
                 } catch {}
               }
+              stillMissing.push(it);
             })
           );
-        }
 
-        return resolvedMap;
-      }, []);
+          if (stillMissing.length === 0) return resolvedMap;
+
+          try {
+            const tokens = Array.from(
+              new Set(
+                stillMissing.map((it) => `${it.courierId ? String(it.courierId).trim() : ""}|${normalizeText(it.courier)}`)
+              )
+            );
+            const curRes = await fbAuthFetch("config/requested_courier_details", { cache: "no-store" });
+            const curList = curRes.ok ? await curRes.json() : [];
+            const nextList = Array.from(
+              new Set([...tokens, ...(Array.isArray(curList) ? curList.map(String) : [])])
+            ).slice(0, 30);
+            await fbAuthFetch("config/requested_courier_details", {
+              method: "PUT",
+              body: JSON.stringify(nextList)
+            });
+          } catch {}
+
+          for (let attempt = 0; attempt < 9; attempt++) {
+            await new Promise((r) => setTimeout(r, 380));
+            const remaining = stillMissing.filter((it) => !resolvedMap.has(it.uid));
+            if (remaining.length === 0) break;
+
+            await Promise.all(
+              remaining.map(async (it) => {
+                const keys = getKeysForItem(it);
+                for (const k of keys) {
+                  try {
+                    const res = await fbAuthFetch(`courier_details/${k}`, { cache: "no-store" });
+                    if (res.ok) {
+                      const doc = await res.json();
+                      const ph = normalizeText(doc?.courier?.phone_number || doc?.courier?.phone || doc?.courier?.mobile || "");
+                      if (ph) {
+                        keys.forEach((ck) => courierPhoneCacheRef.current.set(ck, ph));
+                        resolvedMap.set(it.uid, ph);
+                        return;
+                      }
+                    }
+                  } catch {}
+                }
+              })
+            );
+          }
+
+          return resolvedMap;
+        },
+        [fbAuthFetch]
+      );
 
       const handleCopySingleFollowup = useCallback(
         async (e, item) => {
@@ -1235,7 +1561,7 @@
       }, [selectedZoneIds, discoveredZonesFromBundle]);
 
       const registerOrHeartbeatSession = useCallback(async () => {
-        if (!isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
+        if (authState !== "authorized" || !isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
         const cityIdMap = { Cairo: "1", Alexandria: "200" };
         const completedReqPayload =
           activeTab === "Completed"
@@ -1255,11 +1581,12 @@
             : null;
 
         try {
-          await fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}.json`, {
+          await fbAuthFetch(`active_sessions/${sessionId}`, {
             method: "PUT",
             body: JSON.stringify({
               session_id: sessionId,
-              employee_name: normalizeText(employeeName) || `Employee (${sessionId.slice(-5)})`,
+              employee_email: currentUser?.email || "",
+              employee_name: normalizeText(employeeName) || currentUser?.displayName || `Employee (${sessionId.slice(-5)})`,
               zone_ids: selectedZoneIds.map(Number).filter(isRealHurrierZoneId),
               zone_names: selectedZoneNames,
               completed_req: completedReqPayload,
@@ -1268,9 +1595,11 @@
           });
         } catch {}
       }, [
+        authState,
         isZoneSetupConfirmed,
         selectedZoneIds,
         sessionId,
+        currentUser,
         employeeName,
         selectedZoneNames,
         activeTab,
@@ -1280,21 +1609,23 @@
         completedZoneScope,
         completedSpecificZoneId,
         completedCityFilter,
-        completedSearchQuery
+        completedSearchQuery,
+        fbAuthFetch
       ]);
 
       useEffect(() => {
-        if (!isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
+        if (authState !== "authorized" || !isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
         registerOrHeartbeatSession();
         const hbTimer = setInterval(registerOrHeartbeatSession, 15000);
         return () => clearInterval(hbTimer);
-      }, [isZoneSetupConfirmed, selectedZoneIds, registerOrHeartbeatSession]);
+      }, [authState, isZoneSetupConfirmed, selectedZoneIds, registerOrHeartbeatSession]);
 
       useEffect(() => {
-        if (!isZoneSetupConfirmed || activeTab !== "Completed") return;
+        if (authState !== "authorized" || !isZoneSetupConfirmed || activeTab !== "Completed") return;
         setIsCompletedLoading(true);
         registerOrHeartbeatSession();
       }, [
+        authState,
         isZoneSetupConfirmed,
         activeTab,
         completedDate,
@@ -1335,11 +1666,11 @@
         setCompletedPage(1);
         try {
           await Promise.all([
-            fetch(`${FIREBASE_DB_URL}/active_sessions/${sessionId}.json`, { method: "DELETE" }),
-            fetch(`${FIREBASE_DB_URL}/session_bundles/${sessionId}.json`, { method: "DELETE" })
+            fbAuthFetch(`active_sessions/${sessionId}`, { method: "DELETE" }),
+            fbAuthFetch(`session_bundles/${sessionId}`, { method: "DELETE" })
           ]);
         } catch {}
-      }, [sessionId]);
+      }, [sessionId, fbAuthFetch]);
 
       const applySessionBundle = useCallback((bundle) => {
         if (!bundle || typeof bundle !== "object") return;
@@ -1479,9 +1810,9 @@
       }, []);
 
       const fetchMySessionBundleFromFirebase = useCallback(async () => {
-        if (!isZoneSetupConfirmed) return;
+        if (authState !== "authorized" || !isZoneSetupConfirmed) return;
         try {
-          const res = await fetch(`${FIREBASE_DB_URL}/session_bundles/${sessionId}.json`, { cache: "no-store" });
+          const res = await fbAuthFetch(`session_bundles/${sessionId}`, { cache: "no-store" });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json();
           if (data) {
@@ -1492,14 +1823,14 @@
         } catch {
           setConnectionStatus("error");
         }
-      }, [applySessionBundle, isZoneSetupConfirmed, sessionId]);
+      }, [authState, applySessionBundle, isZoneSetupConfirmed, sessionId, fbAuthFetch]);
 
       useEffect(() => {
-        if (!isZoneSetupConfirmed) return;
+        if (authState !== "authorized" || !isZoneSetupConfirmed) return;
         fetchMySessionBundleFromFirebase();
         const interval = setInterval(fetchMySessionBundleFromFirebase, 2000);
         return () => clearInterval(interval);
-      }, [fetchMySessionBundleFromFirebase, isZoneSetupConfirmed]);
+      }, [authState, fetchMySessionBundleFromFirebase, isZoneSetupConfirmed]);
 
       const matchesZoneFilter = useCallback(
         (delivery) => {
@@ -2345,9 +2676,7 @@
 
       const renderCompletedOrdersView = () => (
         <div className="mt-4 space-y-4">
-          {/* Hurrier Completed Orders Filter Controls Bar */}
           <div className="flex flex-wrap items-center gap-3">
-            {/* Date Picker */}
             <div className="flex flex-col">
               <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Date</label>
               <input
@@ -2367,7 +2696,6 @@
               />
             </div>
 
-            {/* Time Window Selector */}
             <div className="flex flex-col">
               <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Time Window</label>
               <select
@@ -2392,7 +2720,6 @@
               </select>
             </div>
 
-            {/* City Filter */}
             <div className="flex flex-col">
               <label className="text-[11px] font-semibold text-gray-500 mb-0.5">City</label>
               <select
@@ -2409,7 +2736,6 @@
               </select>
             </div>
 
-            {/* Zone Filter */}
             <div className="flex flex-col">
               <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Zone</label>
               <select
@@ -2437,7 +2763,6 @@
               </select>
             </div>
 
-            {/* Search order/courier (Instant local filter + 300ms debounced direct lookup) */}
             <div className="flex flex-col flex-1 min-w-[240px] max-w-sm">
               <label className="text-[11px] font-semibold text-gray-500 mb-0.5">
                 Search (Order ID فوري &lt;0.5s أو Courier)
@@ -2499,7 +2824,6 @@
             </div>
           </div>
 
-          {/* Hurrier Completed Orders Full Columns Table */}
           <div className="w-full overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm">
             <table className="w-full text-left text-xs whitespace-nowrap">
               <thead>
@@ -2610,7 +2934,6 @@
             </table>
           </div>
 
-          {/* 50-per-page Pagination Controls */}
           <div className="pt-2 pb-6 flex flex-wrap items-center justify-between gap-3">
             <div className="text-xs text-gray-500">
               Showing <strong>{(completedPage - 1) * 50 + (visibleCompletedOrders.length > 0 ? 1 : 0)}</strong>–
@@ -3232,6 +3555,133 @@
 
       const activeHeaderCount = effectiveTabCounts[activeTab];
 
+      // --- 0) GOOGLE SIGN-IN & GMAIL WHITELIST GATE ---
+      if (authState !== "authorized") {
+        return (
+          <div className="min-h-screen w-full bg-slate-50 flex flex-col items-center justify-center p-4 text-gray-800">
+            <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
+              <div className="px-6 py-5 bg-gradient-to-r from-slate-900 to-slate-800 text-white flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">🚴‍♂️</span>
+                  <div>
+                    <h1 className="text-lg font-bold tracking-tight">Hurrier Live Operations</h1>
+                    <p className="text-xs text-slate-300">v7.1 • Secured Google Access</p>
+                  </div>
+                </div>
+                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
+                  Protected
+                </span>
+              </div>
+
+              <div className="p-6 space-y-5">
+                {authState === "needs_api_key" && (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const clean = apiKeyDraft.trim();
+                      if (!clean) return;
+                      try {
+                        window.localStorage.setItem("hurrier_firebase_web_api_key", clean);
+                      } catch {}
+                      setFirebaseApiKey(clean);
+                    }}
+                    className="space-y-3"
+                  >
+                    <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 leading-relaxed">
+                      <strong>إعداد لمرة واحدة:</strong> أدخل <strong>Firebase Web API Key</strong> الخاص بمشروع{" "}
+                      <code className="bg-white px-1 rounded">hurrier-live</code>.
+                    </div>
+                    <input
+                      type="text"
+                      value={apiKeyDraft}
+                      onChange={(e) => setApiKeyDraft(e.target.value)}
+                      placeholder="AIzaSy..."
+                      className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-mono focus:outline-none focus:border-blue-500"
+                    />
+                    <button
+                      type="submit"
+                      className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm"
+                    >
+                      حفظ وتفعيل تسجيل الدخول ←
+                    </button>
+                  </form>
+                )}
+
+                {authState === "checking" && (
+                  <div className="py-8 text-center space-y-2">
+                    <div className="text-blue-600 font-bold text-sm animate-pulse">
+                      ⏳ جاري التحقق من صلاحية الحساب...
+                    </div>
+                  </div>
+                )}
+
+                {authState === "signed_out" && (
+                  <div className="space-y-4 text-center">
+                    <div className="space-y-1">
+                      <h2 className="text-base font-bold text-gray-900">تسجيل الدخول للمتابعة</h2>
+                      <p className="text-xs text-gray-500">
+                        الدخول مقتصر على حسابات Gmail المصرح لها فقط
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleGoogleSignIn}
+                      className="w-full py-3 px-4 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 text-gray-800 font-bold text-sm shadow-sm flex items-center justify-center gap-3 transition-all"
+                    >
+                      <svg className="w-5 h-5" viewBox="0 0 24 24">
+                        <path
+                          fill="#EA4335"
+                          d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.7 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.8C6.2 7.2 8.9 5 12 5z"
+                        />
+                        <path
+                          fill="#4285F4"
+                          d="M23.5 12.3c0-.8-.1-1.7-.2-2.5H12v4.8h6.5c-.3 1.5-1.1 2.8-2.4 3.6l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"
+                        />
+                        <path
+                          fill="#FBBC05"
+                          d="M5.3 14.8c-.2-.7-.4-1.5-.4-2.3s.2-1.6.4-2.3L1.6 7.4C.6 9.4 0 11.6 0 14s.6 4.6 1.6 6.6l3.7-2.8z"
+                        />
+                        <path
+                          fill="#34A853"
+                          d="M12 24c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.1-6.7-5l-3.7 2.8C3.5 21.4 7.4 24 12 24z"
+                        />
+                      </svg>
+                      <span>Sign in with Google</span>
+                    </button>
+
+                    {authErrorMsg && (
+                      <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
+                        {authErrorMsg}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {authState === "unauthorized" && (
+                  <div className="space-y-4 text-center">
+                    <div className="p-4 rounded-xl bg-red-50 border border-red-200 space-y-1.5">
+                      <div className="text-red-700 font-bold text-sm">⛔ هذا الإيميل غير مصرح له بالدخول</div>
+                      <div className="text-xs font-mono text-gray-700">{currentUser?.email}</div>
+                      <p className="text-xs text-gray-600 pt-1">
+                        تواصل مع الأدمن لإضافة إيميلك في قائمة المسموح لهم ثم أعد المحاولة.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleGoogleSignOut}
+                      className="w-full py-2.5 rounded-xl bg-gray-900 hover:bg-gray-800 text-white font-bold text-xs"
+                    >
+                      تبديل حساب Google (Switch Account)
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      }
+
       // --- 1) MANDATORY ZONE SELECTION GATE SCREEN ---
       if (!isZoneSetupConfirmed) {
         return (
@@ -3246,17 +3696,32 @@
                         تحديد زونات الموظف قبل بدء السحب (Independent Zone Gate)
                       </h1>
                       <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v6.2 • Fast Completed Search (&lt;0.5s) + Persistent Copy
+                        ★ v7.1 • {userRole === "admin" ? "Admin" : "Employee"}
                       </span>
                     </div>
                     <p className="text-xs text-slate-300 mt-0.5">
-                      كل موظف يختار زوناته المستقلة — سحب كامل لتفاصيل العميل والأصناف وأحداث التوصيلة والملاحظات
+                      مسجل الدخول بـ: <strong className="text-white">{currentUser?.email}</strong>
                     </p>
                   </div>
                 </div>
-                <span className="text-[11px] font-mono px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
-                  Session: {sessionId.slice(-6)}
-                </span>
+                <div className="flex items-center gap-2">
+                  {userRole === "admin" && (
+                    <button
+                      type="button"
+                      onClick={() => setIsAdminModalOpen(true)}
+                      className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs transition-colors"
+                    >
+                      🛡️ إدارة الإيميلات
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignOut}
+                    className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white font-semibold text-xs transition-colors"
+                  >
+                    خروج
+                  </button>
+                </div>
               </div>
 
               <div className="px-6 py-3.5 bg-blue-50/50 border-b border-blue-100 flex flex-wrap items-center justify-between gap-3">
@@ -3400,6 +3865,100 @@
                 </button>
               </div>
             </div>
+
+            {isAdminModalOpen && userRole === "admin" && (
+              <div
+                className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+                onClick={() => setIsAdminModalOpen(false)}
+              >
+                <div
+                  className="bg-white rounded-2xl w-full max-w-xl shadow-2xl border border-gray-200 overflow-hidden"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+                    <div>
+                      <h3 className="text-base font-bold">🛡️ إدارة إيميلات الدخول والصلاحيات</h3>
+                      <p className="text-xs text-slate-300">أضف إيميلات Gmail وحدد إذا كان الحساب Admin أو موظف</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsAdminModalOpen(false)}
+                      className="text-slate-300 hover:text-white text-lg font-bold"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+                    <form onSubmit={handleAddOrUpdateAllowedEmail} className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                      <input
+                        type="email"
+                        required
+                        value={newAllowedEmail}
+                        onChange={(e) => setNewAllowedEmail(e.target.value)}
+                        placeholder="example@gmail.com"
+                        className="sm:col-span-5 px-3 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none focus:border-blue-500"
+                      />
+                      <input
+                        type="text"
+                        value={newAllowedLabel}
+                        onChange={(e) => setNewAllowedLabel(e.target.value)}
+                        placeholder="الاسم (اختياري)"
+                        className="sm:col-span-3 px-3 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none focus:border-blue-500"
+                      />
+                      <select
+                        value={newAllowedRole}
+                        onChange={(e) => setNewAllowedRole(e.target.value)}
+                        className="sm:col-span-2 px-2 py-2 border border-gray-300 rounded-lg text-xs font-semibold bg-white"
+                      >
+                        <option value="employee">موظف</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                      <button
+                        type="submit"
+                        disabled={adminSaving}
+                        className="sm:col-span-2 py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs"
+                      >
+                        {adminSaving ? "..." : "+ إضافة"}
+                      </button>
+                    </form>
+
+                    <div className="divide-y divide-gray-100 border border-gray-200 rounded-xl overflow-hidden">
+                      {allowedEmailsList.map((item) => (
+                        <div key={item.key} className="px-4 py-2.5 flex items-center justify-between gap-2 text-xs bg-white">
+                          <div className="min-w-0">
+                            <div className="font-mono font-bold text-gray-900 truncate">{item.email}</div>
+                            {item.label && <div className="text-gray-500">{item.label}</div>}
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <button
+                              type="button"
+                              disabled={item.email === currentUser?.email}
+                              onClick={() => handleToggleEmailRole(item)}
+                              className={`px-2.5 py-1 rounded-full font-bold border ${
+                                item.role === "admin"
+                                  ? "bg-amber-50 text-amber-800 border-amber-300"
+                                  : "bg-gray-100 text-gray-700 border-gray-300"
+                              }`}
+                            >
+                              {item.role === "admin" ? "🛡️ Admin" : "👤 موظف"}
+                            </button>
+                            {item.email !== currentUser?.email && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteAllowedEmail(item)}
+                                className="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700 font-bold"
+                              >
+                                حذف
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         );
       }
@@ -3420,12 +3979,19 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v6.2 (Fast Search &lt;0.5s)</span>
-                <span className="font-mono text-gray-400">#{sessionId.slice(-5)}</span>
+                <span className="font-bold text-emerald-700">★ v7.1 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                <button
+                  type="button"
+                  onClick={handleGoogleSignOut}
+                  className="text-[10px] text-red-600 hover:underline font-semibold"
+                  title="تسجيل الخروج"
+                >
+                  خروج
+                </button>
               </div>
-              {employeeName && (
-                <div className="text-gray-700 font-semibold truncate">👤 {employeeName}</div>
-              )}
+              <div className="text-gray-700 font-semibold truncate" title={currentUser?.email}>
+                👤 {employeeName || currentUser?.email}
+              </div>
             </div>
 
             <nav className="flex-1 overflow-y-auto py-3 flex flex-col">
@@ -3493,6 +4059,17 @@
                 >
                   🔄 تغيير الزونات ({selectedZoneIds.length})
                 </button>
+
+                {userRole === "admin" && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAdminModalOpen(true)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold transition-colors"
+                    title="إضافة أو حذف إيميلات Gmail المصرح لها بالدخول"
+                  >
+                    🛡️ إدارة الإيميلات
+                  </button>
+                )}
               </div>
 
               <div className="flex flex-wrap items-center gap-2.5">
@@ -3601,6 +4178,109 @@
             </main>
           </div>
 
+          {/* Admin Email & Role Management Modal (Visible ONLY to Admins) */}
+          {isAdminModalOpen && userRole === "admin" && (
+            <div
+              className="fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4"
+              onClick={() => setIsAdminModalOpen(false)}
+            >
+              <div
+                className="bg-white rounded-2xl w-full max-w-xl shadow-2xl border border-gray-200 overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+                  <div>
+                    <h3 className="text-base font-bold">🛡️ إدارة إيميلات الدخول والصلاحيات</h3>
+                    <p className="text-xs text-slate-300">
+                      أضف أي حساب Gmail وحدد صلاحيته (موظف للعرض فقط، أو Admin لإدارة الإيميلات وتغذية الداشبورد)
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsAdminModalOpen(false)}
+                    className="text-slate-300 hover:text-white text-lg font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+                  <form onSubmit={handleAddOrUpdateAllowedEmail} className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                    <input
+                      type="email"
+                      required
+                      value={newAllowedEmail}
+                      onChange={(e) => setNewAllowedEmail(e.target.value)}
+                      placeholder="example@gmail.com"
+                      className="sm:col-span-5 px-3 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none focus:border-blue-500"
+                    />
+                    <input
+                      type="text"
+                      value={newAllowedLabel}
+                      onChange={(e) => setNewAllowedLabel(e.target.value)}
+                      placeholder="الاسم (اختياري)"
+                      className="sm:col-span-3 px-3 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none focus:border-blue-500"
+                    />
+                    <select
+                      value={newAllowedRole}
+                      onChange={(e) => setNewAllowedRole(e.target.value)}
+                      className="sm:col-span-2 px-2 py-2 border border-gray-300 rounded-lg text-xs font-semibold bg-white"
+                    >
+                      <option value="employee">موظف</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <button
+                      type="submit"
+                      disabled={adminSaving}
+                      className="sm:col-span-2 py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs"
+                    >
+                      {adminSaving ? "..." : "+ إضافة"}
+                    </button>
+                  </form>
+
+                  <div className="divide-y divide-gray-100 border border-gray-200 rounded-xl overflow-hidden">
+                    {allowedEmailsList.map((item) => (
+                      <div key={item.key} className="px-4 py-2.5 flex items-center justify-between gap-2 text-xs bg-white">
+                        <div className="min-w-0">
+                          <div className="font-mono font-bold text-gray-900 truncate">{item.email}</div>
+                          {item.label && <div className="text-gray-500">{item.label}</div>}
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <button
+                            type="button"
+                            disabled={item.email === currentUser?.email}
+                            onClick={() => handleToggleEmailRole(item)}
+                            className={`px-2.5 py-1 rounded-full font-bold border ${
+                              item.role === "admin"
+                                ? "bg-amber-50 text-amber-800 border-amber-300"
+                                : "bg-gray-100 text-gray-700 border-gray-300"
+                            }`}
+                            title={
+                              item.email === currentUser?.email
+                                ? "حسابك الحالي"
+                                : "اضغط للتبديل بين موظف و Admin"
+                            }
+                          >
+                            {item.role === "admin" ? "🛡️ Admin" : "👤 موظف"}
+                          </button>
+                          {item.email !== currentUser?.email && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteAllowedEmail(item)}
+                              className="px-2 py-1 rounded bg-red-50 hover:bg-red-100 text-red-700 font-bold"
+                            >
+                              حذف
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Read-Only Full Order & Customer Details Modal (Exact Hurrier 3-Column Layout) */}
           {selectedOrderFullView && (
             <div
@@ -3611,7 +4291,6 @@
                 className="bg-[#f5f6f8] rounded-xl w-full max-w-[1400px] max-h-[94vh] shadow-2xl border border-gray-200 flex flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
-                {/* Top White Header Bar */}
                 <div className="px-6 py-3.5 bg-white border-b border-gray-200 flex flex-wrap items-center justify-between gap-3 shadow-sm">
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="text-2xl font-bold text-gray-900 tracking-tight">
@@ -3675,9 +4354,7 @@
                   </button>
                 </div>
 
-                {/* 3-Column Scrollable Body */}
                 <div className="flex-1 overflow-y-auto p-4 sm:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 text-sm">
-                  {/* LEFT COLUMN: Important Details */}
                   <div className="lg:col-span-3 space-y-4">
                     <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
                       <h3 className="text-base font-bold text-gray-900 pb-3 border-b border-gray-100">
@@ -3729,7 +4406,6 @@
                     </div>
                   </div>
 
-                  {/* CENTER COLUMN: Pick up and Drop off + Deliveries / Issues / Routes / Order Items */}
                   <div className="lg:col-span-6 space-y-4">
                     <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3746,7 +4422,6 @@
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {/* Vendor Address Card */}
                         <div className="p-3.5 rounded-lg border border-gray-200 bg-white space-y-2 text-xs">
                           <div className="flex items-center justify-between">
                             <span className="font-bold text-gray-900 text-sm">Vendor Address</span>
@@ -3772,7 +4447,6 @@
                           )}
                         </div>
 
-                        {/* Customer Address Card */}
                         <div className="p-3.5 rounded-lg border border-gray-200 bg-white space-y-2 text-xs">
                           <div className="flex items-center justify-between">
                             <span className="font-bold text-gray-900 text-sm">Customer Address</span>
@@ -3844,7 +4518,6 @@
                         </div>
                       </div>
 
-                      {/* Hurrier Deadline Progress Bar */}
                       <div className="flex items-center gap-2 pt-1">
                         <span className="w-7 h-7 rounded bg-gray-100 border border-gray-200 flex items-center justify-center text-xs">
                           🏪
@@ -3858,7 +4531,6 @@
                       </div>
                     </div>
 
-                    {/* Deliveries | Issues | Routes | Order Items Section */}
                     <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
                       <div className="px-4 border-b border-gray-200 flex items-center gap-6 text-sm font-semibold bg-white">
                         {[
@@ -3887,7 +4559,6 @@
                           <div className="space-y-4">
                             {selectedOrderFullView.structuredDeliveries.map((del) => (
                               <div key={del.id} className="border border-gray-200 rounded-lg overflow-hidden">
-                                {/* Delivery Metadata Strip */}
                                 <div className="px-4 py-2.5 bg-[#eef3fc] border-b border-blue-100 grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
                                   <div>
                                     <div className="text-gray-500 text-[11px]">ID</div>
@@ -3927,7 +4598,6 @@
                                   </div>
                                 </div>
 
-                                {/* Exact Hurrier Transitions Table */}
                                 {del.events.length === 0 ? (
                                   <div className="p-6 text-center text-xs text-gray-500">
                                     {selectedOrderFullView.isLoadedFromApi
@@ -4094,7 +4764,6 @@
                                   </tr>
                                 ))}
 
-                                {/* Hurrier Totals Summary Rows */}
                                 <tr className="bg-gray-50/70 font-bold text-gray-900 border-t-2 border-gray-200">
                                   <td className="py-2.5 px-4">Subtotal</td>
                                   <td className="py-2.5 px-3 text-center">{selectedOrderFullView.itemsSummary.totalQty}</td>
@@ -4131,7 +4800,6 @@
                     </div>
                   </div>
 
-                  {/* RIGHT COLUMN: Time Checks + Yellow Notes Card */}
                   <div className="lg:col-span-3 space-y-4">
                     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden shadow-sm">
                       <div className="px-4 py-3 bg-gray-50/70 border-b border-gray-200 flex items-center gap-2">
@@ -4183,7 +4851,6 @@
                   </div>
                 </div>
 
-                {/* Modal Footer */}
                 <div className="px-6 py-3 bg-white border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
                   <span>View-Only Mode (No actions permitted)</span>
                   <button
@@ -4198,7 +4865,7 @@
             </div>
           )}
 
-          {/* Rider / Courier Profile Modal (User ID, Phone, Contract, Vehicle, Fleet ID) */}
+          {/* Rider / Courier Profile Modal */}
           {selectedCourierFullView && (
             <div
               className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4"
@@ -4208,7 +4875,6 @@
                 className="bg-white rounded-xl w-full max-w-lg shadow-2xl border border-gray-200 overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
-                {/* Header */}
                 <div className="px-6 pt-5 pb-4 border-b border-gray-100 flex items-start justify-between gap-3">
                   <div className="space-y-1.5 min-w-0">
                     <div className="flex items-center gap-2">
@@ -4260,9 +4926,7 @@
                   </button>
                 </div>
 
-                {/* Body */}
                 <div className="p-6 space-y-4 text-sm">
-                  {/* Status Box */}
                   <div className="p-4 rounded-lg bg-gray-100/90 border border-gray-200 space-y-1">
                     <div className="text-xs text-gray-500 font-medium">Status</div>
                     <div className="text-base font-bold text-gray-900">{selectedCourierFullView.statusLabel}</div>
@@ -4279,7 +4943,6 @@
                     )}
                   </div>
 
-                  {/* Balance Bar (if available) */}
                   {selectedCourierFullView.balanceStr && (
                     <div className="px-4 py-3 rounded-lg bg-[#e8effc] border border-blue-200 flex items-center justify-between">
                       <span className="font-bold text-gray-900">Balance</span>
@@ -4287,7 +4950,6 @@
                     </div>
                   )}
 
-                  {/* Details Rows (Contract, Vehicle, Phone, Fleet ID) */}
                   <div className="divide-y divide-gray-200 border-t border-b border-gray-200">
                     <div className="py-3 flex items-center justify-between">
                       <span className="font-semibold text-gray-900">Contract</span>
@@ -4336,7 +4998,6 @@
                   </div>
                 </div>
 
-                {/* Footer */}
                 <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
                   <span>View-Only Rider Card</span>
                   <button
