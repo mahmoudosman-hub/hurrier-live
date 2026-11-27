@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      8.9
-// @description  [v8.9] Real Courier Status (Temporary Not Working + Reason/Until) + Continuous Leader Lock Heartbeat
+// @version      9.0
+// @description  [v9.0] Unlimited Completed Pages Binary Search + Non-Blocking Exact Completed At + Most-Delayed Fix
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "8.9";
+  const SCRIPT_VERSION = "9.0";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
@@ -127,25 +127,340 @@
   const exactCompletedMetaCache = new Map();
   const lastKnownCompletedPage = {};
   let lastRollingCompletedSyncAt = 0;
+  let lastDeepCompletedSweepAt = 0;
   let initialCompletedBackfillDone = false;
+  let isCompletedSyncInProgress = false;
   let lastCompletedWatchedZoneSig = "";
+  // Exact Completed At Resolver via /orders/detail?code={code} (Polite concurrency + retry)
+  async function resolveExactCompletedMetaForOrders(candidates) {
+    if (!Array.isArray(candidates) || candidates.length === 0) return;
 
-  const cachedActiveById = new Map();
-  let lastFullActiveSweepAt = 0;
-  let lastKnownActivePages = 12;
+    for (let i = 0; i < candidates.length; i += 5) {
+      const batch = candidates.slice(i, i + 5);
+      await Promise.allSettled(
+        batch.map(async ({ orderKey, orderCode }) => {
+          if (exactCompletedMetaCache.has(orderKey)) return;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              const detailData = await hurrierGet(
+                `/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(orderKey)}`
+              );
+              const dOrder = detailData?.order || detailData || {};
+              const stLower = String(dOrder.status || "").toLowerCase();
+              if (stLower.includes("cancel")) {
+                exactCompletedMetaCache.set(orderKey, {
+                  completedAtMs: 0,
+                  cancelled: true,
+                  cachedAt: Date.now()
+                });
+                return;
+              }
 
-  let lastOrderDetailReqAt = 0;
-  let lastCourierDetailReqAt = 0;
-  let lastRiderSearchReqId = "";
-  let yesterdayCompletedBackfilledDate = "";
+              let exactMs =
+                parseValidTimestampMs(dOrder.current_state_transition) ||
+                parseValidTimestampMs(dOrder.event_timestamp) ||
+                parseValidTimestampMs(dOrder.completed_at) ||
+                parseValidTimestampMs(dOrder.delivered_at);
 
-  function getBridgedLeaderEmail() {
+              if (!exactMs) {
+                try {
+                  const delivData = await hurrierGet(
+                    `/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(orderCode)}`
+                  );
+                  const deliveries = Array.isArray(delivData?.deliveries) ? delivData.deliveries : [];
+                  for (const del of deliveries) {
+                    const transitions = Array.isArray(del?.transitions) ? del.transitions : [];
+                    for (let t = transitions.length - 1; t >= 0; t--) {
+                      const tr = transitions[t];
+                      if (String(tr?.to_state || "").toLowerCase() === "completed") {
+                        exactMs =
+                          parseValidTimestampMs(tr?.metadata?.performed_at) ||
+                          parseValidTimestampMs(tr?.created_at);
+                        if (exactMs) break;
+                      }
+                    }
+                    if (exactMs) break;
+                  }
+                } catch {}
+              }
+
+              if (exactMs > 0) {
+                exactCompletedMetaCache.set(orderKey, {
+                  completedAtMs: exactMs,
+                  cancelled: false,
+                  cachedAt: Date.now()
+                });
+                return;
+              }
+            } catch {
+              if (attempt === 0) {
+                await new Promise((r) => setTimeout(r, 250));
+              }
+            }
+          }
+        })
+      );
+    }
+  }
+
+  // Rolling 2-Hour Completed Orders Pool (Strictly by Exact Completed At, excluding Cancelled)
+  async function ingestCompletedRecordsBatch(records, unionZoneSet, hasManialUnion, hasTahrirUnion) {
+    if (!Array.isArray(records) || records.length === 0) return 0;
+
+    const candidates = [];
+    for (const rec of records) {
+      const order = rec?.order || {};
+      const stLower = String(order.status || rec?.status || "").toLowerCase();
+      if (stLower.includes("cancel")) continue;
+      if (!doesRecordMatchSessionZones(rec, unionZoneSet, hasManialUnion, hasTahrirUnion)) continue;
+
+      const orderKey = String(
+        order.confirmation_number ||
+          order.code ||
+          String(order.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+          order.id ||
+          ""
+      ).trim();
+      if (!orderKey) continue;
+      const orderCode = String(order.order_code || `HF_EG${orderKey}`).trim();
+      candidates.push({ orderKey, orderCode, rec });
+    }
+
+    if (candidates.length === 0) return 0;
+
+    const uncached = candidates.filter((c) => !exactCompletedMetaCache.has(c.orderKey));
+    if (uncached.length > 0) {
+      await resolveExactCompletedMetaForOrders(uncached);
+    }
+
+    const cutoffMs = Date.now() - ROLLING_COMPLETED_WINDOW_MS - ROLLING_COMPLETED_GRACE_MS;
+    let addedInWindow = 0;
+
+    for (const { orderKey, rec } of candidates) {
+      const meta = exactCompletedMetaCache.get(orderKey);
+      if (meta?.cancelled) {
+        rollingCompletedPool.delete(orderKey);
+        continue;
+      }
+
+      const order = rec?.order || {};
+      const fallbackMs =
+        parseValidTimestampMs(order.scheduled_dropoff_at) ||
+        parseValidTimestampMs(order.placed_at);
+      const completedAtMs = meta?.completedAtMs || fallbackMs;
+
+      if (completedAtMs >= cutoffMs) {
+        rollingCompletedPool.set(orderKey, {
+          ...rec,
+          __completed_at_ms: completedAtMs
+        });
+        addedInWindow++;
+      }
+    }
+
+    return addedInWindow;
+  }
+
+  async function safeFetchCompletedPage(dateStr, page) {
+    const url = `${BASE_API}/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${page}&per_page=50`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch(url, {
+          method: "GET",
+          credentials: "include",
+          headers: getHurrierAuthHeaders()
+        });
+        if (res.status === 400 || res.status === 404) {
+          return { ok: true, records: [], pastEnd: true };
+        }
+        if (res.status === 429 || res.status >= 500) {
+          await new Promise((r) => setTimeout(r, 350 * (attempt + 1)));
+          continue;
+        }
+        if (!res.ok) return { ok: false, records: null };
+        const data = await res.json();
+        return { ok: true, records: Array.isArray(data?.records) ? data.records : [] };
+      } catch {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+    return { ok: false, records: null };
+  }
+
+  // Unlimited-page Exponential + Binary Search (Supports 50,000+ pages per day without capping at 450)
+  async function discoverLastCompletedPage(dateStr) {
+    const MAX_DAY_PAGES = 60000;
+    let low = 1;
+    let high = Math.max(1, lastKnownCompletedPage[dateStr] || 16);
+    let lastNonEmptyRecords = [];
+
+    const startRes = await safeFetchCompletedPage(dateStr, high);
+    if (!startRes.ok) {
+      return { ok: false, lastPage: lastKnownCompletedPage[dateStr] || 0, tailRecords: [] };
+    }
+
+    const startRecs = startRes.records || [];
+    if (startRecs.length === 0) {
+      high = Math.max(1, high - 1);
+      if (high === 1) {
+        const p1 = await safeFetchCompletedPage(dateStr, 1);
+        const r1 = p1.ok && Array.isArray(p1.records) ? p1.records : [];
+        if (r1.length > 0) lastKnownCompletedPage[dateStr] = 1;
+        return { ok: p1.ok, lastPage: r1.length > 0 ? 1 : 0, tailRecords: r1 };
+      }
+    } else {
+      low = high;
+      lastNonEmptyRecords = startRecs;
+      if (startRecs.length < 50) {
+        lastKnownCompletedPage[dateStr] = high;
+        return { ok: true, lastPage: high, tailRecords: startRecs };
+      }
+
+      let step = 16;
+      while (high < MAX_DAY_PAGES) {
+        const nextProbe = Math.min(MAX_DAY_PAGES, high + step);
+        const pRes = await safeFetchCompletedPage(dateStr, nextProbe);
+        if (!pRes.ok) break;
+        const pRecs = pRes.records || [];
+        if (pRecs.length > 0) {
+          low = nextProbe;
+          lastNonEmptyRecords = pRecs;
+          if (pRecs.length < 50) {
+            lastKnownCompletedPage[dateStr] = nextProbe;
+            return { ok: true, lastPage: nextProbe, tailRecords: pRecs };
+          }
+          high = nextProbe;
+          step = Math.min(4096, step * 2);
+        } else {
+          high = nextProbe - 1;
+          break;
+        }
+      }
+    }
+
+    let best = low;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const mRes = await safeFetchCompletedPage(dateStr, mid);
+      if (!mRes.ok) break;
+      const mRecs = mRes.records || [];
+      if (mRecs.length > 0) {
+        best = mid;
+        lastNonEmptyRecords = mRecs;
+        if (mRecs.length < 50) break;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    if (best >= 1) {
+      lastKnownCompletedPage[dateStr] = best;
+    }
+    return { ok: true, lastPage: Math.max(1, best), tailRecords: lastNonEmptyRecords };
+  }
+
+  async function syncRollingCompletedOrdersPool(activeSessions) {
+    if (isCompletedSyncInProgress) return;
+    const now = Date.now();
+    const pruneCutoff = now - ROLLING_COMPLETED_WINDOW_MS - ROLLING_COMPLETED_GRACE_MS;
+    for (const [k, rec] of rollingCompletedPool.entries()) {
+      if ((rec.__completed_at_ms || 0) < pruneCutoff) {
+        rollingCompletedPool.delete(k);
+      }
+    }
+
+    const unionZoneIds = new Set();
+    (Array.isArray(activeSessions) ? activeSessions : []).forEach((s) => {
+      (Array.isArray(s?.zoneIds) ? s.zoneIds : []).forEach((id) => unionZoneIds.add(Number(id)));
+    });
+    if (unionZoneIds.size === 0) return;
+
+    const zoneSig = Array.from(unionZoneIds).sort((a, b) => a - b).join(",");
+    const needBackfill = !initialCompletedBackfillDone || zoneSig !== lastCompletedWatchedZoneSig;
+    const needMediumSweep = !needBackfill && now - lastDeepCompletedSweepAt >= 45000;
+
+    if (!needBackfill && !needMediumSweep && now - lastRollingCompletedSyncAt < 8000) {
+      return;
+    }
+
+    isCompletedSyncInProgress = true;
+    lastRollingCompletedSyncAt = now;
+    if (needBackfill || needMediumSweep) {
+      lastDeepCompletedSweepAt = now;
+    }
+    lastCompletedWatchedZoneSig = zoneSig;
+
     try {
-      const raw = GM_getValue(AUTH_BRIDGE_STORAGE_KEY, "");
-      const parsed = raw ? JSON.parse(raw) : null;
-      return String(parsed?.email || "").trim();
-    } catch {
-      return "";
+      const hasManialUnion = MANIAL_FAMILY_IDS.some((id) => unionZoneIds.has(id));
+      const hasTahrirUnion = unionZoneIds.has(10022) || unionZoneIds.has(10163);
+      const { todayStr, yesterdayStr, cairoHour } = getCairoDateStringsForCompleted();
+      const placedCutoffMs = now - 3.5 * 3600 * 1000;
+
+      const scanBackwardsForDate = async (dateStr, maxPagesToWalk) => {
+        const disc = await discoverLastCompletedPage(dateStr);
+        if (!disc.ok || disc.lastPage <= 0) return false;
+
+        if (disc.tailRecords.length > 0) {
+          await ingestCompletedRecordsBatch(
+            disc.tailRecords,
+            unionZoneIds,
+            hasManialUnion,
+            hasTahrirUnion
+          );
+        }
+
+        let curPage = disc.lastPage - 1;
+        let walked = 1;
+        while (curPage >= 1 && walked < maxPagesToWalk) {
+          const batchPages = [];
+          for (
+            let p = curPage;
+            p >= 1 && batchPages.length < 4 && walked < maxPagesToWalk;
+            p--, walked++
+          ) {
+            batchPages.push(p);
+            curPage = p - 1;
+          }
+          const pageResults = await Promise.all(
+            batchPages.map((pg) => safeFetchCompletedPage(dateStr, pg))
+          );
+
+          let reachedOldPlacedOrders = false;
+          for (const pRes of pageResults) {
+            if (pRes.ok && Array.isArray(pRes.records) && pRes.records.length > 0) {
+              await ingestCompletedRecordsBatch(
+                pRes.records,
+                unionZoneIds,
+                hasManialUnion,
+                hasTahrirUnion
+              );
+              const newestInPageMs = parseValidTimestampMs(
+                pRes.records[pRes.records.length - 1]?.order?.placed_at
+              );
+              if (newestInPageMs > 0 && newestInPageMs < placedCutoffMs) {
+                reachedOldPlacedOrders = true;
+              }
+            }
+          }
+          if (reachedOldPlacedOrders) break;
+        }
+        return true;
+      };
+
+      const pagesLimit = needBackfill ? 300 : needMediumSweep ? 80 : 12;
+      const okToday = await scanBackwardsForDate(todayStr, pagesLimit);
+
+      if (cairoHour < 3 && (needBackfill || yesterdayCompletedBackfilledDate !== yesterdayStr)) {
+        const okYest = await scanBackwardsForDate(yesterdayStr, 160);
+        if (okYest) yesterdayCompletedBackfilledDate = yesterdayStr;
+      }
+
+      if (okToday) {
+        initialCompletedBackfillDone = true;
+      }
+    } finally {
+      isCompletedSyncInProgress = false;
     }
   }
 
@@ -1283,7 +1598,7 @@
       const dispMaxPages = Math.min(35, Math.max(4, Math.ceil((totalEgyptDispatched || 150) / 50) + 4));
       const queuedMaxPages = Math.min(35, Math.max(4, Math.ceil((totalEgyptQueued || 150) / 50) + 4));
 
-      // 2) Fetch All Live Delivery Queues + Rolling Completed Pool
+      // 2) Fetch All Live Delivery Queues + Trigger Non-Blocking Rolling Completed Sync
       const [
         activeRecords,
         dispatchedRecords,
@@ -1300,7 +1615,7 @@
         fetchPaginatedDeliveries("/dispatcher-dashboard/deliveries/wait_for_assembled", 15)
       ]);
 
-      await syncRollingCompletedOrdersPool(activeSessions, false);
+      syncRollingCompletedOrdersPool(activeSessions).catch(() => {});
 
       const tabAllRecords = {
         Active: activeRecords,
