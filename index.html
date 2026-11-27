@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v9.0 — Live Rider Status & Lock Fix</title>
+  <title>Hurrier Live Operations Dashboard v9.1</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -37,7 +37,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v9.0...
+      Loading Hurrier Live Operations Dashboard v9.1...
     </div>
   </div>
 
@@ -1689,6 +1689,11 @@
           window.localStorage.setItem("hurrier_employee_name", employeeName);
           window.localStorage.setItem("hurrier_zone_setup_confirmed", "1");
         } catch {}
+        setCompletedZoneFilter("SELECTED_ZONES");
+        setCompletedPage(1);
+        setCurrentPage(1);
+        setSelectedOrderUids(new Set());
+        setIsCompletedLoading(true);
         setIsZoneSetupConfirmed(true);
       }, [selectedZoneIds, employeeName]);
 
@@ -1770,6 +1775,7 @@
               .filter((item) => !item.orderStatus.includes("cancel"));
             setCompletedOrders(mappedComp);
           }
+          setIsCompletedLoading(Boolean(bundle.completedSyncing));
 
           if (Array.isArray(bundle.issues)) {
             setIssuesList(bundle.issues);
@@ -3569,7 +3575,7 @@
                   <span className="text-2xl">🚴‍♂️</span>
                   <div>
                     <h1 className="text-lg font-bold tracking-tight">Hurrier Live Operations</h1>
-                    <p className="text-xs text-slate-300">v9.0 • Secured Google Access</p>
+                    <p className="text-xs text-slate-300">v9.1 • Secured Google Access</p>
                   </div>
                 </div>
                 <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
@@ -3708,7 +3714,7 @@
                         تحديد الزونات قبل بدء المتابعة
                       </h1>
                       <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v9.0 • {userRole === "admin" ? "Admin" : "Employee"}
+                        ★ v9.1 • {userRole === "admin" ? "Admin" : "Employee"}
                       </span>
                     </div>
                     <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5 truncate">
@@ -4017,7 +4023,7 @@
 
                 <div className="px-4 py-3 bg-slate-50 border-b border-gray-200 text-xs space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-700">★ v9.0 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                    <span className="font-bold text-emerald-700">★ v9.1 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                     <button
                       type="button"
                       onClick={handleGoogleSignOut}
@@ -4075,7 +4081,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v9.0 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                <span className="font-bold text-emerald-700">★ v9.1 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                 <button
                   type="button"
                   onClick={handleGoogleSignOut}
