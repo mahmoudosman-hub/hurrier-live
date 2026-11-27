@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v9.7 -->
+<!-- Hurrier Live Operations Dashboard v9.9 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v9.7</title>
+  <title>Hurrier Live Operations Dashboard v9.9</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,7 +38,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v9.7...
+      Loading Hurrier Live Operations Dashboard v9.9...
     </div>
   </div>
 
@@ -529,6 +529,56 @@
       return String(Number(num.toFixed(3)));
     }
 
+    function getCairoTodayDateString() {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Africa/Cairo",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).format(new Date());
+    }
+
+    function getCairoTimeHHMM(offsetMinutes = 0) {
+      const d = new Date(Date.now() + offsetMinutes * 60000);
+      return new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Africa/Cairo",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false
+      }).format(d);
+    }
+
+    function parseCairoDateTimeToMs(dateStr, timeStr) {
+      if (!dateStr || !timeStr) return 0;
+      const approxUtc = new Date(`${dateStr}T${timeStr}:00Z`);
+      if (Number.isNaN(approxUtc.getTime())) return 0;
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Africa/Cairo",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+      }).formatToParts(approxUtc);
+      const p = {};
+      parts.forEach((pt) => {
+        p[pt.type] = pt.value;
+      });
+      const hr = p.hour === "24" ? "00" : p.hour;
+      const asUtcMs = Date.UTC(
+        Number(p.year),
+        Number(p.month) - 1,
+        Number(p.day),
+        Number(hr),
+        Number(p.minute),
+        Number(p.second || 0)
+      );
+      const offsetMs = asUtcMs - approxUtc.getTime();
+      return approxUtc.getTime() - offsetMs;
+    }
+
     function extractCompletedTimestampFromRec(rec) {
       if (rec?.__completed_at_ms && Number(rec.__completed_at_ms) > 0) {
         return Number(rec.__completed_at_ms);
@@ -1005,6 +1055,24 @@
         }
       ];
 
+      const rawNotesArr = Array.isArray(cachedEntry?.notes?.dispatcher_notes)
+        ? cachedEntry.notes.dispatcher_notes
+        : Array.isArray(cachedEntry?.notes)
+        ? cachedEntry.notes
+        : Array.isArray(dOrder?.dispatcher_notes)
+        ? dOrder.dispatcher_notes
+        : [];
+      const dispatcherNotes = rawNotesArr
+        .map((n, idx) => ({
+          id: String(n?.id || idx),
+          note: normalizeText(n?.note || n?.text || n?.comment || n?.message || ""),
+          email: normalizeText(n?.email || n?.author || n?.created_by || ""),
+          source: normalizeText(n?.source || ""),
+          createdAt: n?.created_at ? formatReadableTimestamp(n.created_at) : "",
+          createdTimeSec: n?.created_at ? formatExactTimeSeconds(n.created_at) : ""
+        }))
+        .filter((n) => n.note);
+
       return {
         id,
         orderCode,
@@ -1025,7 +1093,8 @@
         structuredDeliveries,
         items,
         itemsSummary,
-        timeChecks
+        timeChecks,
+        dispatcherNotes
       };
     }
 
@@ -1283,7 +1352,21 @@
       const [activeViewersList, setActiveViewersList] = useState([]);
       const [isViewersPopoverOpen, setIsViewersPopoverOpen] = useState(false);
       const [dynamicZonesCatalog, setDynamicZonesCatalog] = useState([]);
+      const [completedFilterMode, setCompletedFilterMode] = useState("rolling");
       const [completedHoursWindow, setCompletedHoursWindow] = useState(2);
+      const [completedLastSweepAt, setCompletedLastSweepAt] = useState(0);
+      const [customCompletedDate, setCustomCompletedDate] = useState(() => getCairoTodayDateString());
+      const [customFromTime, setCustomFromTime] = useState(() => getCairoTimeHHMM(-30));
+      const [customToTime, setCustomToTime] = useState(() => getCairoTimeHHMM(0));
+      const [customRangeOrders, setCustomRangeOrders] = useState([]);
+      const [isCustomRangeLoading, setIsCustomRangeLoading] = useState(false);
+      const [customRangeMeta, setCustomRangeMeta] = useState(null);
+      const [directCompletedLookup, setDirectCompletedLookup] = useState({
+        query: "",
+        loading: false,
+        status: "",
+        orderItem: null
+      });
       const [completedSortAsc, setCompletedSortAsc] = useState(false);
       const [completedCityFilter, setCompletedCityFilter] = useState("All Cities");
       const [completedZoneFilter, setCompletedZoneFilter] = useState("SELECTED_ZONES");
@@ -1798,6 +1881,9 @@
             setCompletedOrders(mappedComp);
           }
           setIsCompletedLoading(Boolean(bundle.completedSyncing));
+          if (bundle.completedLastSweepAt) {
+            setCompletedLastSweepAt(Number(bundle.completedLastSweepAt));
+          }
 
           if (Array.isArray(bundle.couriers)) {
             setActiveCouriersList(bundle.couriers);
@@ -2064,10 +2150,87 @@
       const handleJumpToCompletedOrderSearch = useCallback((q) => {
         const clean = String(q || "").trim();
         setActiveTab("Completed");
+        setCompletedFilterMode("rolling");
         setCompletedHoursWindow(2);
         setCompletedSearchQuery(clean);
         setCompletedPage(1);
       }, []);
+
+      const handleForceRefreshCompletedArchive = useCallback(async () => {
+        setIsCompletedLoading(true);
+        try {
+          await dbFetch("/config/completed_force_sync_req", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ requestedAt: Date.now() })
+          });
+        } catch {}
+      }, [dbFetch]);
+
+      const handleFetchCustomCompletedRange = useCallback(
+        async (e) => {
+          if (e) e.preventDefault();
+          const fromMs = parseCairoDateTimeToMs(customCompletedDate, customFromTime);
+          const toMs = parseCairoDateTimeToMs(customCompletedDate, customToTime) + 59999;
+
+          if (!fromMs || !toMs || toMs < fromMs) {
+            setCustomRangeMeta({
+              label: "",
+              error: "يرجى التأكد أن وقت (إلى) يأتي بعد وقت (من)."
+            });
+            return;
+          }
+          if (toMs - fromMs > 2.5 * 3600 * 1000) {
+            setCustomRangeMeta({
+              label: "",
+              error: "أقصى مدة للفترة المخصصة هي ساعتان ونصف لتخفيف الضغط على السيرفر."
+            });
+            return;
+          }
+
+          const reqId = `cr_${Date.now()}`;
+          setIsCustomRangeLoading(true);
+          setCustomRangeMeta({
+            label: `${customCompletedDate} • من ${customFromTime} إلى ${customToTime}`,
+            error: ""
+          });
+          setCompletedPage(1);
+
+          try {
+            await dbFetch(`/config/completed_range_reqs/${encodeURIComponent(sessionId)}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                reqId,
+                sessionId,
+                dateStr: customCompletedDate,
+                fromMs,
+                toMs,
+                zoneIds: selectedZoneIds,
+                requestedAt: Date.now()
+              })
+            });
+
+            for (let attempt = 0; attempt < 26; attempt++) {
+              await new Promise((r) => setTimeout(r, 550));
+              const res = await dbFetch(`/session_bundles/comp_range_${encodeURIComponent(sessionId)}`);
+              if (res.ok) {
+                const data = await res.json();
+                if (data && data.reqId === reqId) {
+                  const mapped = (Array.isArray(data.records) ? data.records : [])
+                    .map(mapHurrierCompletedRecord)
+                    .filter((item) => !item.orderStatus.includes("cancel"));
+                  setCustomRangeOrders(mapped);
+                  break;
+                }
+              }
+            }
+          } catch {} finally {
+            setIsCustomRangeLoading(false);
+          }
+        },
+        [customCompletedDate, customFromTime, customToTime, sessionId, selectedZoneIds, dbFetch]
+      );
 
       const matchesZoneFilter = useCallback(
         (item) => {
@@ -2130,93 +2293,9 @@
           if (activeQuickFilter === "Card" && !d.instructions.includes("Card")) return false;
           if (
             activeQuickFilter === "Darkstores" &&
-            !(isTalabatMartVendor(d.vendor) || d.instructions.includes("Darkstores"))
-          ) {
-            return false;
-          }
-          if (activeQuickFilter === "Restaurants") {
-            const isDs = isTalabatMartVendor(d.vendor) || d.instructions.includes("Darkstores");
-            if (isDs || !(d.instructions.includes("Restaurants") || d.instructions.includes("Supermarket"))) {
-              return false;
-            }
-          }
-          if (activeQuickFilter === "Split" && !d.isSplit) return false;
-
-          if (activeQuickFilter === "Darkstores" && selectedMartBranch !== "ALL") {
-            if (normalizeText(extractMartBranchLabel(d.vendor)) !== normalizeText(selectedMartBranch)) {
-              return false;
-            }
-          }
-
-          if (!q) return true;
-          const riderMeta = knownCouriersMeta[d.courierId] || {};
-          const riderPhone = normalizePhoneDigits(riderMeta.phone || "");
-          const phoneMatch =
-            (qPhone.core10 && riderPhone.core10 === qPhone.core10) ||
-            (qPhone.rawDigits.length >= 7 && riderPhone.rawDigits.includes(qPhone.rawDigits));
-
-          return (
-            String(d.id).toLowerCase().includes(q) ||
-            String(d.vo).toLowerCase().includes(q) ||
-            String(d.vendor).toLowerCase().includes(q) ||
-            String(d.courier).toLowerCase().includes(q) ||
-            String(d.courierId).toLowerCase().includes(q) ||
-            String(riderMeta.userId || "").toLowerCase().includes(q) ||
-            phoneMatch
-          );
-        });
-
-        const liveCutoffMs = Date.now() - 18 * 3600 * 1000;
-        const isLiveShiftOrder = (item) => {
-          const refMs =
-            item.placedMs || (item.deadlineMs < Number.MAX_SAFE_INTEGER ? item.deadlineMs : 0);
-          return refMs >= liveCutoffMs;
-        };
-
-        if (orderSortMode === "live_first") {
-          return [...list].sort((a, b) => {
-            const aLive = isLiveShiftOrder(a) ? 0 : 1;
-            const bLive = isLiveShiftOrder(b) ? 0 : 1;
-            if (aLive !== bLive) return aLive - bLive;
-            return (a.deadlineMs ?? Number.MAX_SAFE_INTEGER) - (b.deadlineMs ?? Number.MAX_SAFE_INTEGER);
-          });
-        }
-
-        return [...list].sort(
-          (a, b) => (a.deadlineMs ?? Number.MAX_SAFE_INTEGER) - (b.deadlineMs ?? Number.MAX_SAFE_INTEGER)
-        );
-      }, [baseTabDeliveries, activeQuickFilter, selectedMartBranch, searchQuery, knownCouriersMeta, orderSortMode]);
-
-      const effectiveTabCounts = useMemo(() => {
-        const res = { ...tabCounts };
-        SIDEBAR_ITEMS.forEach((item) => {
-          if (["Dashboard", "Completed", "Active Couriers"].includes(item.id)) {
-            delete res[item.id];
-            return;
-          }
-          const localCount = deliveries.filter(
-            (d) =>
-              d.tabName === item.id &&
-              (selectedCity === "All Cities" || d.city === selectedCity) &&
-              matchesZoneFilter(d)
-          ).length;
-          res[item.id] = localCount;
-        });
-        return res;
-      }, [tabCounts, deliveries, selectedCity, matchesZoneFilter]);
-
-      // Completed Orders Filtering & Pagination (Strictly based on COMPLETED AT in last 1h or 2h)
-      useEffect(() => {
-        if (completedSearchQuery.trim()) {
-          if (!completedSearchAnchorRef.current) {
-            completedSearchAnchorRef.current = Date.now();
-          }
-        } else {
-          completedSearchAnchorRef.current = 0;
-        }
-      }, [completedSearchQuery]);
-
-      const visibleCompletedOrders = useMemo(() => {
+      const baseVisibleCompletedOrders = useMemo(() => {
+        const sourceOrders =
+          completedFilterMode === "custom" ? customRangeOrders : completedOrders;
         const windowMs = Number(completedHoursWindow || 2) * 3600 * 1000;
         const q = completedSearchQuery.trim().toLowerCase();
         const isSearching = q.length > 0;
@@ -2227,7 +2306,7 @@
         const graceMs = isSearching ? 15 * 60 * 1000 : 0;
         const cutoffMs = anchorNow - windowMs - graceMs;
 
-        const enriched = completedOrders.map((item) => {
+        const enriched = sourceOrders.map((item) => {
           const cachedDet = orderDetailsCache[item.id]?.detail?.order || orderDetailsCache[item.id]?.detail;
           const exactIso = cachedDet?.current_state_transition;
           if (exactIso) {
@@ -2245,7 +2324,9 @@
 
         const filtered = enriched.filter((item) => {
           if (item.orderStatus && item.orderStatus.includes("cancel")) return false;
-          if (!item.completedTimestamp || item.completedTimestamp < cutoffMs) return false;
+          if (completedFilterMode === "rolling") {
+            if (!item.completedTimestamp || item.completedTimestamp < cutoffMs) return false;
+          }
 
           if (completedCityFilter !== "All Cities" && item.city !== completedCityFilter) {
             return false;
@@ -2274,6 +2355,8 @@
             : b.completedTimestamp - a.completedTimestamp
         );
       }, [
+        completedFilterMode,
+        customRangeOrders,
         completedOrders,
         orderDetailsCache,
         completedHoursWindow,
@@ -2283,6 +2366,86 @@
         completedSortAsc,
         matchesZoneFilter
       ]);
+
+      // Instant Direct Order ID Lookup when searching for an Order ID not in local window
+      useEffect(() => {
+        if (activeTab !== "Completed") return;
+        const rawQ = completedSearchQuery.trim();
+        if (!rawQ || !isExactOrderIdPattern(rawQ)) {
+          setDirectCompletedLookup({ query: "", loading: false, status: "", orderItem: null });
+          return;
+        }
+        const cleanCode = rawQ.replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "").trim();
+        if (baseVisibleCompletedOrders.some((o) => String(o.id) === cleanCode)) {
+          setDirectCompletedLookup({ query: cleanCode, loading: false, status: "local", orderItem: null });
+          return;
+        }
+
+        let cancelled = false;
+        const timer = setTimeout(async () => {
+          setDirectCompletedLookup({ query: cleanCode, loading: true, status: "", orderItem: null });
+          try {
+            const reqAt = Date.now();
+            await dbFetch(`/config/completed_id_reqs/${encodeURIComponent(cleanCode)}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ code: cleanCode, requestedAt: reqAt })
+            });
+
+            for (let attempt = 0; attempt < 15; attempt++) {
+              if (cancelled) return;
+              await new Promise((r) => setTimeout(r, 500));
+              if (cancelled) return;
+              const res = await dbFetch(`/session_bundles/comp_id_${encodeURIComponent(cleanCode)}`);
+              if (res.ok) {
+                const data = await res.json();
+                if (data && data.code === cleanCode && Number(data.updatedAt || 0) >= reqAt - 3000) {
+                  if (!data.found) {
+                    setDirectCompletedLookup({
+                      query: cleanCode,
+                      loading: false,
+                      status: "not_found",
+                      orderItem: null
+                    });
+                  } else {
+                    const mappedItem = data.record ? mapHurrierCompletedRecord(data.record) : null;
+                    setDirectCompletedLookup({
+                      query: cleanCode,
+                      loading: false,
+                      status: String(data.status || "completed"),
+                      orderItem: mappedItem
+                    });
+                  }
+                  return;
+                }
+              }
+            }
+            if (!cancelled) {
+              setDirectCompletedLookup((prev) => ({ ...prev, loading: false }));
+            }
+          } catch {
+            if (!cancelled) {
+              setDirectCompletedLookup((prev) => ({ ...prev, loading: false }));
+            }
+          }
+        }, 350);
+
+        return () => {
+          cancelled = true;
+          clearTimeout(timer);
+        };
+      }, [activeTab, completedSearchQuery, baseVisibleCompletedOrders, dbFetch]);
+
+      const visibleCompletedOrders = useMemo(() => {
+        if (
+          directCompletedLookup.orderItem &&
+          directCompletedLookup.status === "completed" &&
+          !baseVisibleCompletedOrders.some((o) => String(o.id) === String(directCompletedLookup.orderItem.id))
+        ) {
+          return [directCompletedLookup.orderItem, ...baseVisibleCompletedOrders];
+        }
+        return baseVisibleCompletedOrders;
+      }, [baseVisibleCompletedOrders, directCompletedLookup]);
 
       const completedTotalPages = Math.max(1, Math.ceil(visibleCompletedOrders.length / 50));
       const paginatedCompletedOrders = useMemo(() => {
@@ -2759,107 +2922,229 @@
             ? completedSearchAnchorRef.current
             : Date.now();
         const windowStartLabel = formatShortTimeOnly(anchorNow - Number(completedHoursWindow || 2) * 3600 * 1000);
+        const selectModeVal =
+          completedFilterMode === "custom" ? "custom" : String(completedHoursWindow);
 
         return (
           <div className="mt-4 space-y-4">
-            {/* Completed Orders Controls Bar (ONLY 1h / 2h based on Completed At) */}
-            <div className="p-4 rounded-xl bg-gray-50/80 border border-gray-200 flex flex-wrap items-end justify-between gap-3">
-              <div className="flex flex-wrap items-end gap-3 flex-1 min-w-[260px]">
-                <div>
-                  <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                    Time Window (Completed At)
-                  </label>
-                  <select
-                    value={completedHoursWindow}
-                    onChange={(e) => {
-                      setCompletedHoursWindow(Number(e.target.value));
-                      setCompletedPage(1);
-                    }}
-                    className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-bold text-gray-800 focus:outline-none focus:border-blue-500"
-                  >
-                    <option value={1}>آخر ساعة (1h • وقت التقفيل)</option>
-                    <option value={2}>آخر ساعتين (2h • وقت التقفيل)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-bold text-gray-600 mb-1">City</label>
-                  <select
-                    value={completedCityFilter}
-                    onChange={(e) => {
-                      setCompletedCityFilter(e.target.value);
-                      setCompletedPage(1);
-                    }}
-                    className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-semibold text-gray-700 focus:outline-none focus:border-blue-500"
-                  >
-                    <option value="All Cities">All Cities</option>
-                    <option value="Cairo">Cairo</option>
-                    <option value="Alexandria">Alexandria</option>
-                  </select>
-                </div>
-
-                <div className="min-w-[200px]">
-                  <label className="block text-[11px] font-bold text-gray-600 mb-1">Zone</label>
-                  <select
-                    value={completedZoneFilter}
-                    onChange={(e) => {
-                      setCompletedZoneFilter(e.target.value);
-                      setCompletedPage(1);
-                    }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-semibold text-gray-700 focus:outline-none focus:border-blue-500"
-                  >
-                    <option value="SELECTED_ZONES">زونات الداشبورد المختارة ({selectedZoneIds.length})</option>
-                    {effectiveZonesCatalog.filter((z) => selectedZoneIds.includes(Number(z.id))).map((z) => (
-                      <option key={z.id} value={z.name}>
-                        {z.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="flex-1 min-w-[220px]">
-                  <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                    Search (بحث لحظي في آخر {completedHoursWindow} ساعة)
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={completedSearchQuery}
+            {/* Completed Orders Controls Bar (Unified 2h / 1h Shared Archive + Custom Time Range + Instant ID Lookup) */}
+            <div className="p-4 rounded-xl bg-gray-50/80 border border-gray-200 space-y-3">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div className="flex flex-wrap items-end gap-3 flex-1 min-w-[260px]">
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-600 mb-1">
+                      Time Window (Completed At)
+                    </label>
+                    <select
+                      value={selectModeVal}
                       onChange={(e) => {
-                        setCompletedSearchQuery(e.target.value);
+                        const v = e.target.value;
+                        if (v === "custom") {
+                          setCompletedFilterMode("custom");
+                        } else {
+                          setCompletedFilterMode("rolling");
+                          setCompletedHoursWindow(Number(v));
+                        }
                         setCompletedPage(1);
                       }}
-                      placeholder="اكتب رقم الأوردر أو VO أو اسم الرايدر..."
-                      className="w-full pl-3 pr-8 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm focus:outline-none focus:border-blue-500"
-                    />
-                    {completedSearchQuery && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCompletedSearchQuery("");
+                      className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-bold text-gray-800 focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="1">آخر ساعة (1h • موحد ومحدث كل 15د)</option>
+                      <option value="2">آخر ساعتين (2h • موحد ومحدث كل 15د)</option>
+                      <option value="custom">🕒 تحديد وقت مخصص (من - إلى)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-600 mb-1">City</label>
+                    <select
+                      value={completedCityFilter}
+                      onChange={(e) => {
+                        setCompletedCityFilter(e.target.value);
+                        setCompletedPage(1);
+                      }}
+                      className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-semibold text-gray-700 focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="All Cities">All Cities</option>
+                      <option value="Cairo">Cairo</option>
+                      <option value="Alexandria">Alexandria</option>
+                    </select>
+                  </div>
+
+                  <div className="min-w-[200px]">
+                    <label className="block text-[11px] font-bold text-gray-600 mb-1">Zone</label>
+                    <select
+                      value={completedZoneFilter}
+                      onChange={(e) => {
+                        setCompletedZoneFilter(e.target.value);
+                        setCompletedPage(1);
+                      }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-semibold text-gray-700 focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="SELECTED_ZONES">زونات الداشبورد المختارة ({selectedZoneIds.length})</option>
+                      {effectiveZonesCatalog.filter((z) => selectedZoneIds.includes(Number(z.id))).map((z) => (
+                        <option key={z.id} value={z.name}>
+                          {z.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex-1 min-w-[220px]">
+                    <label className="block text-[11px] font-bold text-gray-600 mb-1">
+                      Search (بحث لحظي برقم الأوردر من اليوم كله أو VO أو الرايدر)
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={completedSearchQuery}
+                        onChange={(e) => {
+                          setCompletedSearchQuery(e.target.value);
                           setCompletedPage(1);
                         }}
-                        className="absolute right-2.5 top-2 text-gray-400 hover:text-gray-700 text-xs font-bold"
+                        placeholder="اكتب Order ID (من أي وقت باليوم) أو VO أو اسم الرايدر..."
+                        className="w-full pl-3 pr-8 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm focus:outline-none focus:border-blue-500"
+                      />
+                      {completedSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCompletedSearchQuery("");
+                            setCompletedPage(1);
+                          }}
+                          className="absolute right-2.5 top-2 text-gray-400 hover:text-gray-700 text-xs font-bold"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col items-end gap-1 text-xs">
+                  {completedFilterMode === "rolling" ? (
+                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        موحد للكل • من {windowStartLabel} حتى الآن ({completedHoursWindow}h)
+                        {isCompletedLoading ? " • جاري التحديث..." : ""}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleForceRefreshCompletedArchive}
+                        className="px-2.5 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-100 text-gray-700 font-bold"
+                        title="تحديث أرشيف الساعتين المشترك الآن"
                       >
-                        ✕
+                        ↻ تحديث الأرشيف
                       </button>
+                    </div>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-bold">
+                      🕒 وضع الفترة المخصصة {customRangeMeta?.label ? `(${customRangeMeta.label})` : ""}
+                    </span>
+                  )}
+                  <div className="text-gray-500">
+                    {completedFilterMode === "rolling" && completedLastSweepAt > 0 && (
+                      <span className="mr-2 text-[11px] text-gray-400">
+                        آخر دورة 15د: {formatShortTimeOnly(completedLastSweepAt)} •
+                      </span>
                     )}
+                    Page <strong className="text-gray-800">{completedPage}</strong> of{" "}
+                    <strong className="text-gray-800">{completedTotalPages}</strong> •{" "}
+                    <strong className="text-gray-800">{visibleCompletedOrders.length}</strong> orders
                   </div>
                 </div>
               </div>
 
-              <div className="flex flex-col items-end gap-1 text-xs">
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  LIVE • مقفول من {windowStartLabel} حتى الآن ({completedHoursWindow}h)
-                  {isCompletedLoading && paginatedCompletedOrders.length > 0 ? " • جاري التحديث..." : ""}
-                </span>
-                <div className="text-gray-500">
-                  Page <strong className="text-gray-800">{completedPage}</strong> of{" "}
-                  <strong className="text-gray-800">{completedTotalPages}</strong> •{" "}
-                  <strong className="text-gray-800">{visibleCompletedOrders.length}</strong> orders in window
+              {/* Custom Time Window Bar (Shown when "custom" mode is selected) */}
+              {completedFilterMode === "custom" && (
+                <form
+                  onSubmit={handleFetchCustomCompletedRange}
+                  dir="rtl"
+                  className="pt-3 border-t border-gray-200 flex flex-wrap items-end gap-3"
+                >
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 mb-1">التاريخ</label>
+                    <input
+                      type="date"
+                      value={customCompletedDate}
+                      onChange={(e) => setCustomCompletedDate(e.target.value)}
+                      className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-mono focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 mb-1">من الساعة (وقت التقفيل)</label>
+                    <input
+                      type="time"
+                      value={customFromTime}
+                      onChange={(e) => setCustomFromTime(e.target.value)}
+                      className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-mono focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 mb-1">إلى الساعة (وقت التقفيل)</label>
+                    <input
+                      type="time"
+                      value={customToTime}
+                      onChange={(e) => setCustomToTime(e.target.value)}
+                      className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-mono focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isCustomRangeLoading}
+                    className={`px-4 py-2 rounded-lg font-bold text-xs sm:text-sm text-white shadow-sm transition-colors ${
+                      isCustomRangeLoading
+                        ? "bg-blue-400 cursor-wait"
+                        : "bg-blue-600 hover:bg-blue-700"
+                    }`}
+                  >
+                    {isCustomRangeLoading ? "⏳ جاري سحب الفترة..." : "🔍 عرض الفترة المحددة"}
+                  </button>
+                  {customRangeMeta?.error && (
+                    <span className="text-xs font-bold text-red-600">{customRangeMeta.error}</span>
+                  )}
+                </form>
+              )}
+
+              {/* Direct Order ID Lookup Feedback Banner */}
+              {directCompletedLookup.query && directCompletedLookup.status !== "local" && (
+                <div
+                  dir="rtl"
+                  className="px-3.5 py-2.5 rounded-lg bg-indigo-50/80 border border-indigo-200 flex flex-wrap items-center justify-between gap-2 text-xs"
+                >
+                  {directCompletedLookup.loading ? (
+                    <span className="font-bold text-indigo-700 animate-pulse">
+                      ⚡ جاري البحث المباشر عن الأوردر #{directCompletedLookup.query} في أرشيف اليوم بالكامل...
+                    </span>
+                  ) : directCompletedLookup.status === "completed" && directCompletedLookup.orderItem ? (
+                    <span className="font-bold text-emerald-800">
+                      ✓ تم العثور على الأوردر المكتمل #{directCompletedLookup.query} من أرشيف اليوم (مقفول الساعة{" "}
+                      {directCompletedLookup.orderItem.completedAtFormatted}).
+                    </span>
+                  ) : directCompletedLookup.status === "not_found" ? (
+                    <span className="font-semibold text-gray-700">
+                      لم يتم العثور على أوردر برقم #{directCompletedLookup.query} في Hurrier.
+                    </span>
+                  ) : directCompletedLookup.status ? (
+                    <div className="flex flex-wrap items-center justify-between w-full gap-2">
+                      <span className="font-bold text-amber-900">
+                        ℹ️ الأوردر #{directCompletedLookup.query} موجود ولكن حالته الحالية في Hurrier هي:{" "}
+                        <span className="underline">{humanizeSnakeCase(directCompletedLookup.status)}</span> (وليس Completed).
+                      </span>
+                      {directCompletedLookup.orderItem && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedOrder(directCompletedLookup.orderItem)}
+                          className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+                        >
+                          فتح تفاصيل الأوردر
+                        </button>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Mobile Completed Cards (< 768px) */}
@@ -3919,7 +4204,7 @@
                   <span className="text-2xl">🚴‍♂️</span>
                   <div>
                     <h1 className="text-lg font-bold tracking-tight">Hurrier Live Operations</h1>
-                    <p className="text-xs text-slate-300">v9.6 • Secured Google Access</p>
+                    <p className="text-xs text-slate-300">v9.9 • Secured Google Access</p>
                   </div>
                 </div>
                 <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
@@ -4058,7 +4343,7 @@
                         تحديد الزونات قبل بدء المتابعة
                       </h1>
                       <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v9.6 • {userRole === "admin" ? "Admin" : "Employee"}
+                        ★ v9.9 • {userRole === "admin" ? "Admin" : "Employee"}
                       </span>
                     </div>
                     <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5 truncate">
@@ -4367,7 +4652,7 @@
 
                 <div className="px-4 py-3 bg-slate-50 border-b border-gray-200 text-xs space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-700">★ v9.6 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                    <span className="font-bold text-emerald-700">★ v9.9 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                     <button
                       type="button"
                       onClick={handleGoogleSignOut}
@@ -4425,7 +4710,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v9.6 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                <span className="font-bold text-emerald-700">★ v9.9 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                 <button
                   type="button"
                   onClick={handleGoogleSignOut}
@@ -5164,6 +5449,110 @@
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-5">
+                  {/* Hurrier Dispatcher Notes Box (Full Width Top Section matching Hurrier UI) */}
+                  <div className="lg:col-span-12 bg-[#fef9e7] rounded-xl border border-[#f3e5ab] p-4 sm:p-5 shadow-sm">
+                    <div className="flex items-center justify-between pb-3 border-b border-[#efe0a6]">
+                      <div className="flex items-center gap-2">
+                        <svg
+                          className="w-4 h-4 text-[#d4a017] flex-shrink-0"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                          <path d="M9 9h.01M15 9h.01" />
+                        </svg>
+                        <h3 className="text-sm font-bold text-gray-900">
+                          Notes{" "}
+                          {selectedOrderFullView.dispatcherNotes.length > 0 &&
+                            `(${selectedOrderFullView.dispatcherNotes.length})`}
+                        </h3>
+                      </div>
+                      {!selectedOrderFullView.isLoadedFromApi && (
+                        <span className="text-xs font-semibold text-amber-800 animate-pulse">
+                          ⏳ جاري فحص الملاحظات...
+                        </span>
+                      )}
+                    </div>
+
+                    {selectedOrderFullView.dispatcherNotes.length === 0 ? (
+                      <div className="py-5 flex flex-col items-center justify-center">
+                        <svg
+                          className="w-24 h-16"
+                          viewBox="0 0 120 80"
+                          fill="none"
+                          xmlns="http://www.w3.org/2000/svg"
+                        >
+                          <path
+                            d="M22 30C22 25.5 26 23 30 25C32 21 38 21 40 25C43 24 46 26.5 45 30H22Z"
+                            stroke="#60a5fa"
+                            strokeWidth="1.5"
+                            fill="#eff6ff"
+                          />
+                          <path
+                            d="M82 22C82 18.5 85.5 16.5 88.5 18C90.5 14.5 95.5 14.5 97 18C99.5 17.5 102 19.5 101 22H82Z"
+                            stroke="#60a5fa"
+                            strokeWidth="1.5"
+                            fill="#eff6ff"
+                          />
+                          <line x1="60" y1="54" x2="60" y2="76" stroke="#60a5fa" strokeWidth="2" />
+                          <line x1="66" y1="54" x2="66" y2="76" stroke="#93c5fd" strokeWidth="1.5" />
+                          <path
+                            d="M46 42C46 34.82 51.82 29 59 29H77C83.63 29 89 34.37 89 41V54H46V42Z"
+                            fill="#ffffff"
+                            stroke="#3b82f6"
+                            strokeWidth="1.8"
+                          />
+                          <path
+                            d="M46 42C46 34.82 51.82 29 59 29C66.18 29 72 34.82 72 42V54H46V42Z"
+                            fill="#1e293b"
+                          />
+                          <path
+                            d="M78 38H83V46L80.5 44.5L78 46V38Z"
+                            fill="#3b82f6"
+                          />
+                          <circle cx="56" cy="23" r="4" fill="#ffffff" stroke="#334155" strokeWidth="1.5" />
+                          <path d="M52 23L49 24L52 25" stroke="#334155" strokeWidth="1.4" />
+                          <circle cx="55" cy="22.5" r="0.8" fill="#1e293b" />
+                        </svg>
+                      </div>
+                    ) : (
+                      <div className="pt-3 space-y-2.5">
+                        {selectedOrderFullView.dispatcherNotes.map((n) => (
+                          <div
+                            key={n.id}
+                            className="p-3 rounded-lg bg-white/90 border border-[#ebd995] shadow-sm space-y-1.5"
+                          >
+                            <div
+                              dir="auto"
+                              className="text-sm font-semibold text-gray-900 whitespace-pre-wrap break-words"
+                            >
+                              {n.note}
+                            </div>
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-500">
+                              <div className="flex flex-wrap items-center gap-2">
+                                {n.email && <span className="font-mono font-medium text-gray-700">{n.email}</span>}
+                                {n.source && (
+                                  <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 font-bold uppercase text-[10px]">
+                                    {n.source}
+                                  </span>
+                                )}
+                              </div>
+                              {(n.createdAt || n.createdTimeSec) && (
+                                <span className="font-mono text-gray-600">
+                                  {n.createdAt} {n.createdTimeSec ? `• ${n.createdTimeSec}` : ""}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                   <div className="lg:col-span-8 space-y-5">
                     <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5 shadow-sm space-y-4">
                       <div className="flex items-center justify-between">
