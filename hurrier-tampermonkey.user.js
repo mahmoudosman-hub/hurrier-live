@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      9.0
-// @description  [v9.0] Unlimited Completed Pages Binary Search + Non-Blocking Exact Completed At + Most-Delayed Fix
+// @version      9.1
+// @description  [v9.1] Selected-Zones-Only Completed At (1h/2h) + Instant Zone-Switch Recalculation
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "9.0";
+  const SCRIPT_VERSION = "9.1";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
@@ -113,6 +113,7 @@
     ZONE_NAME_TO_ID.set(String(name).trim().toLowerCase(), Number(id));
   });
 
+  // Core Runtime State (Single Clean Declarations)
   const TAB_INSTANCE_ID = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const LOCAL_TAB_LOCK_KEY = "hurrier_live_sync_local_tab_lock";
   const LOCAL_TAB_LOCK_TTL_MS = 12000;
@@ -123,344 +124,35 @@
   let ownsLocalTabLock = false;
   let isCurrentPrimaryLeader = false;
 
+  // Active Deliveries & Transition State
+  const cachedActiveById = new Map();
+  let lastFullActiveSweepAt = 0;
+  let lastKnownActivePages = 10;
+  let prevWatchedPipelineOrders = new Map();
+
+  // On-Demand Modal / Search State
+  let lastOrderDetailReqAt = Date.now() - 10000;
+  let lastCourierDetailReqAt = Date.now() - 10000;
+  let lastRiderSearchReqId = "";
+
+  // Selected-Zones Rolling 2h Completed State
   const rollingCompletedPool = new Map();
   const exactCompletedMetaCache = new Map();
   const lastKnownCompletedPage = {};
-  let lastRollingCompletedSyncAt = 0;
-  let lastDeepCompletedSweepAt = 0;
-  let initialCompletedBackfillDone = false;
+  const backfilledZoneIds = new Set();
+  let currentSyncZoneSig = "";
+  let completedSyncGeneration = 0;
   let isCompletedSyncInProgress = false;
-  let lastCompletedWatchedZoneSig = "";
-  // Exact Completed At Resolver via /orders/detail?code={code} (Polite concurrency + retry)
-  async function resolveExactCompletedMetaForOrders(candidates) {
-    if (!Array.isArray(candidates) || candidates.length === 0) return;
+  let lastRollingCompletedSyncAt = 0;
+  let yesterdayCompletedBackfilledForSig = "";
 
-    for (let i = 0; i < candidates.length; i += 5) {
-      const batch = candidates.slice(i, i + 5);
-      await Promise.allSettled(
-        batch.map(async ({ orderKey, orderCode }) => {
-          if (exactCompletedMetaCache.has(orderKey)) return;
-          for (let attempt = 0; attempt < 2; attempt++) {
-            try {
-              const detailData = await hurrierGet(
-                `/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(orderKey)}`
-              );
-              const dOrder = detailData?.order || detailData || {};
-              const stLower = String(dOrder.status || "").toLowerCase();
-              if (stLower.includes("cancel")) {
-                exactCompletedMetaCache.set(orderKey, {
-                  completedAtMs: 0,
-                  cancelled: true,
-                  cachedAt: Date.now()
-                });
-                return;
-              }
-
-              let exactMs =
-                parseValidTimestampMs(dOrder.current_state_transition) ||
-                parseValidTimestampMs(dOrder.event_timestamp) ||
-                parseValidTimestampMs(dOrder.completed_at) ||
-                parseValidTimestampMs(dOrder.delivered_at);
-
-              if (!exactMs) {
-                try {
-                  const delivData = await hurrierGet(
-                    `/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(orderCode)}`
-                  );
-                  const deliveries = Array.isArray(delivData?.deliveries) ? delivData.deliveries : [];
-                  for (const del of deliveries) {
-                    const transitions = Array.isArray(del?.transitions) ? del.transitions : [];
-                    for (let t = transitions.length - 1; t >= 0; t--) {
-                      const tr = transitions[t];
-                      if (String(tr?.to_state || "").toLowerCase() === "completed") {
-                        exactMs =
-                          parseValidTimestampMs(tr?.metadata?.performed_at) ||
-                          parseValidTimestampMs(tr?.created_at);
-                        if (exactMs) break;
-                      }
-                    }
-                    if (exactMs) break;
-                  }
-                } catch {}
-              }
-
-              if (exactMs > 0) {
-                exactCompletedMetaCache.set(orderKey, {
-                  completedAtMs: exactMs,
-                  cancelled: false,
-                  cachedAt: Date.now()
-                });
-                return;
-              }
-            } catch {
-              if (attempt === 0) {
-                await new Promise((r) => setTimeout(r, 250));
-              }
-            }
-          }
-        })
-      );
-    }
-  }
-
-  // Rolling 2-Hour Completed Orders Pool (Strictly by Exact Completed At, excluding Cancelled)
-  async function ingestCompletedRecordsBatch(records, unionZoneSet, hasManialUnion, hasTahrirUnion) {
-    if (!Array.isArray(records) || records.length === 0) return 0;
-
-    const candidates = [];
-    for (const rec of records) {
-      const order = rec?.order || {};
-      const stLower = String(order.status || rec?.status || "").toLowerCase();
-      if (stLower.includes("cancel")) continue;
-      if (!doesRecordMatchSessionZones(rec, unionZoneSet, hasManialUnion, hasTahrirUnion)) continue;
-
-      const orderKey = String(
-        order.confirmation_number ||
-          order.code ||
-          String(order.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
-          order.id ||
-          ""
-      ).trim();
-      if (!orderKey) continue;
-      const orderCode = String(order.order_code || `HF_EG${orderKey}`).trim();
-      candidates.push({ orderKey, orderCode, rec });
-    }
-
-    if (candidates.length === 0) return 0;
-
-    const uncached = candidates.filter((c) => !exactCompletedMetaCache.has(c.orderKey));
-    if (uncached.length > 0) {
-      await resolveExactCompletedMetaForOrders(uncached);
-    }
-
-    const cutoffMs = Date.now() - ROLLING_COMPLETED_WINDOW_MS - ROLLING_COMPLETED_GRACE_MS;
-    let addedInWindow = 0;
-
-    for (const { orderKey, rec } of candidates) {
-      const meta = exactCompletedMetaCache.get(orderKey);
-      if (meta?.cancelled) {
-        rollingCompletedPool.delete(orderKey);
-        continue;
-      }
-
-      const order = rec?.order || {};
-      const fallbackMs =
-        parseValidTimestampMs(order.scheduled_dropoff_at) ||
-        parseValidTimestampMs(order.placed_at);
-      const completedAtMs = meta?.completedAtMs || fallbackMs;
-
-      if (completedAtMs >= cutoffMs) {
-        rollingCompletedPool.set(orderKey, {
-          ...rec,
-          __completed_at_ms: completedAtMs
-        });
-        addedInWindow++;
-      }
-    }
-
-    return addedInWindow;
-  }
-
-  async function safeFetchCompletedPage(dateStr, page) {
-    const url = `${BASE_API}/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${page}&per_page=50`;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const res = await fetch(url, {
-          method: "GET",
-          credentials: "include",
-          headers: getHurrierAuthHeaders()
-        });
-        if (res.status === 400 || res.status === 404) {
-          return { ok: true, records: [], pastEnd: true };
-        }
-        if (res.status === 429 || res.status >= 500) {
-          await new Promise((r) => setTimeout(r, 350 * (attempt + 1)));
-          continue;
-        }
-        if (!res.ok) return { ok: false, records: null };
-        const data = await res.json();
-        return { ok: true, records: Array.isArray(data?.records) ? data.records : [] };
-      } catch {
-        await new Promise((r) => setTimeout(r, 250));
-      }
-    }
-    return { ok: false, records: null };
-  }
-
-  // Unlimited-page Exponential + Binary Search (Supports 50,000+ pages per day without capping at 450)
-  async function discoverLastCompletedPage(dateStr) {
-    const MAX_DAY_PAGES = 60000;
-    let low = 1;
-    let high = Math.max(1, lastKnownCompletedPage[dateStr] || 16);
-    let lastNonEmptyRecords = [];
-
-    const startRes = await safeFetchCompletedPage(dateStr, high);
-    if (!startRes.ok) {
-      return { ok: false, lastPage: lastKnownCompletedPage[dateStr] || 0, tailRecords: [] };
-    }
-
-    const startRecs = startRes.records || [];
-    if (startRecs.length === 0) {
-      high = Math.max(1, high - 1);
-      if (high === 1) {
-        const p1 = await safeFetchCompletedPage(dateStr, 1);
-        const r1 = p1.ok && Array.isArray(p1.records) ? p1.records : [];
-        if (r1.length > 0) lastKnownCompletedPage[dateStr] = 1;
-        return { ok: p1.ok, lastPage: r1.length > 0 ? 1 : 0, tailRecords: r1 };
-      }
-    } else {
-      low = high;
-      lastNonEmptyRecords = startRecs;
-      if (startRecs.length < 50) {
-        lastKnownCompletedPage[dateStr] = high;
-        return { ok: true, lastPage: high, tailRecords: startRecs };
-      }
-
-      let step = 16;
-      while (high < MAX_DAY_PAGES) {
-        const nextProbe = Math.min(MAX_DAY_PAGES, high + step);
-        const pRes = await safeFetchCompletedPage(dateStr, nextProbe);
-        if (!pRes.ok) break;
-        const pRecs = pRes.records || [];
-        if (pRecs.length > 0) {
-          low = nextProbe;
-          lastNonEmptyRecords = pRecs;
-          if (pRecs.length < 50) {
-            lastKnownCompletedPage[dateStr] = nextProbe;
-            return { ok: true, lastPage: nextProbe, tailRecords: pRecs };
-          }
-          high = nextProbe;
-          step = Math.min(4096, step * 2);
-        } else {
-          high = nextProbe - 1;
-          break;
-        }
-      }
-    }
-
-    let best = low;
-    while (low <= high) {
-      const mid = Math.floor((low + high) / 2);
-      const mRes = await safeFetchCompletedPage(dateStr, mid);
-      if (!mRes.ok) break;
-      const mRecs = mRes.records || [];
-      if (mRecs.length > 0) {
-        best = mid;
-        lastNonEmptyRecords = mRecs;
-        if (mRecs.length < 50) break;
-        low = mid + 1;
-      } else {
-        high = mid - 1;
-      }
-    }
-
-    if (best >= 1) {
-      lastKnownCompletedPage[dateStr] = best;
-    }
-    return { ok: true, lastPage: Math.max(1, best), tailRecords: lastNonEmptyRecords };
-  }
-
-  async function syncRollingCompletedOrdersPool(activeSessions) {
-    if (isCompletedSyncInProgress) return;
-    const now = Date.now();
-    const pruneCutoff = now - ROLLING_COMPLETED_WINDOW_MS - ROLLING_COMPLETED_GRACE_MS;
-    for (const [k, rec] of rollingCompletedPool.entries()) {
-      if ((rec.__completed_at_ms || 0) < pruneCutoff) {
-        rollingCompletedPool.delete(k);
-      }
-    }
-
-    const unionZoneIds = new Set();
-    (Array.isArray(activeSessions) ? activeSessions : []).forEach((s) => {
-      (Array.isArray(s?.zoneIds) ? s.zoneIds : []).forEach((id) => unionZoneIds.add(Number(id)));
-    });
-    if (unionZoneIds.size === 0) return;
-
-    const zoneSig = Array.from(unionZoneIds).sort((a, b) => a - b).join(",");
-    const needBackfill = !initialCompletedBackfillDone || zoneSig !== lastCompletedWatchedZoneSig;
-    const needMediumSweep = !needBackfill && now - lastDeepCompletedSweepAt >= 45000;
-
-    if (!needBackfill && !needMediumSweep && now - lastRollingCompletedSyncAt < 8000) {
-      return;
-    }
-
-    isCompletedSyncInProgress = true;
-    lastRollingCompletedSyncAt = now;
-    if (needBackfill || needMediumSweep) {
-      lastDeepCompletedSweepAt = now;
-    }
-    lastCompletedWatchedZoneSig = zoneSig;
-
+  function getBridgedLeaderEmail() {
     try {
-      const hasManialUnion = MANIAL_FAMILY_IDS.some((id) => unionZoneIds.has(id));
-      const hasTahrirUnion = unionZoneIds.has(10022) || unionZoneIds.has(10163);
-      const { todayStr, yesterdayStr, cairoHour } = getCairoDateStringsForCompleted();
-      const placedCutoffMs = now - 3.5 * 3600 * 1000;
-
-      const scanBackwardsForDate = async (dateStr, maxPagesToWalk) => {
-        const disc = await discoverLastCompletedPage(dateStr);
-        if (!disc.ok || disc.lastPage <= 0) return false;
-
-        if (disc.tailRecords.length > 0) {
-          await ingestCompletedRecordsBatch(
-            disc.tailRecords,
-            unionZoneIds,
-            hasManialUnion,
-            hasTahrirUnion
-          );
-        }
-
-        let curPage = disc.lastPage - 1;
-        let walked = 1;
-        while (curPage >= 1 && walked < maxPagesToWalk) {
-          const batchPages = [];
-          for (
-            let p = curPage;
-            p >= 1 && batchPages.length < 4 && walked < maxPagesToWalk;
-            p--, walked++
-          ) {
-            batchPages.push(p);
-            curPage = p - 1;
-          }
-          const pageResults = await Promise.all(
-            batchPages.map((pg) => safeFetchCompletedPage(dateStr, pg))
-          );
-
-          let reachedOldPlacedOrders = false;
-          for (const pRes of pageResults) {
-            if (pRes.ok && Array.isArray(pRes.records) && pRes.records.length > 0) {
-              await ingestCompletedRecordsBatch(
-                pRes.records,
-                unionZoneIds,
-                hasManialUnion,
-                hasTahrirUnion
-              );
-              const newestInPageMs = parseValidTimestampMs(
-                pRes.records[pRes.records.length - 1]?.order?.placed_at
-              );
-              if (newestInPageMs > 0 && newestInPageMs < placedCutoffMs) {
-                reachedOldPlacedOrders = true;
-              }
-            }
-          }
-          if (reachedOldPlacedOrders) break;
-        }
-        return true;
-      };
-
-      const pagesLimit = needBackfill ? 300 : needMediumSweep ? 80 : 12;
-      const okToday = await scanBackwardsForDate(todayStr, pagesLimit);
-
-      if (cairoHour < 3 && (needBackfill || yesterdayCompletedBackfilledDate !== yesterdayStr)) {
-        const okYest = await scanBackwardsForDate(yesterdayStr, 160);
-        if (okYest) yesterdayCompletedBackfilledDate = yesterdayStr;
-      }
-
-      if (okToday) {
-        initialCompletedBackfillDone = true;
-      }
-    } finally {
-      isCompletedSyncInProgress = false;
+      const raw = GM_getValue(AUTH_BRIDGE_STORAGE_KEY, "");
+      const parsed = raw ? JSON.parse(raw) : null;
+      return String(parsed?.email || "").trim();
+    } catch {
+      return "";
     }
   }
 
@@ -906,72 +598,77 @@
     return { todayStr, yesterdayStr, cairoHour };
   }
 
-  // Exact Completed At Resolver via /orders/detail?code={code} (Cached once per order)
+  // Exact Completed At Resolver for Selected Zones ONLY (Cached once per order)
   async function resolveExactCompletedMetaForOrders(candidates) {
     if (!Array.isArray(candidates) || candidates.length === 0) return;
 
-    for (let i = 0; i < candidates.length; i += 8) {
-      const batch = candidates.slice(i, i + 8);
+    for (let i = 0; i < candidates.length; i += 6) {
+      const batch = candidates.slice(i, i + 6);
       await Promise.allSettled(
         batch.map(async ({ orderKey, orderCode }) => {
           if (exactCompletedMetaCache.has(orderKey)) return;
-          try {
-            const detailData = await hurrierGet(
-              `/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(orderKey)}`
-            );
-            const dOrder = detailData?.order || detailData || {};
-            const stLower = String(dOrder.status || "").toLowerCase();
-            if (stLower.includes("cancel")) {
-              exactCompletedMetaCache.set(orderKey, {
-                completedAtMs: 0,
-                cancelled: true,
-                cachedAt: Date.now()
-              });
-              return;
-            }
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              const detailData = await hurrierGet(
+                `/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(orderKey)}`
+              );
+              const dOrder = detailData?.order || detailData || {};
+              const stLower = String(dOrder.status || "").toLowerCase();
+              if (stLower.includes("cancel")) {
+                exactCompletedMetaCache.set(orderKey, {
+                  completedAtMs: 0,
+                  cancelled: true,
+                  cachedAt: Date.now()
+                });
+                return;
+              }
 
-            let exactMs =
-              parseValidTimestampMs(dOrder.current_state_transition) ||
-              parseValidTimestampMs(dOrder.event_timestamp) ||
-              parseValidTimestampMs(dOrder.completed_at) ||
-              parseValidTimestampMs(dOrder.delivered_at);
+              let exactMs =
+                parseValidTimestampMs(dOrder.current_state_transition) ||
+                parseValidTimestampMs(dOrder.event_timestamp) ||
+                parseValidTimestampMs(dOrder.completed_at) ||
+                parseValidTimestampMs(dOrder.delivered_at);
 
-            if (!exactMs) {
-              try {
-                const delivData = await hurrierGet(
-                  `/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(orderCode)}`
-                );
-                const deliveries = Array.isArray(delivData?.deliveries) ? delivData.deliveries : [];
-                for (const del of deliveries) {
-                  const transitions = Array.isArray(del?.transitions) ? del.transitions : [];
-                  for (let t = transitions.length - 1; t >= 0; t--) {
-                    const tr = transitions[t];
-                    if (String(tr?.to_state || "").toLowerCase() === "completed") {
-                      exactMs =
-                        parseValidTimestampMs(tr?.metadata?.performed_at) ||
-                        parseValidTimestampMs(tr?.created_at);
-                      if (exactMs) break;
+              if (!exactMs) {
+                try {
+                  const delivData = await hurrierGet(
+                    `/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(orderCode)}`
+                  );
+                  const deliveries = Array.isArray(delivData?.deliveries) ? delivData.deliveries : [];
+                  for (const del of deliveries) {
+                    const transitions = Array.isArray(del?.transitions) ? del.transitions : [];
+                    for (let t = transitions.length - 1; t >= 0; t--) {
+                      const tr = transitions[t];
+                      if (String(tr?.to_state || "").toLowerCase() === "completed") {
+                        exactMs =
+                          parseValidTimestampMs(tr?.metadata?.performed_at) ||
+                          parseValidTimestampMs(tr?.created_at);
+                        if (exactMs) break;
+                      }
                     }
+                    if (exactMs) break;
                   }
-                  if (exactMs) break;
-                }
-              } catch {}
-            }
+                } catch {}
+              }
 
-            if (exactMs > 0) {
-              exactCompletedMetaCache.set(orderKey, {
-                completedAtMs: exactMs,
-                cancelled: false,
-                cachedAt: Date.now()
-              });
+              if (exactMs > 0) {
+                exactCompletedMetaCache.set(orderKey, {
+                  completedAtMs: exactMs,
+                  cancelled: false,
+                  cachedAt: Date.now()
+                });
+                return;
+              }
+            } catch {
+              if (attempt === 0) await new Promise((r) => setTimeout(r, 250));
             }
-          } catch {}
+          }
         })
       );
     }
   }
 
-  // Rolling 2-Hour Completed Orders Pool (Strictly by Exact Completed At, excluding Cancelled)
+  // Filter ONLY Selected Zones' Orders & Keep Strictly Last 2h by Completed At
   async function ingestCompletedRecordsBatch(records, unionZoneSet, hasManialUnion, hasTahrirUnion) {
     if (!Array.isArray(records) || records.length === 0) return 0;
 
@@ -1010,14 +707,9 @@
         rollingCompletedPool.delete(orderKey);
         continue;
       }
-
       const order = rec?.order || {};
-      const timings = rec?.primary_delivery_timings || {};
-      const placedMs = parseValidTimestampMs(order.placed_at);
       const fallbackMs =
-        placedMs > 0 && Number(timings.total_time) > 0
-          ? placedMs + Number(timings.total_time) * 1000
-          : placedMs;
+        parseValidTimestampMs(order.scheduled_dropoff_at) || parseValidTimestampMs(order.placed_at);
       const completedAtMs = meta?.completedAtMs || fallbackMs;
 
       if (completedAtMs >= cutoffMs) {
@@ -1028,156 +720,351 @@
         addedInWindow++;
       }
     }
-
     return addedInWindow;
+  }
+
+  async function safeFetchCompletedPage(dateStr, page) {
+    const url = `${BASE_API}/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${page}&per_page=50`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch(url, {
+          method: "GET",
+          credentials: "include",
+          headers: getHurrierAuthHeaders()
+        });
+        if (res.status === 400 || res.status === 404) {
+          return { ok: true, records: [] };
+        }
+        if (res.status === 429 || res.status >= 500) {
+          await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+          continue;
+        }
+        if (!res.ok) return { ok: false, records: null };
+        const data = await res.json();
+        return { ok: true, records: Array.isArray(data?.records) ? data.records : [] };
+      } catch {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    }
+    return { ok: false, records: null };
   }
 
   async function discoverLastCompletedPage(dateStr) {
     let low = 1;
-    let high = Math.max(4, lastKnownCompletedPage[dateStr] || 8);
+    let high = Math.max(1, lastKnownCompletedPage[dateStr] || 16);
     let lastNonEmptyRecords = [];
 
-    try {
-      const probeStart = await hurrierGet(
-        `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${high}&per_page=50`
-      );
-      const startRecs = Array.isArray(probeStart?.records) ? probeStart.records : [];
-      if (startRecs.length === 0) {
-        high = Math.max(1, high - 1);
-      } else {
-        low = high;
-        lastNonEmptyRecords = startRecs;
-        if (startRecs.length < 50) {
-          lastKnownCompletedPage[dateStr] = high;
-          return { lastPage: high, tailRecords: startRecs };
-        }
-        let step = 8;
-        while (high < 450) {
-          const nextProbe = Math.min(450, high + step);
-          const pData = await hurrierGet(
-            `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${nextProbe}&per_page=50`
-          );
-          const pRecs = Array.isArray(pData?.records) ? pData.records : [];
-          if (pRecs.length > 0) {
-            low = nextProbe;
-            lastNonEmptyRecords = pRecs;
-            if (pRecs.length < 50) {
-              lastKnownCompletedPage[dateStr] = nextProbe;
-              return { lastPage: nextProbe, tailRecords: pRecs };
-            }
-            high = nextProbe;
-            step = Math.min(64, step * 2);
-          } else {
-            high = nextProbe - 1;
-            break;
-          }
-        }
-      }
-
-      let best = low;
-      while (low <= high) {
-        const mid = Math.floor((low + high) / 2);
-        const mData = await hurrierGet(
-          `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${mid}&per_page=50`
-        );
-        const mRecs = Array.isArray(mData?.records) ? mData.records : [];
-        if (mRecs.length > 0) {
-          best = mid;
-          lastNonEmptyRecords = mRecs;
-          if (mRecs.length < 50) break;
-          low = mid + 1;
-        } else {
-          high = mid - 1;
-        }
-      }
-
-      lastKnownCompletedPage[dateStr] = Math.max(1, best);
-      return { lastPage: Math.max(1, best), tailRecords: lastNonEmptyRecords };
-    } catch {
-      return { lastPage: lastKnownCompletedPage[dateStr] || 1, tailRecords: [] };
+    const startRes = await safeFetchCompletedPage(dateStr, high);
+    if (!startRes.ok) {
+      return { ok: false, lastPage: lastKnownCompletedPage[dateStr] || 0, tailRecords: [] };
     }
+
+    const startRecs = startRes.records || [];
+    if (startRecs.length === 0) {
+      high = Math.max(1, high - 1);
+      if (high === 1) {
+        const p1 = await safeFetchCompletedPage(dateStr, 1);
+        const r1 = p1.ok && Array.isArray(p1.records) ? p1.records : [];
+        if (r1.length > 0) lastKnownCompletedPage[dateStr] = 1;
+        return { ok: p1.ok, lastPage: r1.length > 0 ? 1 : 0, tailRecords: r1 };
+      }
+    } else {
+      low = high;
+      lastNonEmptyRecords = startRecs;
+      if (startRecs.length < 50) {
+        lastKnownCompletedPage[dateStr] = high;
+        return { ok: true, lastPage: high, tailRecords: startRecs };
+      }
+      let step = 16;
+      while (high < 50000) {
+        const nextProbe = Math.min(50000, high + step);
+        const pRes = await safeFetchCompletedPage(dateStr, nextProbe);
+        if (!pRes.ok) break;
+        const pRecs = pRes.records || [];
+        if (pRecs.length > 0) {
+          low = nextProbe;
+          lastNonEmptyRecords = pRecs;
+          if (pRecs.length < 50) {
+            lastKnownCompletedPage[dateStr] = nextProbe;
+            return { ok: true, lastPage: nextProbe, tailRecords: pRecs };
+          }
+          high = nextProbe;
+          step = Math.min(2048, step * 2);
+        } else {
+          high = nextProbe - 1;
+          break;
+        }
+      }
+    }
+
+    let best = low;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const mRes = await safeFetchCompletedPage(dateStr, mid);
+      if (!mRes.ok) break;
+      const mRecs = mRes.records || [];
+      if (mRecs.length > 0) {
+        best = mid;
+        lastNonEmptyRecords = mRecs;
+        if (mRecs.length < 50) break;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    if (best >= 1) lastKnownCompletedPage[dateStr] = best;
+    return { ok: true, lastPage: Math.max(1, best), tailRecords: lastNonEmptyRecords };
   }
 
-  async function syncRollingCompletedOrdersPool(activeSessions, forceFullBackfill = false) {
-    const now = Date.now();
-    const pruneCutoff = now - ROLLING_COMPLETED_WINDOW_MS - ROLLING_COMPLETED_GRACE_MS;
-    for (const [k, rec] of rollingCompletedPool.entries()) {
-      if ((rec.__completed_at_ms || 0) < pruneCutoff) {
-        rollingCompletedPool.delete(k);
-      }
+  // Instant Capture when an Order in Selected Zones moves from Active/Dispatched -> Completed
+  async function captureRecentlyCompletedFromPipeline(
+    activeRecords,
+    dispatchedRecords,
+    queuedRecords,
+    unionZoneIds
+  ) {
+    if (!unionZoneIds || unionZoneIds.size === 0) {
+      prevWatchedPipelineOrders.clear();
+      return;
     }
 
+    const hasManial = MANIAL_FAMILY_IDS.some((id) => unionZoneIds.has(id));
+    const hasTahrir = unionZoneIds.has(10022) || unionZoneIds.has(10163);
+
+    const currentCodesInPipeline = new Set();
+    const recordCodeOf = (r) =>
+      String(
+        r?.order?.code ||
+          r?.order?.confirmation_number ||
+          String(r?.order?.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+          ""
+      ).trim();
+
+    [...activeRecords, ...dispatchedRecords, ...queuedRecords].forEach((r) => {
+      const c = recordCodeOf(r);
+      if (c) currentCodesInPipeline.add(c);
+    });
+
+    const nextWatchedMap = new Map();
+    [...activeRecords, ...dispatchedRecords].forEach((r) => {
+      if (doesRecordMatchSessionZones(r, unionZoneIds, hasManial, hasTahrir)) {
+        const c = recordCodeOf(r);
+        if (c) nextWatchedMap.set(c, r);
+      }
+    });
+
+    const disappeared = [];
+    for (const [code, prevRec] of prevWatchedPipelineOrders.entries()) {
+      if (!currentCodesInPipeline.has(code) && !rollingCompletedPool.has(code)) {
+        disappeared.push({ code, prevRec });
+      }
+    }
+    prevWatchedPipelineOrders = nextWatchedMap;
+
+    if (disappeared.length === 0) return;
+
+    const cutoffMs = Date.now() - ROLLING_COMPLETED_WINDOW_MS - ROLLING_COMPLETED_GRACE_MS;
+    await Promise.allSettled(
+      disappeared.slice(0, 8).map(async ({ code, prevRec }) => {
+        try {
+          const detailData = await hurrierGet(
+            `/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(code)}`
+          );
+          const dOrder = detailData?.order || detailData || {};
+          const stLower = String(dOrder.status || "").toLowerCase();
+          if (stLower !== "completed") return;
+
+          const exactMs =
+            parseValidTimestampMs(dOrder.current_state_transition) ||
+            parseValidTimestampMs(dOrder.event_timestamp) ||
+            Date.now();
+          if (exactMs < cutoffMs) return;
+
+          exactCompletedMetaCache.set(code, {
+            completedAtMs: exactMs,
+            cancelled: false,
+            cachedAt: Date.now()
+          });
+
+          if (rollingCompletedPool.has(code)) return;
+
+          const placedIso = dOrder.placed_at || prevRec?.order?.send_to_restaurant_at || "";
+          const placedMs = parseValidTimestampMs(placedIso);
+          const sps = Array.isArray(prevRec?.starting_points) ? prevRec.starting_points : [];
+
+          rollingCompletedPool.set(code, {
+            __completed_at_ms: exactMs,
+            starting_points: sps,
+            order: {
+              id: dOrder.order_id || prevRec?.order?.id || code,
+              order_code: dOrder.order_code || prevRec?.order?.order_code || `HF_EG${code}`,
+              confirmation_number: code,
+              vendor_name:
+                dOrder.vendor?.vendor_name ||
+                dOrder.restaurant_name ||
+                prevRec?.order?.vendor_name ||
+                "-",
+              vendor_code: dOrder.vendor?.vendor_code || "",
+              vendor_order_number:
+                dOrder.vendor?.vendor_order_number || prevRec?.order?.vendor_order_number || "-",
+              placed_at: placedIso,
+              total: dOrder.order_value ?? prevRec?.order?.order_value ?? 0,
+              status: "completed",
+              is_preorder: Boolean(dOrder.is_pre_order || prevRec?.order?.is_pre_order),
+              deliveries_dropoff_issues: "",
+              drop_off_address: {
+                city: dOrder.drop_off_address?.city_name || "Cairo",
+                starting_points: sps
+              }
+            },
+            primary_delivery: {
+              courier_name: prevRec?.courier_name || "-",
+              courier_id: prevRec?.courier_id || "",
+              delivery_distance: prevRec?.distance || 0
+            },
+            primary_delivery_timings: {
+              total_time:
+                placedMs > 0 && exactMs >= placedMs ? Math.round((exactMs - placedMs) / 1000) : null
+            }
+          });
+        } catch {}
+      })
+    );
+  }
+
+  // Selected-Zones-Only Completed Pool Sync (Recalculates Immediately When Zones Change)
+  async function syncRollingCompletedOrdersPool(activeSessions) {
+    const now = Date.now();
     const unionZoneIds = new Set();
     (Array.isArray(activeSessions) ? activeSessions : []).forEach((s) => {
       (Array.isArray(s?.zoneIds) ? s.zoneIds : []).forEach((id) => unionZoneIds.add(Number(id)));
     });
-    if (unionZoneIds.size === 0) return;
 
-    const zoneSig = Array.from(unionZoneIds).sort((a, b) => a - b).join(",");
-    const needBackfill =
-      forceFullBackfill || !initialCompletedBackfillDone || zoneSig !== lastCompletedWatchedZoneSig;
-
-    if (!needBackfill && now - lastRollingCompletedSyncAt < ROLLING_COMPLETED_SYNC_MS) {
+    if (unionZoneIds.size === 0) {
+      rollingCompletedPool.clear();
+      backfilledZoneIds.clear();
       return;
     }
 
-    lastRollingCompletedSyncAt = now;
-    lastCompletedWatchedZoneSig = zoneSig;
-
     const hasManialUnion = MANIAL_FAMILY_IDS.some((id) => unionZoneIds.has(id));
     const hasTahrirUnion = unionZoneIds.has(10022) || unionZoneIds.has(10163);
-    const { todayStr, yesterdayStr, cairoHour } = getCairoDateStringsForCompleted();
-    const placedCutoffMs = now - 4 * 3600 * 1000;
+    const pruneCutoff = now - ROLLING_COMPLETED_WINDOW_MS - ROLLING_COMPLETED_GRACE_MS;
 
-    const scanBackwardsForDate = async (dateStr, maxPagesToWalk) => {
-      const { lastPage, tailRecords } = await discoverLastCompletedPage(dateStr);
-      if (tailRecords.length > 0) {
-        await ingestCompletedRecordsBatch(tailRecords, unionZoneIds, hasManialUnion, hasTahrirUnion);
+    // Prune anything older than 2h OR belonging to deselected zones immediately
+    for (const [k, rec] of rollingCompletedPool.entries()) {
+      if (
+        (rec.__completed_at_ms || 0) < pruneCutoff ||
+        !doesRecordMatchSessionZones(rec, unionZoneIds, hasManialUnion, hasTahrirUnion)
+      ) {
+        rollingCompletedPool.delete(k);
       }
-      let curPage = lastPage - 1;
-      let walked = 1;
-      while (curPage >= 1 && walked < maxPagesToWalk) {
-        const batchPages = [];
-        for (let p = curPage; p >= 1 && batchPages.length < 4 && walked < maxPagesToWalk; p--, walked++) {
-          batchPages.push(p);
-          curPage = p - 1;
-        }
-        const settled = await Promise.allSettled(
-          batchPages.map((pg) =>
-            hurrierGet(
-              `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${pg}&per_page=50`
-            )
-          )
-        );
-        let reachedOldPlacedOrders = false;
-        for (const s of settled) {
-          if (s.status === "fulfilled" && Array.isArray(s.value?.records) && s.value.records.length > 0) {
-            await ingestCompletedRecordsBatch(
-              s.value.records,
-              unionZoneIds,
-              hasManialUnion,
-              hasTahrirUnion
-            );
-            const newestInPageMs = parseValidTimestampMs(
-              s.value.records[s.value.records.length - 1]?.order?.placed_at
-            );
-            if (newestInPageMs > 0 && newestInPageMs < placedCutoffMs) {
-              reachedOldPlacedOrders = true;
-            }
-          }
-        }
-        if (reachedOldPlacedOrders) break;
+    }
+    for (const oldZid of Array.from(backfilledZoneIds)) {
+      if (!unionZoneIds.has(oldZid)) {
+        backfilledZoneIds.delete(oldZid);
       }
-    };
-
-    await scanBackwardsForDate(todayStr, needBackfill ? 36 : 4);
-
-    if (cairoHour < 3 && (needBackfill || yesterdayCompletedBackfilledDate !== yesterdayStr)) {
-      await scanBackwardsForDate(yesterdayStr, 16);
-      yesterdayCompletedBackfilledDate = yesterdayStr;
     }
 
-    initialCompletedBackfillDone = true;
+    const zoneSig = Array.from(unionZoneIds).sort((a, b) => a - b).join(",");
+    const hasNewZonesToCalculate = Array.from(unionZoneIds).some((id) => !backfilledZoneIds.has(id));
+
+    // If user changed zones while an old scan was running, abort old scan & start new zones immediately
+    if (isCompletedSyncInProgress) {
+      if (hasNewZonesToCalculate && currentSyncZoneSig !== zoneSig) {
+        completedSyncGeneration++;
+      } else {
+        return;
+      }
+    }
+
+    if (!hasNewZonesToCalculate && now - lastRollingCompletedSyncAt < ROLLING_COMPLETED_SYNC_MS) {
+      return;
+    }
+
+    const myGen = ++completedSyncGeneration;
+    currentSyncZoneSig = zoneSig;
+    isCompletedSyncInProgress = true;
+    lastRollingCompletedSyncAt = now;
+
+    try {
+      const { todayStr, yesterdayStr, cairoHour } = getCairoDateStringsForCompleted();
+      const placedCutoffMs = now - 2.75 * 3600 * 1000;
+
+      const scanSelectedZonesForDate = async (dateStr, maxPagesToWalk) => {
+        const disc = await discoverLastCompletedPage(dateStr);
+        if (myGen !== completedSyncGeneration) return false;
+        if (!disc.ok || disc.lastPage <= 0) return false;
+
+        if (disc.tailRecords.length > 0) {
+          await ingestCompletedRecordsBatch(
+            disc.tailRecords,
+            unionZoneIds,
+            hasManialUnion,
+            hasTahrirUnion
+          );
+        }
+
+        let curPage = disc.lastPage - 1;
+        let walked = 1;
+        while (curPage >= 1 && walked < maxPagesToWalk && myGen === completedSyncGeneration) {
+          const batchPages = [];
+          for (
+            let p = curPage;
+            p >= 1 && batchPages.length < 5 && walked < maxPagesToWalk;
+            p--, walked++
+          ) {
+            batchPages.push(p);
+            curPage = p - 1;
+          }
+          const pageResults = await Promise.all(
+            batchPages.map((pg) => safeFetchCompletedPage(dateStr, pg))
+          );
+          if (myGen !== completedSyncGeneration) return false;
+
+          let reachedOlderThanWindow = false;
+          for (const pRes of pageResults) {
+            if (pRes.ok && Array.isArray(pRes.records) && pRes.records.length > 0) {
+              await ingestCompletedRecordsBatch(
+                pRes.records,
+                unionZoneIds,
+                hasManialUnion,
+                hasTahrirUnion
+              );
+              const newestPlacedMs = parseValidTimestampMs(
+                pRes.records[pRes.records.length - 1]?.order?.placed_at
+              );
+              if (newestPlacedMs > 0 && newestPlacedMs < placedCutoffMs) {
+                reachedOlderThanWindow = true;
+              }
+            }
+          }
+          if (reachedOlderThanWindow) break;
+        }
+        return true;
+      };
+
+      const okToday = await scanSelectedZonesForDate(todayStr, hasNewZonesToCalculate ? 900 : 6);
+
+      if (
+        myGen === completedSyncGeneration &&
+        cairoHour < 3 &&
+        (hasNewZonesToCalculate || yesterdayCompletedBackfilledForSig !== `${yesterdayStr}|${zoneSig}`)
+      ) {
+        const okYest = await scanSelectedZonesForDate(yesterdayStr, 300);
+        if (okYest && myGen === completedSyncGeneration) {
+          yesterdayCompletedBackfilledForSig = `${yesterdayStr}|${zoneSig}`;
+        }
+      }
+
+      if (okToday && myGen === completedSyncGeneration) {
+        unionZoneIds.forEach((id) => backfilledZoneIds.add(id));
+      }
+    } finally {
+      if (myGen === completedSyncGeneration) {
+        isCompletedSyncInProgress = false;
+      }
+    }
   }
 
   function getSessionRollingCompletedPayload(zoneIds) {
@@ -1615,6 +1502,17 @@
         fetchPaginatedDeliveries("/dispatcher-dashboard/deliveries/wait_for_assembled", 15)
       ]);
 
+      const unionWatchedZones = new Set();
+      activeSessions.forEach((s) => {
+        (Array.isArray(s.zoneIds) ? s.zoneIds : []).forEach((id) => unionWatchedZones.add(Number(id)));
+      });
+
+      captureRecentlyCompletedFromPipeline(
+        activeRecords,
+        dispatchedRecords,
+        queuedRecords,
+        unionWatchedZones
+      ).catch(() => {});
       syncRollingCompletedOrdersPool(activeSessions).catch(() => {});
 
       const tabAllRecords = {
@@ -1682,6 +1580,7 @@
           updatedAt: Date.now(),
           tabRecords: filteredTabRecords,
           completedRecords,
+          completedSyncing: isCompletedSyncInProgress,
           issues: allIssues,
           couriers: Array.from(courierMap.values()),
           zoneStats: filteredZoneStats,
