@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      8.7
-// @description  [v8.7] Exact Completed At via current_state_transition + Version-Priority Leader Lock + Full Active Sync
+// @version      8.9
+// @description  [v8.9] Real Courier Status (Temporary Not Working + Reason/Until) + Continuous Leader Lock Heartbeat
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "8.7";
+  const SCRIPT_VERSION = "8.9";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
@@ -115,9 +115,13 @@
 
   const TAB_INSTANCE_ID = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const LOCAL_TAB_LOCK_KEY = "hurrier_live_sync_local_tab_lock";
+  const LOCAL_TAB_LOCK_TTL_MS = 12000;
+  const FEEDER_LOCK_TTL_MS = 15000;
   let remoteAvailableVersion = "";
   let citiesSyncedOnce = false;
   let isSyncInProgress = false;
+  let ownsLocalTabLock = false;
+  let isCurrentPrimaryLeader = false;
 
   const rollingCompletedPool = new Map();
   const exactCompletedMetaCache = new Map();
@@ -135,25 +139,71 @@
   let lastRiderSearchReqId = "";
   let yesterdayCompletedBackfilledDate = "";
 
+  function getBridgedLeaderEmail() {
+    try {
+      const raw = GM_getValue(AUTH_BRIDGE_STORAGE_KEY, "");
+      const parsed = raw ? JSON.parse(raw) : null;
+      return String(parsed?.email || "").trim();
+    } catch {
+      return "";
+    }
+  }
+
   function acquireSamePcTabLock() {
     try {
       const now = Date.now();
       const raw = window.localStorage.getItem(LOCAL_TAB_LOCK_KEY);
       const parsed = raw ? JSON.parse(raw) : null;
-      if (parsed && parsed.tabId && parsed.tabId !== TAB_INSTANCE_ID && now - (parsed.ts || 0) < 6000) {
+      if (
+        parsed &&
+        parsed.tabId &&
+        parsed.tabId !== TAB_INSTANCE_ID &&
+        now - (parsed.ts || 0) < LOCAL_TAB_LOCK_TTL_MS
+      ) {
+        ownsLocalTabLock = false;
+        isCurrentPrimaryLeader = false;
         return false;
       }
       window.localStorage.setItem(
         LOCAL_TAB_LOCK_KEY,
         JSON.stringify({ tabId: TAB_INSTANCE_ID, ts: now })
       );
+      ownsLocalTabLock = true;
       return true;
     } catch {
+      ownsLocalTabLock = true;
       return true;
     }
   }
 
+  // Independent heartbeat so long (>6s) sync cycles NEVER lose local tab lock or /feeder_lock
+  setInterval(() => {
+    const now = Date.now();
+    if (ownsLocalTabLock) {
+      try {
+        const raw = window.localStorage.getItem(LOCAL_TAB_LOCK_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (!parsed || parsed.tabId === TAB_INSTANCE_ID) {
+          window.localStorage.setItem(
+            LOCAL_TAB_LOCK_KEY,
+            JSON.stringify({ tabId: TAB_INSTANCE_ID, ts: now })
+          );
+        }
+      } catch {}
+    }
+    if (ownsLocalTabLock && isCurrentPrimaryLeader) {
+      fbDb("PUT", "/feeder_lock", {
+        leaderId: TAB_INSTANCE_ID,
+        leaderEmail: getBridgedLeaderEmail(),
+        version: SCRIPT_VERSION,
+        ts: now
+      }).catch(() => {});
+    }
+  }, 2500);
+
   window.addEventListener("beforeunload", () => {
+    ownsLocalTabLock = false;
+    isCurrentPrimaryLeader = false;
     try {
       const raw = window.localStorage.getItem(LOCAL_TAB_LOCK_KEY);
       const parsed = raw ? JSON.parse(raw) : null;
@@ -609,19 +659,13 @@
   // Rolling 2-Hour Completed Orders Pool (Strictly by Exact Completed At, excluding Cancelled)
   async function ingestCompletedRecordsBatch(records, unionZoneSet, hasManialUnion, hasTahrirUnion) {
     if (!Array.isArray(records) || records.length === 0) return 0;
-    const cutoffMs = Date.now() - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
-    const needExactFetch = [];
-    const matchedItems = [];
 
+    const candidates = [];
     for (const rec of records) {
-      if (!rec || typeof rec !== "object") continue;
-      const order = rec.order || {};
-      const stLower = String(order.status || rec.status || "").toLowerCase();
+      const order = rec?.order || {};
+      const stLower = String(order.status || rec?.status || "").toLowerCase();
       if (stLower.includes("cancel")) continue;
-
-      if (!doesRecordMatchSessionZones(rec, unionZoneSet, hasManialUnion, hasTahrirUnion)) {
-        continue;
-      }
+      if (!doesRecordMatchSessionZones(rec, unionZoneSet, hasManialUnion, hasTahrirUnion)) continue;
 
       const orderKey = String(
         order.confirmation_number ||
@@ -631,238 +675,447 @@
           ""
       ).trim();
       if (!orderKey) continue;
-
       const orderCode = String(order.order_code || `HF_EG${orderKey}`).trim();
-      matchedItems.push({ orderKey, orderCode, rec });
-
-      if (!exactCompletedMetaCache.has(orderKey)) {
-        needExactFetch.push({ orderKey, orderCode });
-      }
+      candidates.push({ orderKey, orderCode, rec });
     }
 
-    if (needExactFetch.length > 0) {
-      await resolveExactCompletedMetaForOrders(needExactFetch);
+    if (candidates.length === 0) return 0;
+
+    const uncached = candidates.filter((c) => !exactCompletedMetaCache.has(c.orderKey));
+    if (uncached.length > 0) {
+      await resolveExactCompletedMetaForOrders(uncached);
     }
 
-    let added = 0;
-    for (const { orderKey, rec } of matchedItems) {
+    const cutoffMs = Date.now() - ROLLING_COMPLETED_WINDOW_MS - ROLLING_COMPLETED_GRACE_MS;
+    let addedInWindow = 0;
+
+    for (const { orderKey, rec } of candidates) {
       const meta = exactCompletedMetaCache.get(orderKey);
-      if (!meta || meta.cancelled || !meta.completedAtMs) continue;
-      if (meta.completedAtMs < cutoffMs) {
+      if (meta?.cancelled) {
         rollingCompletedPool.delete(orderKey);
         continue;
       }
 
-      const spMeta = extractRecordStartingPointsMeta(rec);
-      rollingCompletedPool.set(orderKey, {
-        completedAtMs: meta.completedAtMs,
-        spIds: spMeta.ids,
-        spNames: spMeta.names,
-        rec: {
+      const order = rec?.order || {};
+      const timings = rec?.primary_delivery_timings || {};
+      const placedMs = parseValidTimestampMs(order.placed_at);
+      const fallbackMs =
+        placedMs > 0 && Number(timings.total_time) > 0
+          ? placedMs + Number(timings.total_time) * 1000
+          : placedMs;
+      const completedAtMs = meta?.completedAtMs || fallbackMs;
+
+      if (completedAtMs >= cutoffMs) {
+        rollingCompletedPool.set(orderKey, {
           ...rec,
-          __completed_at_ms: meta.completedAtMs
-        }
-      });
-      added++;
+          __completed_at_ms: completedAtMs
+        });
+        addedInWindow++;
+      }
     }
-    return added;
+
+    return addedInWindow;
   }
 
-  async function pullCompletedWindowForDate(
-    dateStr,
-    minPlacedCutoffMs,
-    isIncremental,
-    unionZoneSet,
-    hasManialUnion,
-    hasTahrirUnion
-  ) {
+  async function discoverLastCompletedPage(dateStr) {
+    let low = 1;
+    let high = Math.max(4, lastKnownCompletedPage[dateStr] || 8);
+    let lastNonEmptyRecords = [];
+
     try {
-      const fetchCompPage = async (pg) => {
-        const res = await hurrierGet(
-          `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${pg}&per_page=50`
-        );
-        return Array.isArray(res?.records) ? res.records : [];
-      };
-
-      let lastPage = lastKnownCompletedPage[dateStr] || 0;
-
-      if (lastPage > 0) {
-        while (lastPage < 2000) {
-          const recs = await fetchCompPage(lastPage);
-          await ingestCompletedRecordsBatch(recs, unionZoneSet, hasManialUnion, hasTahrirUnion);
-          if (recs.length < 50) break;
-          const nextProbe = await fetchCompPage(lastPage + 1);
-          await ingestCompletedRecordsBatch(nextProbe, unionZoneSet, hasManialUnion, hasTahrirUnion);
-          if (nextProbe.length === 0) break;
-          lastPage += 1;
-          if (nextProbe.length < 50) break;
-        }
+      const probeStart = await hurrierGet(
+        `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${high}&per_page=50`
+      );
+      const startRecs = Array.isArray(probeStart?.records) ? probeStart.records : [];
+      if (startRecs.length === 0) {
+        high = Math.max(1, high - 1);
       } else {
-        const p1 = await fetchCompPage(1);
-        if (p1.length === 0) return;
-        if (p1.length < 50) {
-          await ingestCompletedRecordsBatch(p1, unionZoneSet, hasManialUnion, hasTahrirUnion);
-          lastKnownCompletedPage[dateStr] = 1;
-          return;
+        low = high;
+        lastNonEmptyRecords = startRecs;
+        if (startRecs.length < 50) {
+          lastKnownCompletedPage[dateStr] = high;
+          return { lastPage: high, tailRecords: startRecs };
         }
-
-        let lo = 1;
-        let hi = 0;
-        const probes = [8, 24, 64, 150, 320, 650, 1200];
-        for (const probePg of probes) {
-          const recs = await fetchCompPage(probePg);
-          if (recs.length === 50) {
-            lo = probePg;
-          } else if (recs.length > 0) {
-            lastPage = probePg;
-            break;
-          } else {
-            hi = probePg;
-            break;
-          }
-        }
-
-        if (!lastPage) {
-          if (!hi) {
-            lastPage = lo;
-          } else {
-            while (lo + 1 < hi) {
-              const mid = Math.floor((lo + hi) / 2);
-              const recs = await fetchCompPage(mid);
-              if (recs.length === 0) {
-                hi = mid;
-              } else if (recs.length < 50) {
-                lo = mid;
-                break;
-              } else {
-                lo = mid;
-              }
+        let step = 8;
+        while (high < 450) {
+          const nextProbe = Math.min(450, high + step);
+          const pData = await hurrierGet(
+            `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${nextProbe}&per_page=50`
+          );
+          const pRecs = Array.isArray(pData?.records) ? pData.records : [];
+          if (pRecs.length > 0) {
+            low = nextProbe;
+            lastNonEmptyRecords = pRecs;
+            if (pRecs.length < 50) {
+              lastKnownCompletedPage[dateStr] = nextProbe;
+              return { lastPage: nextProbe, tailRecords: pRecs };
             }
-            lastPage = lo;
+            high = nextProbe;
+            step = Math.min(64, step * 2);
+          } else {
+            high = nextProbe - 1;
+            break;
           }
         }
       }
 
-      if (lastPage < 1) lastPage = 1;
-      lastKnownCompletedPage[dateStr] = lastPage;
-
-      const maxPagesToScanBack = isIncremental ? 6 : 80;
-      const minPage = Math.max(1, lastPage - maxPagesToScanBack + 1);
-      let stopScanning = false;
-
-      for (let cursor = lastPage; cursor >= minPage && !stopScanning; cursor -= 5) {
-        const batchPages = [];
-        for (let p = cursor; p >= Math.max(minPage, cursor - 4); p--) {
-          batchPages.push(p);
-        }
-        const results = await Promise.allSettled(batchPages.map((p) => fetchCompPage(p)));
-        for (const r of results) {
-          if (r.status === "fulfilled" && Array.isArray(r.value) && r.value.length > 0) {
-            await ingestCompletedRecordsBatch(r.value, unionZoneSet, hasManialUnion, hasTahrirUnion);
-            const firstPlacedIso = r.value[0]?.order?.placed_at;
-            const firstPlacedMs = firstPlacedIso ? new Date(firstPlacedIso).getTime() : 0;
-            if (!isIncremental && firstPlacedMs > 0 && firstPlacedMs < minPlacedCutoffMs) {
-              stopScanning = true;
-            }
-          }
+      let best = low;
+      while (low <= high) {
+        const mid = Math.floor((low + high) / 2);
+        const mData = await hurrierGet(
+          `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${mid}&per_page=50`
+        );
+        const mRecs = Array.isArray(mData?.records) ? mData.records : [];
+        if (mRecs.length > 0) {
+          best = mid;
+          lastNonEmptyRecords = mRecs;
+          if (mRecs.length < 50) break;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
         }
       }
-    } catch {}
+
+      lastKnownCompletedPage[dateStr] = Math.max(1, best);
+      return { lastPage: Math.max(1, best), tailRecords: lastNonEmptyRecords };
+    } catch {
+      return { lastPage: lastKnownCompletedPage[dateStr] || 1, tailRecords: [] };
+    }
   }
 
-  async function syncRollingCompletedOrdersPool(activeSessions, force = false) {
+  async function syncRollingCompletedOrdersPool(activeSessions, forceFullBackfill = false) {
     const now = Date.now();
-    const expireCutoff = now - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
-
-    for (const [k, entry] of rollingCompletedPool.entries()) {
-      if (!entry || entry.completedAtMs < expireCutoff) {
+    const pruneCutoff = now - ROLLING_COMPLETED_WINDOW_MS - ROLLING_COMPLETED_GRACE_MS;
+    for (const [k, rec] of rollingCompletedPool.entries()) {
+      if ((rec.__completed_at_ms || 0) < pruneCutoff) {
         rollingCompletedPool.delete(k);
       }
     }
-    for (const [k, meta] of exactCompletedMetaCache.entries()) {
-      if (!meta || now - (meta.cachedAt || 0) > 6 * 3600 * 1000) {
-        exactCompletedMetaCache.delete(k);
-      }
-    }
 
-    const unionZoneSet = new Set();
+    const unionZoneIds = new Set();
     (Array.isArray(activeSessions) ? activeSessions : []).forEach((s) => {
-      (Array.isArray(s?.zoneIds) ? s.zoneIds : []).forEach((id) => unionZoneSet.add(Number(id)));
+      (Array.isArray(s?.zoneIds) ? s.zoneIds : []).forEach((id) => unionZoneIds.add(Number(id)));
     });
-    const zoneSig = Array.from(unionZoneSet).sort((a, b) => a - b).join(",");
-    const zonesChanged = zoneSig !== lastCompletedWatchedZoneSig;
+    if (unionZoneIds.size === 0) return;
 
-    if (!force && !zonesChanged && now - lastRollingCompletedSyncAt < ROLLING_COMPLETED_SYNC_MS) {
+    const zoneSig = Array.from(unionZoneIds).sort((a, b) => a - b).join(",");
+    const needBackfill =
+      forceFullBackfill || !initialCompletedBackfillDone || zoneSig !== lastCompletedWatchedZoneSig;
+
+    if (!needBackfill && now - lastRollingCompletedSyncAt < ROLLING_COMPLETED_SYNC_MS) {
       return;
     }
+
     lastRollingCompletedSyncAt = now;
-    if (zonesChanged) {
-      lastCompletedWatchedZoneSig = zoneSig;
-      initialCompletedBackfillDone = false;
-      yesterdayCompletedBackfilledDate = "";
-    }
+    lastCompletedWatchedZoneSig = zoneSig;
 
-    const hasManialUnion = MANIAL_FAMILY_IDS.some((id) => unionZoneSet.has(id));
-    const hasTahrirUnion = unionZoneSet.has(10022) || unionZoneSet.has(10163);
-
+    const hasManialUnion = MANIAL_FAMILY_IDS.some((id) => unionZoneIds.has(id));
+    const hasTahrirUnion = unionZoneIds.has(10022) || unionZoneIds.has(10163);
     const { todayStr, yesterdayStr, cairoHour } = getCairoDateStringsForCompleted();
-    const minPlacedCutoffMs = now - 4.5 * 3600 * 1000;
-    const isIncremental = initialCompletedBackfillDone && rollingCompletedPool.size > 0;
+    const placedCutoffMs = now - 4 * 3600 * 1000;
 
-    await pullCompletedWindowForDate(
-      todayStr,
-      minPlacedCutoffMs,
-      isIncremental,
-      unionZoneSet,
-      hasManialUnion,
-      hasTahrirUnion
-    );
+    const scanBackwardsForDate = async (dateStr, maxPagesToWalk) => {
+      const { lastPage, tailRecords } = await discoverLastCompletedPage(dateStr);
+      if (tailRecords.length > 0) {
+        await ingestCompletedRecordsBatch(tailRecords, unionZoneIds, hasManialUnion, hasTahrirUnion);
+      }
+      let curPage = lastPage - 1;
+      let walked = 1;
+      while (curPage >= 1 && walked < maxPagesToWalk) {
+        const batchPages = [];
+        for (let p = curPage; p >= 1 && batchPages.length < 4 && walked < maxPagesToWalk; p--, walked++) {
+          batchPages.push(p);
+          curPage = p - 1;
+        }
+        const settled = await Promise.allSettled(
+          batchPages.map((pg) =>
+            hurrierGet(
+              `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${pg}&per_page=50`
+            )
+          )
+        );
+        let reachedOldPlacedOrders = false;
+        for (const s of settled) {
+          if (s.status === "fulfilled" && Array.isArray(s.value?.records) && s.value.records.length > 0) {
+            await ingestCompletedRecordsBatch(
+              s.value.records,
+              unionZoneIds,
+              hasManialUnion,
+              hasTahrirUnion
+            );
+            const newestInPageMs = parseValidTimestampMs(
+              s.value.records[s.value.records.length - 1]?.order?.placed_at
+            );
+            if (newestInPageMs > 0 && newestInPageMs < placedCutoffMs) {
+              reachedOldPlacedOrders = true;
+            }
+          }
+        }
+        if (reachedOldPlacedOrders) break;
+      }
+    };
 
-    if (cairoHour < 5 && yesterdayCompletedBackfilledDate !== yesterdayStr) {
-      await pullCompletedWindowForDate(
-        yesterdayStr,
-        minPlacedCutoffMs,
-        false,
-        unionZoneSet,
-        hasManialUnion,
-        hasTahrirUnion
-      );
+    await scanBackwardsForDate(todayStr, needBackfill ? 36 : 4);
+
+    if (cairoHour < 3 && (needBackfill || yesterdayCompletedBackfilledDate !== yesterdayStr)) {
+      await scanBackwardsForDate(yesterdayStr, 16);
       yesterdayCompletedBackfilledDate = yesterdayStr;
     }
 
     initialCompletedBackfillDone = true;
   }
 
-  function getSessionRollingCompletedPayload(sessionZoneIds) {
-    const cutoffMs = Date.now() - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
-    const targetSet = new Set((Array.isArray(sessionZoneIds) ? sessionZoneIds : []).map(Number));
+  function getSessionRollingCompletedPayload(zoneIds) {
+    const targetSet = new Set((Array.isArray(zoneIds) ? zoneIds : []).map(Number));
     const hasManialSelected = MANIAL_FAMILY_IDS.some((id) => targetSet.has(id));
     const hasTahrirSelected = targetSet.has(10022) || targetSet.has(10163);
-    const matched = [];
+    const cutoffMs = Date.now() - ROLLING_COMPLETED_WINDOW_MS - ROLLING_COMPLETED_GRACE_MS;
 
-    for (const entry of rollingCompletedPool.values()) {
-      if (!entry || entry.completedAtMs < cutoffMs) continue;
-      if (targetSet.size === 0 || (entry.spIds.size === 0 && (!entry.spNames || entry.spNames.length === 0))) {
-        matched.push(entry.rec);
-      } else {
-        let ok = false;
-        for (const id of entry.spIds) {
-          if (targetSet.has(id)) {
-            ok = true;
+    return Array.from(rollingCompletedPool.values())
+      .filter(
+        (rec) =>
+          (rec.__completed_at_ms || 0) >= cutoffMs &&
+          doesRecordMatchSessionZones(rec, targetSet, hasManialSelected, hasTahrirSelected)
+      )
+      .sort((a, b) => (b.__completed_at_ms || 0) - (a.__completed_at_ms || 0));
+  }
+
+  function unwrapCourierObj(raw) {
+    let cur = raw;
+    let guard = 0;
+    while (
+      cur &&
+      typeof cur === "object" &&
+      !Array.isArray(cur) &&
+      (cur.courier || cur.data) &&
+      typeof (cur.courier || cur.data) === "object" &&
+      guard < 4
+    ) {
+      cur = cur.courier || cur.data;
+      guard++;
+    }
+    return cur && typeof cur === "object" ? cur : null;
+  }
+
+  function extractNormalizedCourierSummary(raw) {
+    const c = unwrapCourierObj(raw) || {};
+    let tnwSub = null;
+    const subKeys = [
+      "temp_not_working",
+      "temporary_not_working",
+      "temp_break",
+      "temporary_break",
+      "not_working",
+      "not_working_status",
+      "break_info",
+      "current_break",
+      "status_info",
+      "state_info",
+      "availability"
+    ];
+    for (const k of subKeys) {
+      if (c[k] && typeof c[k] === "object" && !Array.isArray(c[k])) {
+        tnwSub = c[k];
+        break;
+      }
+    }
+    if (!tnwSub && c.current_shift && typeof c.current_shift === "object") {
+      for (const k of subKeys) {
+        if (c.current_shift[k] && typeof c.current_shift[k] === "object") {
+          tnwSub = c.current_shift[k];
+          break;
+        }
+      }
+    }
+
+    const statusObj =
+      typeof c.status === "object" && c.status !== null
+        ? c.status
+        : typeof c.state === "object" && c.state !== null
+        ? c.state
+        : null;
+
+    const statusUntil = String(
+      tnwSub?.until ||
+        tnwSub?.end_at ||
+        tnwSub?.ends_at ||
+        tnwSub?.end_time ||
+        tnwSub?.expires_at ||
+        c.temp_not_working_until ||
+        c.temporary_not_working_until ||
+        c.not_working_until ||
+        c.status_until ||
+        c.state_until ||
+        c.break_until ||
+        statusObj?.until ||
+        statusObj?.end_at ||
+        ""
+    ).trim();
+
+    const validUntil =
+      statusUntil &&
+      !statusUntil.startsWith("0001-01-01") &&
+      (/^\d{1,2}:\d{2}/.test(statusUntil) || parseValidTimestampMs(statusUntil) > Date.now() - 60000);
+
+    const performedBy = String(
+      tnwSub?.performed_by ||
+        tnwSub?.created_by ||
+        tnwSub?.actor ||
+        c.temp_not_working_performed_by ||
+        c.not_working_performed_by ||
+        c.status_performed_by ||
+        c.performed_by ||
+        statusObj?.performed_by ||
+        ""
+    ).trim();
+
+    const statusReason = String(
+      tnwSub?.reason ||
+        tnwSub?.reason_text ||
+        tnwSub?.title ||
+        c.temp_not_working_reason ||
+        c.not_working_reason ||
+        c.status_reason ||
+        c.break_reason ||
+        c.reason ||
+        statusObj?.reason ||
+        ""
+    ).trim();
+
+    const tnwActive =
+      c.is_temp_not_working === true ||
+      c.is_temporary_not_working === true ||
+      c.temp_not_working === true ||
+      c.temporary_not_working === true ||
+      (tnwSub &&
+        tnwSub.active !== false &&
+        tnwSub.is_active !== false &&
+        tnwSub.enabled !== false &&
+        (tnwSub.active === true || tnwSub.is_active === true || validUntil || Boolean(statusReason)));
+
+    const rawSt =
+      [
+        typeof c.temporary_not_working === "string" ? c.temporary_not_working : "",
+        typeof c.temp_not_working === "string" ? c.temp_not_working : "",
+        statusObj?.state,
+        statusObj?.status,
+        statusObj?.name,
+        typeof c.state === "string" ? c.state : "",
+        typeof c.courier_state === "string" ? c.courier_state : "",
+        typeof c.working_state === "string" ? c.working_state : "",
+        typeof c.current_state === "string" ? c.current_state : "",
+        typeof c.status === "string" ? c.status : "",
+        typeof c.courier_status === "string" ? c.courier_status : "",
+        typeof c.working_status === "string" ? c.working_status : "",
+        typeof c.availability_status === "string" ? c.availability_status : "",
+        typeof c.shift_status === "string" ? c.shift_status : "",
+        c.current_shift?.status,
+        c.current_shift?.state
+      ].find((s) => typeof s === "string" && s.trim() !== "") || "";
+
+    const stLower = rawSt.toLowerCase();
+    let status = "Working";
+    if (
+      tnwActive ||
+      stLower.includes("temp_not_working") ||
+      stLower.includes("temporary_not_working") ||
+      stLower.includes("temporary not working") ||
+      stLower.includes("temp_break")
+    ) {
+      status = "Temporary not working";
+    } else if (
+      stLower === "not_working" ||
+      stLower === "not working" ||
+      stLower.includes("offline") ||
+      stLower.includes("unavailable") ||
+      (!stLower && c.is_working === false)
+    ) {
+      status = "Not working";
+    } else if (stLower === "break" || stLower === "on_break" || stLower === "on break") {
+      status = "On Break";
+    } else if (stLower.includes("ending")) {
+      status = "Ending";
+    } else if (stLower.includes("starting")) {
+      status = "Starting";
+    } else if (rawSt) {
+      status = rawSt
+        .split("_")
+        .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : ""))
+        .join(" ");
+    }
+
+    return {
+      courierId: String(c.id || c.courier_id || ""),
+      userId: String(c.user_id || c.userId || c.id || ""),
+      name: String(c.name || c.courier_name || "").trim(),
+      phone: String(c.phone_number || c.mobile || c.phone || "").trim(),
+      vehicle: String(c.vehicle_type || c.vehicle?.name || (typeof c.vehicle === "string" ? c.vehicle : "") || "Motorbike").trim(),
+      contract: String(c.contract_type || c.contract?.name || (typeof c.contract === "string" ? c.contract : "") || c.employment_type || "").trim(),
+      balance: c.balance ?? c.wallet_balance ?? c.cash_balance ?? null,
+      status,
+      statusUntil: statusUntil && !statusUntil.startsWith("0001-01-01") ? statusUntil : "",
+      performedBy,
+      statusReason
+    };
+  }
+
+  async function fetchFullHurrierCourier(cid, courierName = "") {
+    const cleanId = String(cid || "").trim();
+    const endpoints = [
+      `/dispatcher-dashboard/couriers/${encodeURIComponent(cleanId)}`,
+      `/dispatcher-dashboard/couriers/detail?id=${encodeURIComponent(cleanId)}`,
+      `/hurrier/v1/couriers/${encodeURIComponent(cleanId)}`
+    ];
+
+    let merged = {};
+    for (const ep of endpoints) {
+      try {
+        const res = await hurrierGet(ep);
+        const unwrapped = unwrapCourierObj(res);
+        if (unwrapped && Object.keys(unwrapped).length > 0) {
+          merged = { ...merged, ...unwrapped };
+          if (merged.user_id || merged.phone_number || merged.status || merged.state || merged.temp_not_working) {
             break;
           }
         }
-        if (!ok && hasManialSelected && Array.isArray(entry.spNames) && entry.spNames.some((n) => n.includes("manial"))) {
-          ok = true;
-        }
-        if (!ok && hasTahrirSelected && Array.isArray(entry.spNames) && entry.spNames.some((n) => n.startsWith("tahrir"))) {
-          ok = true;
-        }
-        if (ok) matched.push(entry.rec);
+      } catch {}
+    }
+
+    if (!merged.user_id || !merged.phone_number || (!merged.status && !merged.state)) {
+      const queries = [cleanId, String(courierName || "").trim()].filter(Boolean);
+      for (const q of queries) {
+        try {
+          const searchRes = await hurrierGet(
+            `/dispatcher-dashboard/couriers?search=${encodeURIComponent(q)}&per_page=15`
+          );
+          const recs = Array.isArray(searchRes?.records)
+            ? searchRes.records
+            : Array.isArray(searchRes?.couriers)
+            ? searchRes.couriers
+            : Array.isArray(searchRes)
+            ? searchRes
+            : [];
+          const hit =
+            recs.find((r) => String(r.id) === cleanId || String(r.user_id) === cleanId) || recs[0];
+          if (hit) {
+            const hitUnwrapped = unwrapCourierObj(hit) || hit;
+            merged = { ...hitUnwrapped, ...merged };
+            if (hit.id && String(hit.id) !== cleanId && !merged.temp_not_working) {
+              try {
+                const byRealId = await hurrierGet(
+                  `/dispatcher-dashboard/couriers/${encodeURIComponent(hit.id)}`
+                );
+                const unwReal = unwrapCourierObj(byRealId);
+                if (unwReal) merged = { ...merged, ...unwReal };
+              } catch {}
+            }
+            break;
+          }
+        } catch {}
       }
     }
-    matched.sort((a, b) => (b.__completed_at_ms || 0) - (a.__completed_at_ms || 0));
-    return matched;
+
+    return Object.keys(merged).length > 0 ? merged : null;
   }
 
   async function processOnDemandDashboardRequests() {
@@ -888,7 +1141,7 @@
         });
       }
 
-      // 2) Courier Details
+      // 2) Courier Details (Unwrapped + Normalized with Real Status & Temporary Not Working)
       if (
         cfg.courier_detail_req &&
         cfg.courier_detail_req.requestedAt > lastCourierDetailReqAt &&
@@ -896,37 +1149,40 @@
       ) {
         lastCourierDetailReqAt = cfg.courier_detail_req.requestedAt;
         const cid = String(cfg.courier_detail_req.courierId).trim();
-        let cData = null;
-        try {
-          cData = await hurrierGet(`/dispatcher-dashboard/couriers/${encodeURIComponent(cid)}`);
-        } catch {
-          try {
-            const searchRes = await hurrierGet(`/dispatcher-dashboard/couriers?search=${encodeURIComponent(cid)}&per_page=10`);
-            const recs = Array.isArray(searchRes?.records) ? searchRes.records : [];
-            cData = recs.find((r) => String(r.id) === cid || String(r.user_id) === cid) || recs[0] || null;
-          } catch {}
-        }
+        const cName = String(cfg.courier_detail_req.courierName || "").trim();
+        const cData = await fetchFullHurrierCourier(cid, cName);
+        const normalized = cData ? extractNormalizedCourierSummary(cData) : null;
         await fbDb("PUT", `/courier_details/${encodeURIComponent(cid)}`, {
           courier: cData,
+          normalized,
           updatedAt: Date.now()
         });
       }
 
-      // 3) Live Rider Search
+      // 3) Live Rider Search (Enriched with Real Courier Status)
       if (cfg.rider_search_req && cfg.rider_search_req.reqId && cfg.rider_search_req.reqId !== lastRiderSearchReqId) {
         lastRiderSearchReqId = cfg.rider_search_req.reqId;
         const q = String(cfg.rider_search_req.query || "").trim();
         let results = [];
         try {
           const sRes = await hurrierGet(`/dispatcher-dashboard/couriers?search=${encodeURIComponent(q)}&per_page=25`);
-          const recs = Array.isArray(sRes?.records) ? sRes.records : Array.isArray(sRes) ? sRes : [];
-          results = recs.map((r) => ({
-            courierId: String(r.id || r.courier_id || ""),
-            userId: String(r.user_id || r.id || ""),
-            name: String(r.name || r.courier_name || ""),
-            phone: String(r.phone_number || r.mobile || r.phone || ""),
-            status: String(r.status || r.shift_status || "Working")
-          }));
+          const recs = Array.isArray(sRes?.records)
+            ? sRes.records
+            : Array.isArray(sRes?.couriers)
+            ? sRes.couriers
+            : Array.isArray(sRes)
+            ? sRes
+            : [];
+          const enrichedTop = await Promise.all(
+            recs.slice(0, 6).map(async (r) => {
+              const rid = String(r.id || r.courier_id || "").trim();
+              if (!rid) return extractNormalizedCourierSummary(r);
+              const full = await fetchFullHurrierCourier(rid, r.name || r.courier_name || "");
+              return extractNormalizedCourierSummary(full ? { ...r, ...full } : r);
+            })
+          );
+          const rest = recs.slice(6).map((r) => extractNormalizedCourierSummary(r));
+          results = [...enrichedTop, ...rest];
         } catch {}
         await fbDb("PUT", "/config/rider_search_res", {
           reqId: lastRiderSearchReqId,
@@ -944,12 +1200,13 @@
 
     try {
       if (!acquireSamePcTabLock()) {
-        setBadge("#475569", `v${SCRIPT_VERSION} [Local Tab Standby]`);
+        setBadge("#475569", `v${SCRIPT_VERSION} [2nd Tab Standby • Sync Active in Tab 1]`);
         return;
       }
 
       const fbToken = await getValidFirebaseToken(false);
       if (!fbToken) {
+        isCurrentPrimaryLeader = false;
         setBadge("#92400e", `v${SCRIPT_VERSION} Standby (Open Dashboard Tab Once)`);
         return;
       }
@@ -962,17 +1219,31 @@
       const activeSessions = Object.values(allSessions).filter(
         (s) => s && Array.isArray(s.zoneIds) && s.zoneIds.length > 0 && now - (s.lastSeen || 0) < 45000
       );
-      // Cross-PC Leader Election (/feeder_lock) with Version Priority (Newer version always preempts older version)
+
+      // Cross-PC Leader Election (/feeder_lock) with Version Priority + Continuous Heartbeat
       const lockRes = await fbDb("GET", "/feeder_lock");
       const lock = lockRes.data;
       const lockIsNewerOrSame =
         lock && compareVersions(lock.version || "0", SCRIPT_VERSION) >= 0;
-      if (lock && lock.leaderId !== TAB_INSTANCE_ID && lockIsNewerOrSame && now - (lock.ts || 0) < 6000) {
-        setBadge("#0f766e", `v${SCRIPT_VERSION} [Backup Standby] (${activeSessions.length} Viewers)`);
+      if (
+        lock &&
+        lock.leaderId !== TAB_INSTANCE_ID &&
+        lockIsNewerOrSame &&
+        now - (lock.ts || 0) < FEEDER_LOCK_TTL_MS
+      ) {
+        isCurrentPrimaryLeader = false;
+        const leaderTag = lock.leaderEmail ? ` • ${lock.leaderEmail.split("@")[0]}` : "";
+        setBadge(
+          "#0f766e",
+          `v${SCRIPT_VERSION} [Backup Standby${leaderTag}] (${activeSessions.length} Viewers)`
+        );
         return;
       }
+
+      isCurrentPrimaryLeader = true;
       await fbDb("PUT", "/feeder_lock", {
         leaderId: TAB_INSTANCE_ID,
+        leaderEmail: getBridgedLeaderEmail(),
         version: SCRIPT_VERSION,
         ts: now
       });
