@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v7.4 — Mobile &amp; Desktop Secured</title>
+  <title>Hurrier Live Operations Dashboard v7.6 — Rolling 2h Completed &amp; Secured</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,7 +38,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v7.4...
+      Loading Hurrier Live Operations Dashboard v7.6...
     </div>
   </div>
 
@@ -479,6 +479,46 @@
       return `${(num / 100).toFixed(2)} ${currency}`;
     }
 
+    function extractCompletedTimestampFromRec(rec) {
+      if (rec?.__completed_at_ms && Number(rec.__completed_at_ms) > 0) {
+        return Number(rec.__completed_at_ms);
+      }
+      const order = rec?.order || {};
+      const primaryDel = rec?.primary_delivery || {};
+      const timings = rec?.primary_delivery_timings || {};
+
+      const candidates = [
+        primaryDel.completed_at,
+        primaryDel.delivered_at,
+        primaryDel.dropped_off_at,
+        timings.completed_at,
+        timings.delivered_at,
+        order.completed_at,
+        order.delivered_at,
+        rec?.completed_at,
+        rec?.delivered_at
+      ];
+
+      for (const val of candidates) {
+        if (val) {
+          const ms = typeof val === "number" ? (val > 1e12 ? val : val * 1000) : new Date(val).getTime();
+          if (!Number.isNaN(ms) && ms > 0) return ms;
+        }
+      }
+
+      const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
+      const totalSec = Number(timings.total_time);
+      if (placedMs > 0 && !Number.isNaN(totalSec) && totalSec > 0) {
+        return placedMs + totalSec * 1000;
+      }
+
+      if (order.updated_at) {
+        const updMs = new Date(order.updated_at).getTime();
+        if (!Number.isNaN(updMs) && updMs > 0) return updMs;
+      }
+      return !Number.isNaN(placedMs) && placedMs > 0 ? placedMs : 0;
+    }
+
     function mapHurrierCompletedRecord(rec) {
       const order = rec?.order || {};
       const primaryDel = rec?.primary_delivery || {};
@@ -520,6 +560,11 @@
       instructions.push(humanizeSnakeCase(vType));
 
       const placedTimestamp = order.placed_at ? new Date(order.placed_at).getTime() : 0;
+      const completedTimestamp = extractCompletedTimestampFromRec(rec);
+      const completedAtFormatted =
+        completedTimestamp > 0
+          ? formatShortTimeOnly(new Date(completedTimestamp).toISOString())
+          : formatShortTimeOnly(order.placed_at);
 
       return {
         uid: `Completed-${order.id || codeStr}`,
@@ -527,6 +572,8 @@
         orderCode: order.order_code || `HF_EG${codeStr}`,
         placedAtFormatted: formatShortTimeOnly(order.placed_at),
         placedTimestamp: Number.isNaN(placedTimestamp) ? 0 : placedTimestamp,
+        completedAtFormatted,
+        completedTimestamp: Number.isNaN(completedTimestamp) ? 0 : completedTimestamp,
         vo: order.vendor_order_number || "-",
         city: normalizeText(dropAddr.city) || "Cairo",
         zone: zonesList.join(", ") || "-",
@@ -866,17 +913,15 @@
       const [knownCouriersMeta, setKnownCouriersMeta] = useState({});
       const [deliveries, setDeliveries] = useState([]);
       const [completedOrders, setCompletedOrders] = useState([]);
-      const [completedTotalCount, setCompletedTotalCount] = useState(0);
-      const [completedDate, setCompletedDate] = useState(() => getTodayCairoDateInput());
-      const [completedHoursWindow, setCompletedHoursWindow] = useState(4);
+      const [completedHoursWindow, setCompletedHoursWindow] = useState(2);
+      const [completedNowTick, setCompletedNowTick] = useState(() => Date.now());
       const [completedCityFilter, setCompletedCityFilter] = useState("All Cities");
       const [completedZoneScope, setCompletedZoneScope] = useState("selected");
       const [completedSpecificZoneId, setCompletedSpecificZoneId] = useState("");
       const [completedSearchInput, setCompletedSearchInput] = useState("");
-      const [completedSearchQuery, setCompletedSearchQuery] = useState("");
       const [completedPage, setCompletedPage] = useState(1);
       const [completedJumpPage, setCompletedJumpPage] = useState("");
-      const [completedSortAsc, setCompletedSortAsc] = useState(true);
+      const [completedSortAsc, setCompletedSortAsc] = useState(false);
       const [isCompletedLoading, setIsCompletedLoading] = useState(false);
 
       const [tabCounts, setTabCounts] = useState({
@@ -1191,15 +1236,13 @@
         writeSessionStorageJson("hurrier_emp_active_tab", activeTab);
       }, [activeTab]);
 
+      // Live 15s clock tick so Rolling 1h/2h Completed Orders auto-expire smoothly in UI
       useEffect(() => {
-        const trimmed = completedSearchInput.trim();
-        if (trimmed === completedSearchQuery) return;
-        const timer = setTimeout(() => {
-          setCompletedSearchQuery(trimmed);
-          setCompletedPage(1);
-        }, 300);
-        return () => clearTimeout(timer);
-      }, [completedSearchInput, completedSearchQuery]);
+        if (activeTab !== "Completed") return;
+        setCompletedNowTick(Date.now());
+        const t = setInterval(() => setCompletedNowTick(Date.now()), 15000);
+        return () => clearInterval(t);
+      }, [activeTab]);
 
       const copyToClipboard = useCallback((key, text) => {
         const str = String(text || "");
@@ -1638,23 +1681,6 @@
 
       const registerOrHeartbeatSession = useCallback(async () => {
         if (authState !== "authorized" || !isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
-        const cityIdMap = { Cairo: "1", Alexandria: "200" };
-        const completedReqPayload =
-          activeTab === "Completed"
-            ? {
-                date: completedDate || getTodayCairoDateInput(),
-                page: completedPage,
-                per_page: 50,
-                hours_window:
-                  !completedSearchQuery.trim() && completedDate === getTodayCairoDateInput()
-                    ? Number(completedHoursWindow)
-                    : 0,
-                zone_scope: completedZoneScope,
-                specific_zone_id: completedZoneScope === "single" ? Number(completedSpecificZoneId || 0) : null,
-                city_id: cityIdMap[completedCityFilter] || "",
-                search: completedSearchQuery.trim()
-              }
-            : null;
 
         try {
           await fbAuthFetch(`active_sessions/${sessionId}`, {
@@ -1665,7 +1691,6 @@
               employee_name: normalizeText(employeeName) || currentUser?.displayName || `Employee (${sessionId.slice(-5)})`,
               zone_ids: selectedZoneIds.map(Number).filter(isRealHurrierZoneId),
               zone_names: selectedZoneNames,
-              completed_req: completedReqPayload,
               rider_search_req: riderSearchReq,
               heartbeat_at: Date.now()
             })
@@ -1679,14 +1704,6 @@
         currentUser,
         employeeName,
         selectedZoneNames,
-        activeTab,
-        completedDate,
-        completedPage,
-        completedHoursWindow,
-        completedZoneScope,
-        completedSpecificZoneId,
-        completedCityFilter,
-        completedSearchQuery,
         riderSearchReq,
         fbAuthFetch
       ]);
@@ -1739,32 +1756,13 @@
         registerOrHeartbeatSession();
       }, [authState, isZoneSetupConfirmed, riderSearchReq, registerOrHeartbeatSession]);
 
-      useEffect(() => {
-        if (authState !== "authorized" || !isZoneSetupConfirmed || activeTab !== "Completed") return;
-        setIsCompletedLoading(true);
-        registerOrHeartbeatSession();
-      }, [
-        authState,
-        isZoneSetupConfirmed,
-        activeTab,
-        completedDate,
-        completedHoursWindow,
-        completedCityFilter,
-        completedZoneScope,
-        completedSpecificZoneId,
-        completedSearchQuery,
-        completedPage,
-        registerOrHeartbeatSession
-      ]);
-
       const handleJumpToCompletedOrderSearch = useCallback((orderQuery) => {
         const clean = String(orderQuery || "").trim();
         if (!clean) return;
         setActiveTab("Completed");
+        setCompletedHoursWindow(2);
         setCompletedSearchInput(clean);
-        setCompletedSearchQuery(clean);
         setCompletedPage(1);
-        setIsCompletedLoading(true);
       }, []);
 
       const handleConfirmZoneSelection = useCallback(() => {
@@ -1831,7 +1829,6 @@
         if (bundle.completed && typeof bundle.completed === "object") {
           const compRecs = Array.isArray(bundle.completed.records) ? bundle.completed.records : [];
           setCompletedOrders(compRecs.map(mapHurrierCompletedRecord));
-          setCompletedTotalCount(Number(bundle.completed.metadata?.total_count ?? compRecs.length));
           setIsCompletedLoading(false);
         }
 
@@ -2534,50 +2531,47 @@
       }, [selectedZoneIds, discoveredZonesFromBundle]);
 
       const visibleCompletedOrders = useMemo(() => {
-        const rawQ = (completedSearchInput || completedSearchQuery).trim();
+        const rawQ = completedSearchInput.trim();
         const q = rawQ.toLowerCase();
-        const isOrderIdSearch = isExactOrderIdPattern(rawQ);
-        const isTodaySelected = completedDate === getTodayCairoDateInput();
-        const cutoffMs =
-          !q && isTodaySelected && Number(completedHoursWindow) > 0
-            ? Date.now() - Number(completedHoursWindow) * 3600 * 1000
-            : 0;
+        const windowHours = Number(completedHoursWindow) === 1 ? 1 : 2;
+        const cutoffMs = completedNowTick - windowHours * 3600 * 1000;
 
         const filtered = completedOrders.filter((item) => {
-          if (cutoffMs > 0 && item.placedTimestamp > 0 && item.placedTimestamp < cutoffMs) {
+          const effectiveTs = item.completedTimestamp > 0 ? item.completedTimestamp : item.placedTimestamp;
+          if (effectiveTs > 0 && effectiveTs < cutoffMs) {
             return false;
           }
-          if (!isOrderIdSearch) {
-            if (completedCityFilter !== "All Cities" && item.city.toLowerCase() !== completedCityFilter.toLowerCase()) {
-              return false;
-            }
-            if (completedZoneScope === "selected") {
-              if (!matchesZoneFilter(item)) return false;
-            } else if (completedZoneScope === "single" && completedSpecificZoneId) {
-              const targetId = Number(completedSpecificZoneId);
-              const hasId = (item.zoneObjects || []).some((zo) => Number(zo.id) === targetId);
-              if (!hasId) return false;
-            }
+          if (completedCityFilter !== "All Cities" && item.city.toLowerCase() !== completedCityFilter.toLowerCase()) {
+            return false;
+          }
+          if (completedZoneScope === "selected") {
+            if (!matchesZoneFilter(item)) return false;
+          } else if (completedZoneScope === "single" && completedSpecificZoneId) {
+            const targetId = Number(completedSpecificZoneId);
+            const hasId = (item.zoneObjects || []).some((zo) => Number(zo.id) === targetId);
+            if (!hasId) return false;
           }
           if (!q) return true;
           return (
             item.id.toLowerCase().includes(q) ||
             item.orderCode.toLowerCase().includes(q) ||
+            String(item.vo || "").toLowerCase().includes(q) ||
             item.courier.toLowerCase().includes(q) ||
             item.vendor.toLowerCase().includes(q) ||
             item.zone.toLowerCase().includes(q)
           );
         });
 
-        return [...filtered].sort((a, b) =>
-          completedSortAsc ? a.placedTimestamp - b.placedTimestamp : b.placedTimestamp - a.placedTimestamp
-        );
+        return [...filtered].sort((a, b) => {
+          const ta = a.completedTimestamp > 0 ? a.completedTimestamp : a.placedTimestamp;
+          const tb = b.completedTimestamp > 0 ? b.completedTimestamp : b.placedTimestamp;
+          return completedSortAsc ? ta - tb : tb - ta;
+        });
       }, [
         completedOrders,
-        completedDate,
         completedHoursWindow,
+        completedNowTick,
         completedSearchInput,
-        completedSearchQuery,
         completedCityFilter,
         completedZoneScope,
         completedSpecificZoneId,
@@ -2585,15 +2579,21 @@
         completedSortAsc
       ]);
 
-      const completedTotalPages = Math.max(1, Math.ceil(Math.max(completedTotalCount, visibleCompletedOrders.length) / 50));
+      const completedTotalPages = Math.max(1, Math.ceil(visibleCompletedOrders.length / 50));
+
+      const paginatedCompletedOrders = useMemo(() => {
+        const safePage = Math.min(completedPage, completedTotalPages);
+        const startIdx = (safePage - 1) * 50;
+        return visibleCompletedOrders.slice(startIdx, startIdx + 50);
+      }, [completedPage, completedTotalPages, visibleCompletedOrders]);
 
       const completedVisiblePages = useMemo(() => {
-        const total = Math.max(completedTotalPages, completedPage + (completedOrders.length === 50 ? 1 : 0));
+        const total = completedTotalPages;
         if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
         if (completedPage <= 4) return [1, 2, 3, 4, 5, "...", total];
         if (completedPage >= total - 3) return [1, "...", total - 4, total - 3, total - 2, total - 1, total];
         return [1, "...", completedPage - 1, completedPage, completedPage + 1, "...", total];
-      }, [completedPage, completedTotalPages, completedOrders.length]);
+      }, [completedPage, completedTotalPages]);
 
       const renderDashboardView = () => (
         <div className="mt-6 space-y-6">
@@ -2852,45 +2852,17 @@
         <div className="mt-4 space-y-4">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Date</label>
-              <input
-                type="date"
-                value={completedDate}
-                onChange={(e) => {
-                  const val = e.target.value || getTodayCairoDateInput();
-                  setCompletedDate(val);
-                  if (val !== getTodayCairoDateInput()) {
-                    setCompletedHoursWindow(0);
-                  } else if (completedHoursWindow === 0) {
-                    setCompletedHoursWindow(4);
-                  }
-                  setCompletedPage(1);
-                }}
-                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 focus:outline-none focus:border-blue-500"
-              />
-            </div>
-
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Time Window</label>
+              <label className="text-[11px] font-semibold text-gray-500 mb-0.5">Time Window (Completed At)</label>
               <select
-                value={
-                  completedSearchInput.trim()
-                    ? 0
-                    : completedDate === getTodayCairoDateInput()
-                    ? completedHoursWindow
-                    : 0
-                }
-                disabled={completedDate !== getTodayCairoDateInput() || Boolean(completedSearchInput.trim())}
+                value={completedHoursWindow}
                 onChange={(e) => {
                   setCompletedHoursWindow(Number(e.target.value));
                   setCompletedPage(1);
                 }}
-                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 focus:outline-none focus:border-blue-500 min-w-[190px]"
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 font-semibold focus:outline-none focus:border-blue-500 min-w-[210px]"
               >
-                <option value={4}>آخر 4 ساعات (تحديث مستمر ↑)</option>
-                <option value={2}>آخر ساعتين (تحديث مستمر ↑)</option>
-                <option value={8}>آخر 8 ساعات (تحديث مستمر ↑)</option>
-                <option value={0}>اليوم بالكامل (Full Day)</option>
+                <option value={1}>آخر ساعة (1h • وقت التقفيل)</option>
+                <option value={2}>آخر ساعتين (2h • وقت التقفيل)</option>
               </select>
             </div>
 
@@ -2939,7 +2911,7 @@
 
             <div className="flex flex-col flex-1 min-w-[240px] max-w-sm">
               <label className="text-[11px] font-semibold text-gray-500 mb-0.5">
-                Search (Order ID فوري &lt;0.5s أو Courier)
+                Search (بحث لحظي في آخر {completedHoursWindow} ساعة)
               </label>
               <div className="relative">
                 <input
@@ -2947,17 +2919,9 @@
                   value={completedSearchInput}
                   onChange={(e) => {
                     setCompletedSearchInput(e.target.value);
+                    setCompletedPage(1);
                   }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      const trimmed = completedSearchInput.trim();
-                      setCompletedSearchQuery(trimmed);
-                      setCompletedPage(1);
-                      setIsCompletedLoading(true);
-                    }
-                  }}
-                  placeholder="اكتب رقم الأوردر أو اسم الرايدر..."
+                  placeholder="اكتب رقم الأوردر أو VO أو اسم الرايدر..."
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 focus:outline-none focus:border-blue-500"
                 />
                 {completedSearchInput && (
@@ -2965,10 +2929,9 @@
                     type="button"
                     onClick={() => {
                       setCompletedSearchInput("");
-                      setCompletedSearchQuery("");
                       setCompletedPage(1);
                     }}
-                    className="absolute right-2.5 top-2.5 text-xs text-gray-400 hover:text-gray-700"
+                    className="absolute right-2.5 top-2 text-xs text-gray-400 hover:text-gray-700"
                   >
                     ✕
                   </button>
@@ -2977,23 +2940,14 @@
             </div>
 
             <div className="ml-auto self-end flex flex-col items-end gap-1 text-xs text-gray-500 pb-0.5">
-              {completedSearchInput.trim() ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-bold text-[11px]">
-                  ⚡ بحث مباشر في اليوم بالكامل (تجاوز حد الـ 4 ساعات)
-                </span>
-              ) : (
-                completedDate === getTodayCairoDateInput() &&
-                completedHoursWindow > 0 && (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[11px]">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    LIVE • من {formatShortTimeOnly(new Date(Date.now() - completedHoursWindow * 3600 * 1000).toISOString())} حتى الآن ({completedHoursWindow}h ↑)
-                  </span>
-                )
-              )}
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[11px]">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                LIVE • مقفول من {formatShortTimeOnly(new Date(completedNowTick - completedHoursWindow * 3600 * 1000).toISOString())} حتى الآن ({completedHoursWindow}h ↑)
+              </span>
               <div>
                 Page <strong className="text-gray-800">{completedPage}</strong> of{" "}
                 <strong className="text-gray-800">{completedTotalPages}</strong> •{" "}
-                <strong>{visibleCompletedOrders.length}</strong> / 50 per page
+                <strong>{visibleCompletedOrders.length}</strong> orders in window
               </div>
               <button
                 type="button"
@@ -3007,18 +2961,16 @@
 
           {/* Mobile Smart Cards for Completed Orders (< 768px) */}
           <div className={`${mobileViewMode === "cards" ? "block md:hidden" : "hidden"} space-y-2.5`}>
-            {isCompletedLoading && visibleCompletedOrders.length === 0 ? (
+            {isCompletedLoading && paginatedCompletedOrders.length === 0 ? (
               <div className="p-8 text-center bg-white border border-gray-200 rounded-xl text-blue-600 font-semibold text-xs">
-                {isExactOrderIdPattern(completedSearchInput)
-                  ? `⚡ جاري البحث المباشر السريع عن الأوردر #${completedSearchInput.trim()}...`
-                  : `⏳ جاري سحب Completed Orders ليوم ${completedDate}...`}
+                ⏳ جاري تحميل الأوردرات المكتملة في آخر {completedHoursWindow} ساعة...
               </div>
-            ) : visibleCompletedOrders.length === 0 ? (
+            ) : paginatedCompletedOrders.length === 0 ? (
               <div className="p-8 text-center bg-white border border-gray-200 rounded-xl text-gray-500 text-xs">
-                لا توجد أوردرات مكتملة (Completed Orders) مطابقة للبحث أو التاريخ المحدد.
+                لا توجد أوردرات مكتملة (Completed Orders) في آخر {completedHoursWindow} ساعة مطابقة للبحث.
               </div>
             ) : (
-              visibleCompletedOrders.map((item) => (
+              paginatedCompletedOrders.map((item) => (
                 <div
                   key={`m-comp-${item.uid}`}
                   onClick={() => setSelectedOrder(item)}
@@ -3039,7 +2991,7 @@
                       </button>
                     </div>
                     <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-[11px]">
-                      {item.placedAtFormatted} • {item.orderDuration}
+                      ✓ {item.completedAtFormatted} • {item.orderDuration}
                     </span>
                   </div>
                   <div className="text-gray-800 font-semibold truncate">
@@ -3072,9 +3024,9 @@
                   <th
                     onClick={() => setCompletedSortAsc((prev) => !prev)}
                     className="py-3.5 px-4 cursor-pointer hover:text-blue-600 select-none"
-                    title="ترتيب حسب وقت الطلب"
+                    title="ترتيب حسب وقت تقفيل الأوردر الفعلي (Completed At)"
                   >
-                    PLACED AT {completedSortAsc ? "↑" : "↓"}
+                    COMPLETED AT {completedSortAsc ? "↑" : "↓"}
                   </th>
                   <th className="py-3.5 px-4">CONFIRMATION</th>
                   <th className="py-3.5 px-3">CITY</th>
@@ -3094,30 +3046,29 @@
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 text-[13px]">
-                {isCompletedLoading && visibleCompletedOrders.length === 0 ? (
+                {isCompletedLoading && paginatedCompletedOrders.length === 0 ? (
                   <tr>
                     <td colSpan={16} className="py-12 text-center text-blue-600 font-semibold text-sm">
-                      {isExactOrderIdPattern(completedSearchInput)
-                        ? `⚡ جاري البحث المباشر السريع عن الأوردر #${completedSearchInput.trim()}...`
-                        : `⏳ جاري سحب Completed Orders ليوم ${completedDate} (صفحة ${completedPage} • 50 أوردر)...`}
+                      ⏳ جاري تحميل الأوردرات المكتملة تلقائياً في آخر {completedHoursWindow} ساعة...
                     </td>
                   </tr>
-                ) : visibleCompletedOrders.length === 0 ? (
+                ) : paginatedCompletedOrders.length === 0 ? (
                   <tr>
                     <td colSpan={16} className="py-12 text-center text-gray-500 text-sm">
-                      لا توجد أوردرات مكتملة (Completed Orders) مطابقة للبحث أو التاريخ المحدد.
+                      لا توجد أوردرات مكتملة (Completed Orders) في آخر {completedHoursWindow} ساعة مطابقة للبحث.
                     </td>
                   </tr>
                 ) : (
-                  visibleCompletedOrders.map((item) => (
+                  paginatedCompletedOrders.map((item) => (
                     <tr
                       key={item.uid}
                       onMouseEnter={() => handleOrderRowHover(item)}
                       onClick={() => setSelectedOrder(item)}
                       className="hover:bg-blue-50/30 transition-colors cursor-pointer"
                     >
-                      <td className="py-3.5 px-4 align-top font-medium text-gray-800">
-                        {item.placedAtFormatted}
+                      <td className="py-3.5 px-4 align-top">
+                        <div className="font-bold text-emerald-700">{item.completedAtFormatted}</div>
+                        <div className="text-[11px] text-gray-400 mt-0.5">Placed: {item.placedAtFormatted}</div>
                       </td>
                       <td className="py-3.5 px-4 align-top">
                         <div className="flex items-center gap-1.5">
@@ -3177,8 +3128,9 @@
 
           <div className="pt-2 pb-6 flex flex-wrap items-center justify-between gap-3">
             <div className="text-xs text-gray-500">
-              Showing <strong>{(completedPage - 1) * 50 + (visibleCompletedOrders.length > 0 ? 1 : 0)}</strong>–
-              <strong>{(completedPage - 1) * 50 + visibleCompletedOrders.length}</strong> (50 orders / page)
+              Showing <strong>{(completedPage - 1) * 50 + (paginatedCompletedOrders.length > 0 ? 1 : 0)}</strong>–
+              <strong>{(completedPage - 1) * 50 + paginatedCompletedOrders.length}</strong> of{" "}
+              <strong>{visibleCompletedOrders.length}</strong>
             </div>
 
             <div className="flex items-center gap-1 select-none">
@@ -3222,13 +3174,13 @@
 
               <button
                 type="button"
-                disabled={completedOrders.length < 50 && completedPage >= completedTotalPages}
+                disabled={completedPage >= completedTotalPages}
                 onClick={() => {
-                  setCompletedPage((p) => p + 1);
+                  setCompletedPage((p) => Math.min(completedTotalPages, p + 1));
                   if (mainContainerRef.current) mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
                 }}
                 className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
-                  completedOrders.length < 50 && completedPage >= completedTotalPages
+                  completedPage >= completedTotalPages
                     ? "text-gray-300 cursor-not-allowed"
                     : "text-gray-600 hover:bg-gray-100"
                 }`}
@@ -4053,7 +4005,7 @@
                   <span className="text-2xl">🚴‍♂️</span>
                   <div>
                     <h1 className="text-lg font-bold tracking-tight">Hurrier Live Operations</h1>
-                    <p className="text-xs text-slate-300">v7.4 • Secured Google Access</p>
+                    <p className="text-xs text-slate-300">v7.6 • Secured Google Access</p>
                   </div>
                 </div>
                 <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
@@ -4196,7 +4148,7 @@
                         تحديد الزونات قبل بدء المتابعة
                       </h1>
                       <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v7.4 • {userRole === "admin" ? "Admin" : "Employee"}
+                        ★ v7.6 • {userRole === "admin" ? "Admin" : "Employee"}
                       </span>
                     </div>
                     <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5 truncate">
@@ -4506,7 +4458,7 @@
 
                 <div className="px-4 py-3 bg-slate-50 border-b border-gray-200 text-xs space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-700">★ v7.4 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                    <span className="font-bold text-emerald-700">★ v7.6 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                     <button
                       type="button"
                       onClick={handleGoogleSignOut}
@@ -4564,7 +4516,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v7.4 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                <span className="font-bold text-emerald-700">★ v7.6 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                 <button
                   type="button"
                   onClick={handleGoogleSignOut}
@@ -4865,12 +4817,7 @@
                   <button
                     type="button"
                     onClick={() => {
-                      if (activeTab === "Completed") {
-                        setIsCompletedLoading(true);
-                        registerOrHeartbeatSession();
-                      } else {
-                        fetchMySessionBundleFromFirebase();
-                      }
+                      fetchMySessionBundleFromFirebase();
                     }}
                     className="flex items-center gap-1.5 px-3 py-1 border border-gray-300 rounded-lg text-xs sm:text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
                   >
