@@ -87,6 +87,41 @@
   ZONE_CATALOG_PAIRS.forEach(([id, name]) => {
     ZONE_NAME_TO_ID.set(String(name).trim().toLowerCase(), Number(id));
   });
+
+  const TAB_INSTANCE_ID = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const LOCAL_TAB_LOCK_KEY = "hurrier_live_sync_local_tab_lock";
+  let remoteAvailableVersion = "";
+  const rollingCompletedPool = new Map();
+  let lastRollingCompletedSyncAt = 0;
+  let initialCompletedBackfillDone = false;
+  let lastOrderDetailReqAt = 0;
+  let lastCourierDetailReqAt = 0;
+  let lastRiderSearchReqId = "";
+
+  const badge = document.createElement("div");
+  Object.assign(badge.style, {
+    position: "fixed",
+    bottom: "14px",
+    right: "14px",
+    zIndex: "999999",
+    padding: "7px 14px",
+    borderRadius: "9999px",
+    background: "#334155",
+    color: "#ffffff",
+    fontFamily: "system-ui, -apple-system, sans-serif",
+    fontSize: "12px",
+    fontWeight: "700",
+    boxShadow: "0 4px 14px rgba(0,0,0,0.22)",
+    cursor: "pointer",
+    userSelect: "none",
+    transition: "background 0.2s ease"
+  });
+  badge.textContent = `v${SCRIPT_VERSION} Initializing...`;
+  badge.addEventListener("click", () => {
+    if (remoteAvailableVersion) {
+      window.open(GITHUB_SCRIPT_RAW_URL, "_blank");
+    }
+  });
   document.body.appendChild(badge);
 
   function setBadge(bg, text) {
@@ -610,36 +645,25 @@
         statsRes,
         queuedRes,
         dispRes,
-        activeRes,
-        preorderRes,
-        actionableRes,
-        waitRes,
-        upcomingRes,
-        cancelledRes,
-        issuesRes
-      ] = await Promise.allSettled([
-        hurrierGet("/dispatcher-dashboard/stats"),
-        hurrierGet("/dispatcher-dashboard/deliveries/queued?page=1&per_page=100"),
-        hurrierGet("/dispatcher-dashboard/deliveries/dispatched?page=1&per_page=100"),
-        hurrierGet("/dispatcher-dashboard/deliveries/active?page=1&per_page=100"),
-        hurrierGet("/dispatcher-dashboard/deliveries/preorder?page=1&per_page=100"),
-        hurrierGet("/dispatcher-dashboard/deliveries/actionable?page=1&per_page=100"),
-        hurrierGet("/dispatcher-dashboard/deliveries/wait_for_assembled?page=1&per_page=100"),
-        hurrierGet("/dispatcher-dashboard/deliveries/pre_orders_next_days?page=1&per_page=100"),
-        hurrierGet(`/dispatcher-dashboard/orders/cancelled?date=${todayStr}&page=1&per_page=100`),
-        hurrierGet("/issue-service/dispatcher_dashboard")
-      ]);
+      const statsData = statsRes.status === "fulfilled" ? statsRes.value : {};
+      const allZoneStats = [];
+      if (Array.isArray(statsData?.cities)) {
+        statsData.cities.forEach((city) => {
+          (city.zones || []).forEach((zone) => {
+            (zone.starting_points || []).forEach((sp) => {
+              allZoneStats.push({
+                id: Number(sp.id),
+                name: sp.name,
+                city: city.city_name,
+                stat: sp.stat || {}
+              });
+            });
+          });
+        });
+      }
 
-      const tabAllRecords = {
-        Queued: queuedRes.status === "fulfilled" ? queuedRes.value?.records || [] : [],
-        Dispatched: dispRes.status === "fulfilled" ? dispRes.value?.records || [] : [],
-        Active: activeRes.status === "fulfilled" ? activeRes.value?.records || [] : [],
-        "Pre-order": preorderRes.status === "fulfilled" ? preorderRes.value?.records || [] : [],
-        Actionable: actionableRes.status === "fulfilled" ? actionableRes.value?.records || [] : [],
-        "Waiting for Assembly": waitRes.status === "fulfilled" ? waitRes.value?.records || [] : [],
-        Upcoming: upcomingRes.status === "fulfilled" ? upcomingRes.value?.records || [] : [],
-        Cancelled: cancelledRes.status === "fulfilled" ? cancelledRes.value?.records || [] : []
-      };
+      const allIssues =
+        issuesRes.status === "fulfilled" && Array.isArray(issuesRes.value) ? issuesRes.value : [];
 
       const activeViewersSummary = activeSessions.map((s) => ({
         sessionId: s.sessionId,
@@ -648,6 +672,17 @@
         zoneCount: Array.isArray(s.zoneIds) ? s.zoneIds.length : 0,
         activeTab: s.activeTab || "Active"
       }));
+
+      for (const sess of activeSessions) {
+        const targetSet = new Set((Array.isArray(sess.zoneIds) ? sess.zoneIds : []).map(Number));
+        const filterBySessionZones = (records) =>
+          (Array.isArray(records) ? records : []).filter((rec) => {
+            if (targetSet.size === 0) return true;
+            const recSpIds = extractRecordStartingPointIds(rec);
+            if (recSpIds.size === 0) return false;
+            for (const id of recSpIds) {
+              if (targetSet.has(id)) return true;
+            }
             return false;
           });
 
