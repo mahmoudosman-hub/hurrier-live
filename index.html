@@ -515,6 +515,21 @@
       return `${(num / 100).toFixed(2)} ${currency}`;
     }
 
+    function formatHurrierDollarPrice(val) {
+      if (val === null || val === undefined || val === "") return "$0.00";
+      if (typeof val === "string" && val.trim().startsWith("$")) return val.trim();
+      const num = Number(val);
+      if (Number.isNaN(num)) return String(val);
+      const sign = num < 0 ? "-" : "";
+      return `${sign}$${(Math.abs(num) / 100).toFixed(2)}`;
+    }
+
+    function formatMetricNumber(val) {
+      const num = Number(val ?? 0);
+      if (Number.isNaN(num) || num === 0) return "0";
+      return String(Number(num.toFixed(3)));
+    }
+
     function extractCompletedTimestampFromRec(rec) {
       if (rec?.__completed_at_ms && Number(rec.__completed_at_ms) > 0) {
         return Number(rec.__completed_at_ms);
@@ -898,12 +913,51 @@
       const rawItems = Array.isArray(dOrder?.detail?.order_items)
         ? dOrder.detail.order_items
         : [];
-      const items = rawItems.map((it, idx) => ({
-        id: String(it.id || idx),
-        name: normalizeText(it.item || it.name || `Item #${idx + 1}`),
-        quantity: Number(it.quantity ?? 1),
-        priceFormatted: formatPiastersMoney(it.price)
-      }));
+      const items = rawItems.map((it, idx) => {
+        const subList = Array.isArray(it.sub_items)
+          ? it.sub_items
+              .map((sub) => normalizeText(typeof sub === "string" ? sub : sub?.item || sub?.name || ""))
+              .filter(Boolean)
+          : [];
+        return {
+          id: String(it.id || idx),
+          name: normalizeText(it.item || it.name || `Item #${idx + 1}`),
+          subItems: subList,
+          quantity: Number(it.quantity ?? 1),
+          rawVolume: Number(it.volume ?? 0) || 0,
+          rawWeight: Number(it.weight ?? 0) || 0,
+          rawPrice: Number(it.price ?? 0) || 0,
+          volumeFormatted: formatMetricNumber(it.volume),
+          weightFormatted: formatMetricNumber(it.weight),
+          priceFormatted: formatHurrierDollarPrice(it.price)
+        };
+      });
+
+      const sumQty = items.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0);
+      const sumVol = items.reduce((acc, it) => acc + it.rawVolume, 0);
+      const sumWgt = items.reduce((acc, it) => acc + it.rawWeight, 0);
+      const sumPrice = items.reduce((acc, it) => acc + it.rawPrice, 0);
+
+      const rawTotalVal =
+        dOrder.order_value ??
+        dOrder.total ??
+        orderItem?.raw?.order?.order_value ??
+        orderItem?.raw?.order?.total ??
+        0;
+
+      const itemsSummary = {
+        totalQuantity: sumQty,
+        totalVolume: formatMetricNumber(dOrder.total_volume ?? sumVol),
+        totalWeight: formatMetricNumber(dOrder.total_weight ?? sumWgt),
+        subtotalFormatted: formatHurrierDollarPrice(dOrder.subtotal ?? sumPrice),
+        deliveryFeeFormatted: formatHurrierDollarPrice(dOrder.delivery_fee ?? 0),
+        totalFormatted: formatHurrierDollarPrice(rawTotalVal),
+        payAtPickupFormatted: formatHurrierDollarPrice(dOrder?.detail?.cod_pay_at_pickup ?? 0),
+        collectAtDropoffFormatted: formatHurrierDollarPrice(
+          dOrder?.detail?.cod_collect_at_drop_off ??
+            (dOrder.is_cash_collection || orderItem?.raw?.order?.is_cash_collection ? rawTotalVal : 0)
+        )
+      };
 
       const timingObj = dOrder.timing || {};
       const timeChecks = [
@@ -950,6 +1004,7 @@
         dropoffAddress,
         structuredDeliveries,
         items,
+        itemsSummary,
         timeChecks
       };
     }
@@ -4919,7 +4974,7 @@
                       <div className="px-4 border-b border-gray-200 flex items-center gap-5 text-xs sm:text-sm font-semibold bg-white overflow-x-auto whitespace-nowrap">
                         {[
                           { id: "Deliveries", label: `Deliveries ${selectedOrderFullView.structuredDeliveries.length}` },
-                          { id: "Order Items", label: `Order Items ${selectedOrderFullView.items.length}` }
+                          { id: "Order Items", label: "Order Items" }
                         ].map((t) => (
                           <button
                             key={t.id}
@@ -5019,25 +5074,91 @@
                         )}
 
                         {detailModalTab === "Order Items" && (
-                          <div className="border border-gray-200 rounded-lg overflow-hidden">
-                            <table className="w-full text-left text-xs">
-                              <thead>
-                                <tr className="bg-gray-50 border-b border-gray-200 text-gray-500 font-bold uppercase">
-                                  <th className="py-2.5 px-4">ITEM</th>
-                                  <th className="py-2.5 px-3 text-center">QTY</th>
-                                  <th className="py-2.5 px-4 text-right">PRICE</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-gray-100">
-                                {selectedOrderFullView.items.map((it) => (
-                                  <tr key={it.id}>
-                                    <td className="py-3 px-4 font-medium text-gray-900">{it.name}</td>
-                                    <td className="py-3 px-3 text-center font-bold">{it.quantity}</td>
-                                    <td className="py-3 px-4 text-right font-semibold">{it.priceFormatted}</td>
+                          <div className="overflow-x-auto bg-white">
+                            {!selectedOrderFullView.isLoadedFromApi && selectedOrderFullView.items.length === 0 ? (
+                              <div className="p-6 text-center text-xs text-gray-500">
+                                ⏳ جاري جلب تفاصيل الأصناف والحساب من Hurrier...
+                              </div>
+                            ) : (
+                              <table className="w-full text-[13px] text-gray-900">
+                                <thead>
+                                  <tr className="border-b border-gray-200 text-[11px] font-bold uppercase text-gray-700">
+                                    <th className="py-3 px-4 text-left">ITEM</th>
+                                    <th className="py-3 px-4 text-right whitespace-nowrap">QUANTITY</th>
+                                    <th className="py-3 px-4 text-right whitespace-nowrap">VOLUME (L)</th>
+                                    <th className="py-3 px-4 text-right whitespace-nowrap">WEIGHT (KG)</th>
+                                    <th className="py-3 px-4 text-right whitespace-nowrap">PRICE</th>
                                   </tr>
-                                ))}
-                              </tbody>
-                            </table>
+                                </thead>
+                                <tbody className="divide-y divide-gray-200">
+                                  {selectedOrderFullView.items.map((it) => (
+                                    <tr key={it.id} className="hover:bg-gray-50/60">
+                                      <td className="py-3.5 px-4 text-left text-gray-900">
+                                        <div>{it.name}</div>
+                                        {it.subItems && it.subItems.length > 0 && (
+                                          <div className="text-xs text-gray-500 mt-0.5">
+                                            {it.subItems.join(" • ")}
+                                          </div>
+                                        )}
+                                      </td>
+                                      <td className="py-3.5 px-4 text-right tabular-nums">{it.quantity}</td>
+                                      <td className="py-3.5 px-4 text-right tabular-nums">{it.volumeFormatted}</td>
+                                      <td className="py-3.5 px-4 text-right tabular-nums">{it.weightFormatted}</td>
+                                      <td className="py-3.5 px-4 text-right tabular-nums whitespace-nowrap">
+                                        {it.priceFormatted}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                  <tr className="hover:bg-gray-50/60">
+                                    <td className="py-3.5 px-4 text-left text-gray-900">Subtotal</td>
+                                    <td className="py-3.5 px-4 text-right tabular-nums">
+                                      {selectedOrderFullView.itemsSummary.totalQuantity}
+                                    </td>
+                                    <td className="py-3.5 px-4 text-right tabular-nums">
+                                      {selectedOrderFullView.itemsSummary.totalVolume}
+                                    </td>
+                                    <td className="py-3.5 px-4 text-right tabular-nums">
+                                      {selectedOrderFullView.itemsSummary.totalWeight}
+                                    </td>
+                                    <td className="py-3.5 px-4 text-right tabular-nums whitespace-nowrap">
+                                      {selectedOrderFullView.itemsSummary.subtotalFormatted}
+                                    </td>
+                                  </tr>
+                                  <tr className="hover:bg-gray-50/60">
+                                    <td colSpan={4} className="py-3.5 px-4 text-left text-gray-900">
+                                      Delivery Fee
+                                    </td>
+                                    <td className="py-3.5 px-4 text-right tabular-nums whitespace-nowrap">
+                                      {selectedOrderFullView.itemsSummary.deliveryFeeFormatted}
+                                    </td>
+                                  </tr>
+                                  <tr className="hover:bg-gray-50/60">
+                                    <td colSpan={4} className="py-3.5 px-4 text-left text-gray-900">
+                                      Total
+                                    </td>
+                                    <td className="py-3.5 px-4 text-right tabular-nums whitespace-nowrap">
+                                      {selectedOrderFullView.itemsSummary.totalFormatted}
+                                    </td>
+                                  </tr>
+                                  <tr className="hover:bg-gray-50/60">
+                                    <td colSpan={4} className="py-3.5 px-4 text-left text-gray-900">
+                                      Pay at Pickup
+                                    </td>
+                                    <td className="py-3.5 px-4 text-right tabular-nums whitespace-nowrap">
+                                      {selectedOrderFullView.itemsSummary.payAtPickupFormatted}
+                                    </td>
+                                  </tr>
+                                  <tr className="hover:bg-gray-50/60">
+                                    <td colSpan={4} className="py-3.5 px-4 text-left text-gray-900">
+                                      Collect at Drop off
+                                    </td>
+                                    <td className="py-3.5 px-4 text-right tabular-nums whitespace-nowrap">
+                                      {selectedOrderFullView.itemsSummary.collectAtDropoffFormatted}
+                                    </td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            )}
                           </div>
                         )}
                       </div>
