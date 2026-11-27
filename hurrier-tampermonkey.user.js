@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      9.7
-// @description  [v9.7] Exact Active Couriers per Zone + Full Order & Rider Sync
+// @version      9.8
+// @description  [v9.8] Per-Order Detail Queue + Fast Mobile Order Sync
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "9.7";
+  const SCRIPT_VERSION = "9.8";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -1181,7 +1181,7 @@
   // ============================================================================
   // 10) FAST ON-DEMAND WATCHER (Order Details, Exact Courier Detail + Balance, Rider Search)
   // ============================================================================
-  let lastOrderReqHandledAt = 0;
+  const handledOrderReqsMap = new Map();
   let lastCourierReqHandledAt = 0;
   let lastRiderSearchReqId = "";
   let isOnDemandBusy = false;
@@ -1328,22 +1328,55 @@
       const cfg = await firebaseReq("GET", "/config");
       if (!cfg || typeof cfg !== "object") return;
 
-      const oReq = cfg.order_detail_req;
-      if (oReq && oReq.code && Number(oReq.requestedAt || 0) > lastOrderReqHandledAt) {
-        lastOrderReqHandledAt = Number(oReq.requestedAt);
-        const code = String(oReq.code).trim();
-        const orderCode = String(oReq.orderCode || `HF_EG${code}`).trim();
-        const [detRes, delivRes, notesRes] = await Promise.allSettled([
-          hurrierGet(`/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(code)}`),
-          hurrierGet(`/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(orderCode)}`),
-          hurrierGet(`/dispatcher-dashboard/orders/dispatcher_notes?code=${encodeURIComponent(orderCode)}`)
-        ]);
-        await firebaseReq("PUT", `/order_details/${encodeURIComponent(code)}`, {
-          detail: detRes.status === "fulfilled" ? detRes.value : null,
-          deliveries: delivRes.status === "fulfilled" ? delivRes.value : null,
-          notes: notesRes.status === "fulfilled" ? notesRes.value : null,
-          updatedAt: Date.now()
-        });
+      const now = Date.now();
+      const pendingOrderReqs = [];
+      const reqsMap =
+        cfg.order_detail_reqs && typeof cfg.order_detail_reqs === "object"
+          ? cfg.order_detail_reqs
+          : {};
+
+      for (const item of Object.values(reqsMap)) {
+        if (item && item.code) pendingOrderReqs.push(item);
+      }
+      if (cfg.order_detail_req && cfg.order_detail_req.code) {
+        pendingOrderReqs.push(cfg.order_detail_req);
+      }
+
+      const freshOrderReqs = [];
+      const seenReqCodes = new Set();
+      for (const oReq of pendingOrderReqs) {
+        const code = String(oReq.code || "").trim();
+        const reqAt = Number(oReq.requestedAt || 0);
+        if (!code || seenReqCodes.has(code)) continue;
+        if (now - reqAt > 60000) continue;
+        const prevHandledAt = Number(handledOrderReqsMap.get(code) || 0);
+        if (reqAt > prevHandledAt) {
+          seenReqCodes.add(code);
+          handledOrderReqsMap.set(code, reqAt);
+          freshOrderReqs.push({
+            code,
+            orderCode: String(oReq.orderCode || `HF_EG${code}`).trim()
+          });
+        }
+      }
+
+      if (freshOrderReqs.length > 0) {
+        await Promise.allSettled(
+          freshOrderReqs.slice(0, 6).map(async ({ code, orderCode }) => {
+            const [detRes, delivRes, notesRes] = await Promise.allSettled([
+              hurrierGet(`/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(code)}`),
+              hurrierGet(`/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(orderCode)}`),
+              hurrierGet(`/dispatcher-dashboard/orders/dispatcher_notes?code=${encodeURIComponent(orderCode)}`)
+            ]);
+            await firebaseReq("PUT", `/order_details/${encodeURIComponent(code)}`, {
+              detail: detRes.status === "fulfilled" ? detRes.value : null,
+              deliveries: delivRes.status === "fulfilled" ? delivRes.value : null,
+              notes: notesRes.status === "fulfilled" ? notesRes.value : null,
+              updatedAt: Date.now()
+            });
+            firebaseReq("DELETE", `/config/order_detail_reqs/${encodeURIComponent(code)}`).catch(() => {});
+          })
+        );
       }
 
       const cReq = cfg.courier_detail_req;
