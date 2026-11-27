@@ -1,10 +1,10 @@
 <!DOCTYPE html>
+<!-- Hurrier Live Operations Dashboard v9.3 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v9.2</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <title>Hurrier Live Operations Dashboard v9.3</title>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -37,7 +37,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v9.2...
+      Loading Hurrier Live Operations Dashboard v9.3...
     </div>
   </div>
 
@@ -2560,6 +2560,7 @@
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                   LIVE • مقفول من {windowStartLabel} حتى الآن ({completedHoursWindow}h)
+                  {isCompletedLoading && paginatedCompletedOrders.length > 0 ? " • جاري التحديث..." : ""}
                 </span>
                 <div className="text-gray-500">
                   Page <strong className="text-gray-800">{completedPage}</strong> of{" "}
@@ -3575,7 +3576,7 @@
                   <span className="text-2xl">🚴‍♂️</span>
                   <div>
                     <h1 className="text-lg font-bold tracking-tight">Hurrier Live Operations</h1>
-                    <p className="text-xs text-slate-300">v9.2 • Secured Google Access</p>
+                    <p className="text-xs text-slate-300">v9.3 • Secured Google Access</p>
                   </div>
                 </div>
                 <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
@@ -3714,7 +3715,7 @@
                         تحديد الزونات قبل بدء المتابعة
                       </h1>
                       <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v9.2 • {userRole === "admin" ? "Admin" : "Employee"}
+                        ★ v9.3 • {userRole === "admin" ? "Admin" : "Employee"}
                       </span>
                     </div>
                     <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5 truncate">
@@ -4023,7 +4024,7 @@
 
                 <div className="px-4 py-3 bg-slate-50 border-b border-gray-200 text-xs space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-700">★ v9.2 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                    <span className="font-bold text-emerald-700">★ v9.3 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                     <button
                       type="button"
                       onClick={handleGoogleSignOut}
@@ -4081,7 +4082,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v9.2 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                <span className="font-bold text-emerald-700">★ v9.3 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                 <button
                   type="button"
                   onClick={handleGoogleSignOut}
@@ -5152,3 +5153,4 @@
   </script>
 </body>
 </html>
+<!-- v9.3 -->
