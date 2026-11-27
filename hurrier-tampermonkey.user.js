@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Hurrier Live Sync v7.6 — Auto-Update + Rolling 2h Completed At + Rider Search
+// @name         Hurrier Live Sync v7.8 — Auto-Update + Rolling 2h Completed At (ISO Window Fetch)
 // @namespace    https://hurrier-live.local/
-// @version      7.6
-// @description  [v7.6] GitHub Auto-Update + Background Rolling 2h Completed Orders (by Completed At) + Live Rider Search + Same-PC Tab Lock
+// @version      7.8
+// @description  [v7.8] GitHub Auto-Update + Accurate Completed At Rolling 2h Pool (ISO from_date/to_date + Tail Fallback) + Live Rider Search
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,14 +21,14 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "7.6";
+  const SCRIPT_VERSION = "7.8";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
   const BASE_API = "https://eg.me.logisticsbackoffice.com/api";
   const AUTH_BRIDGE_STORAGE_KEY = "hurrier_fb_bridge_auth";
   const ROLLING_COMPLETED_WINDOW_MS = 2 * 3600 * 1000;
-  const ROLLING_COMPLETED_SYNC_MS = 12000;
+  const ROLLING_COMPLETED_SYNC_MS = 10000;
 
   // --- CROSS-DOMAIN ADMIN AUTH BRIDGE (Dashboard github.io -> Hurrier) ---
   if (window.location.hostname !== "eg.me.logisticsbackoffice.com") {
@@ -64,7 +64,7 @@
   let isRiderSearchPolling = false;
   let lastSuccessAt = null;
   let lastErrorMsg = "";
-  let currentModeLabel = "v7.5 Starting...";
+  let currentModeLabel = `v${SCRIPT_VERSION} Starting...`;
   let totalPushCount = 0;
   let badgeEl = null;
   let bgPrewarmCursor = 0;
@@ -74,6 +74,7 @@
   let cachedZoneRosterFetchedAt = 0;
   let remoteAvailableVersion = "";
   let lastRollingCompletedSyncAt = 0;
+  let capturedCompletedApiBaseUrl = "";
 
   const CAPTURED_AUTH_HEADERS = {};
   const courierNameToIdMap = new Map();
@@ -82,33 +83,6 @@
   const orderDetailCache = new Map();
   const rollingCompletedPool = new Map();
   const lastRiderSearchSigBySession = new Map();
-
-  function getCairoDateString(offsetDays = 0) {
-    try {
-      const targetDate = new Date(Date.now() + offsetDays * 86400 * 1000);
-      return new Intl.DateTimeFormat("en-CA", {
-        timeZone: "Africa/Cairo",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit"
-      }).format(targetDate);
-    } catch {
-      return new Date(Date.now() + offsetDays * 86400 * 1000).toISOString().slice(0, 10);
-    }
-  }
-
-  function getCairoCurrentHour() {
-    try {
-      const hrStr = new Intl.DateTimeFormat("en-GB", {
-        timeZone: "Africa/Cairo",
-        hour: "2-digit",
-        hour12: false
-      }).format(new Date());
-      return Number(hrStr);
-    } catch {
-      return new Date().getHours();
-    }
-  }
 
   function extractCompletedTimestamp(rec) {
     const order = rec?.order || {};
@@ -119,12 +93,17 @@
       primaryDel.completed_at,
       primaryDel.delivered_at,
       primaryDel.dropped_off_at,
+      primaryDel.finished_at,
       timings.completed_at,
       timings.delivered_at,
+      timings.dropped_off_at,
       order.completed_at,
       order.delivered_at,
+      order.dropped_off_at,
+      order.finished_at,
       rec?.completed_at,
-      rec?.delivered_at
+      rec?.delivered_at,
+      rec?.dropped_off_at
     ];
 
     for (const val of candidates) {
@@ -134,7 +113,7 @@
       }
     }
 
-    // Fallback: placed_at + total_time (seconds) if explicit completed_at is omitted
+    // Exact calculation from Hurrier's placed_at + total_time (seconds)
     const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
     const totalSec = Number(timings.total_time);
     if (placedMs > 0 && !Number.isNaN(totalSec) && totalSec > 0) {
@@ -145,7 +124,7 @@
       const updMs = new Date(order.updated_at).getTime();
       if (!Number.isNaN(updMs) && updMs > 0) return updMs;
     }
-    return !Number.isNaN(placedMs) && placedMs > 0 ? placedMs : 0;
+    return 0;
   }
 
   function compareSemverStrings(a, b) {
@@ -315,6 +294,20 @@
                     .clone()
                     .json()
                     .then((json) => ingestPassiveCouriersPayload(json))
+                    .catch(() => {});
+                }
+              })
+              .catch(() => {});
+          }
+          if (urlStr.includes("/api/") && /orders\/completed/i.test(urlStr)) {
+            capturedCompletedApiBaseUrl = urlStr;
+            promise
+              .then((resp) => {
+                if (resp && resp.ok && typeof resp.clone === "function") {
+                  resp
+                    .clone()
+                    .json()
+                    .then((json) => ingestCompletedRecordsBatch(json?.records || json?.orders || []))
                     .catch(() => {});
                 }
               })
@@ -1184,11 +1177,62 @@
   }
 
   // Background Rolling 2-Hour Completed Orders Pool (indexed by Completed At + Auto-Cleanup > 2h)
+  function ingestCompletedRecordsBatch(records) {
+    if (!Array.isArray(records) || records.length === 0) return 0;
+    const cutoffMs = Date.now() - ROLLING_COMPLETED_WINDOW_MS;
+    let freshCount = 0;
+
+    for (const rec of records) {
+      const order = rec?.order || {};
+      const orderKey = String(
+        order.id ||
+          order.confirmation_number ||
+          String(order.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+          ""
+      ).trim();
+      if (!orderKey) continue;
+
+      const completedAtMs = extractCompletedTimestamp(rec);
+      if (completedAtMs >= cutoffMs) {
+        freshCount += 1;
+        const zoneIds = new Set();
+        const sps = Array.isArray(order.drop_off_address?.starting_points)
+          ? order.drop_off_address.starting_points
+          : Array.isArray(rec?.starting_points)
+          ? rec.starting_points
+          : [];
+        sps.forEach((sp) => {
+          const zid = Number(typeof sp === "object" ? sp?.id || sp?.starting_point_id : sp);
+          if (!Number.isNaN(zid) && zid > 0) zoneIds.add(zid);
+        });
+
+        rollingCompletedPool.set(orderKey, {
+          completedAtMs,
+          zoneIds: Array.from(zoneIds),
+          record: {
+            ...rec,
+            __completed_at_ms: completedAtMs
+          }
+        });
+      }
+    }
+    return freshCount;
+  }
+
+  async function fetchCompletedWithQuery(queryBuilderFn, pageNum, opts) {
+    const params = new URLSearchParams();
+    params.set("page", String(pageNum));
+    params.set("per_page", "50");
+    queryBuilderFn(params);
+    const url = `${BASE_API}/dispatcher-dashboard/orders/completed?${params.toString()}`;
+    return safeFetchJson(url, opts);
+  }
+
   async function syncRollingCompletedOrdersPool(unionZoneIds, opts, force = false) {
     const now = Date.now();
     const cutoffMs = now - ROLLING_COMPLETED_WINDOW_MS;
 
-    // 1) Purge any stored order whose Completed At is older than 2 hours
+    // 1) Auto-delete any stored order whose Completed At is older than 2 hours
     for (const [key, entry] of rollingCompletedPool.entries()) {
       if (!entry || entry.completedAtMs < cutoffMs) {
         rollingCompletedPool.delete(key);
@@ -1200,72 +1244,67 @@
     }
     lastRollingCompletedSyncAt = now;
 
-    const todayStr = getCairoDateString(0);
-    const datesToQuery = [todayStr];
-    // Between 12:00 AM and 2:59 AM Cairo time, also query yesterday so orders placed before midnight and completed after midnight are included
-    if (getCairoCurrentHour() < 3) {
-      datesToQuery.push(getCairoDateString(-1));
-    }
+    // Pull 3.5h ISO UTC window so orders placed before midnight or before the 2h cutoff and completed within 2h are captured
+    const fromIso = new Date(now - 3.5 * 3600 * 1000).toISOString();
+    const toIso = new Date(now + 15 * 60 * 1000).toISOString();
 
-    for (const dateStr of datesToQuery) {
-      const maxPagesForDate = dateStr === todayStr ? 6 : 2;
-      for (let pageNum = 1; pageNum <= maxPagesForDate; pageNum++) {
-        const params = new URLSearchParams();
-        params.set("page", String(pageNum));
-        params.set("per_page", "50");
-        params.set("date", dateStr);
-        params.set("from_date", `${dateStr}T00:00:00`);
-        params.set("to_date", `${dateStr}T23:59:59`);
+    const buildIsoWindowQuery = (params) => {
+      params.set("from_date", fromIso);
+      params.set("to_date", toIso);
+      (Array.isArray(unionZoneIds) ? unionZoneIds : []).forEach((zid) => {
+        params.append("starting_point_id[]", String(zid));
+      });
+    };
+
+    const page1Res = await fetchCompletedWithQuery(buildIsoWindowQuery, 1, opts);
+    const p1Records = Array.isArray(page1Res?.records)
+      ? page1Res.records
+      : Array.isArray(page1Res?.orders)
+      ? page1Res.orders
+      : [];
+    const totalCount = Number(page1Res?.metadata?.total_count ?? p1Records.length);
+
+    if (p1Records.length > 0 && totalCount <= 2500) {
+      ingestCompletedRecordsBatch(p1Records);
+      const totalPages = Math.min(20, Math.max(1, Math.ceil(totalCount / 50)));
+      if (totalPages > 1) {
+        const pagesToFetch = [];
+        for (let p = 2; p <= totalPages; p++) pagesToFetch.push(p);
+        const batches = chunkArray(pagesToFetch, 5);
+        for (const batch of batches) {
+          await Promise.all(
+            batch.map(async (p) => {
+              const r = await fetchCompletedWithQuery(buildIsoWindowQuery, p, opts);
+              const recs = Array.isArray(r?.records) ? r.records : Array.isArray(r?.orders) ? r.orders : [];
+              ingestCompletedRecordsBatch(recs);
+            })
+          );
+        }
+      }
+    } else {
+      // Fallback: query without date filter and walk backwards from the last pages (newest orders)
+      const buildUnfilteredQuery = (params) => {
         (Array.isArray(unionZoneIds) ? unionZoneIds : []).forEach((zid) => {
           params.append("starting_point_id[]", String(zid));
         });
-
-        const url = `${BASE_API}/dispatcher-dashboard/orders/completed?${params.toString()}`;
-        const res = await safeFetchJson(url, opts);
-        if (!res) break;
-
-        const records = Array.isArray(res.records) ? res.records : Array.isArray(res.orders) ? res.orders : [];
-        if (records.length === 0) break;
-
-        let freshInPageCount = 0;
-        for (const rec of records) {
-          const order = rec?.order || {};
-          const orderKey = String(
-            order.id ||
-              order.confirmation_number ||
-              String(order.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
-              ""
-          ).trim();
-          if (!orderKey) continue;
-
-          const completedAtMs = extractCompletedTimestamp(rec);
-          if (completedAtMs >= cutoffMs) {
-            freshInPageCount += 1;
-            const zoneIds = new Set();
-            const sps = Array.isArray(order.drop_off_address?.starting_points)
-              ? order.drop_off_address.starting_points
-              : Array.isArray(rec?.starting_points)
-              ? rec.starting_points
-              : [];
-            sps.forEach((sp) => {
-              const zid = Number(typeof sp === "object" ? sp?.id || sp?.starting_point_id : sp);
-              if (!Number.isNaN(zid) && zid > 0) zoneIds.add(zid);
-            });
-
-            rollingCompletedPool.set(orderKey, {
-              completedAtMs,
-              zoneIds: Array.from(zoneIds),
-              record: {
-                ...rec,
-                __completed_at_ms: completedAtMs
-              }
-            });
-          }
+      };
+      const rawP1 = await fetchCompletedWithQuery(buildUnfilteredQuery, 1, opts);
+      const rawP1Recs = Array.isArray(rawP1?.records) ? rawP1.records : Array.isArray(rawP1?.orders) ? rawP1.orders : [];
+      ingestCompletedRecordsBatch(rawP1Recs);
+      const rawTotal = Number(rawP1?.metadata?.total_count ?? rawP1Recs.length);
+      const rawTotalPages = Math.max(1, Math.ceil(rawTotal / 50));
+      if (rawTotalPages > 1) {
+        const minPage = Math.max(2, rawTotalPages - 9);
+        for (let p = rawTotalPages; p >= minPage; p--) {
+          const tailRes = await fetchCompletedWithQuery(buildUnfilteredQuery, p, opts);
+          const tailRecs = Array.isArray(tailRes?.records)
+            ? tailRes.records
+            : Array.isArray(tailRes?.orders)
+            ? tailRes.orders
+            : [];
+          const fresh = ingestCompletedRecordsBatch(tailRecs);
+          if (p <= rawTotalPages - 2 && fresh === 0) break;
         }
-
-        if (records.length < 50) break;
-        // Stop paging further back once an entire page has zero orders completed within the last 2 hours (after page 2)
-        if (pageNum >= 2 && freshInPageCount === 0) break;
       }
     }
 
@@ -1390,7 +1429,7 @@
       const storedAuth = readStoredAdminBridgeAuth();
       if (!storedAuth) {
         lastErrorMsg = "افتح الداشبورد وسجّل دخول بحساب Admin لتفعيل التشفير";
-        currentModeLabel = "v7.5 Waiting Admin Login";
+        currentModeLabel = `v${SCRIPT_VERSION} Waiting Admin Login`;
         updateBadge(false);
         return;
       }
@@ -1399,7 +1438,17 @@
       if (!ensureLocalTabLeadership()) {
         lastSuccessAt = new Date();
         lastErrorMsg = "";
-        currentModeLabel = "v7.5 Local Tab Standby (Active in another tab on this PC)";
+        currentModeLabel = `v${SCRIPT_VERSION} Local Tab Standby (Active in another tab on this PC)`;
+        updateBadge(true);
+        return;
+      }
+
+      // Level 2: Multi-PC / Multi-Branch Auto-Leader Election & Instant Failover
+      const leadership = await ensureFeederLeadership(storedAuth.email);
+      if (!leadership.isLeader) {
+        lastSuccessAt = new Date();
+        lastErrorMsg = "";
+        currentModeLabel = `v${SCRIPT_VERSION} Standby Backup (Leader: ${leadership.leaderEmail})`;
         updateBadge(true);
         return;
       }
@@ -1435,7 +1484,7 @@
         await processOrderDetailRequests(opts, []);
         lastSuccessAt = new Date();
         lastErrorMsg = "";
-        currentModeLabel = "v7.5 Primary Leader • Standby (0 Emp)";
+        currentModeLabel = `v${SCRIPT_VERSION} Primary Leader • Standby (0 Emp)`;
         updateBadge(true);
         return;
       }
