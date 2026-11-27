@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Hurrier Live Sync v7.8 — Auto-Update + Rolling 2h Completed At (ISO Window Fetch)
+// @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      7.8
-// @description  [v7.8] GitHub Auto-Update + Accurate Completed At Rolling 2h Pool (ISO from_date/to_date + Tail Fallback) + Live Rider Search
+// @version      7.9
+// @description  [v7.9] Permanent Auto-Update + Rolling 2h Completed At (Cairo Date Tail Fetch + Cross-Midnight) + Live Rider Search
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "7.8";
+  const SCRIPT_VERSION = "7.9";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
@@ -1219,13 +1219,71 @@
     return freshCount;
   }
 
-  async function fetchCompletedWithQuery(queryBuilderFn, pageNum, opts) {
+  function getCairoDateStringsForCompleted() {
+    const now = new Date();
+    const fmtDate = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    });
+    const fmtHour = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Africa/Cairo",
+      hour: "2-digit",
+      hour12: false
+    });
+    const todayStr = fmtDate.format(now);
+    const yesterdayStr = fmtDate.format(new Date(now.getTime() - 24 * 3600 * 1000));
+    const cairoHour = Number(fmtHour.format(now)) || 0;
+    return { todayStr, yesterdayStr, cairoHour };
+  }
+
+  async function fetchCompletedPageForDate(dateStr, unionZoneIds, pageNum, opts) {
     const params = new URLSearchParams();
+    params.set("date", dateStr);
     params.set("page", String(pageNum));
     params.set("per_page", "50");
-    queryBuilderFn(params);
+    (Array.isArray(unionZoneIds) ? unionZoneIds : []).forEach((zid) => {
+      params.append("starting_point_id[]", String(zid));
+    });
     const url = `${BASE_API}/dispatcher-dashboard/orders/completed?${params.toString()}`;
     return safeFetchJson(url, opts);
+  }
+
+  async function pullNewestCompletedTailForDate(dateStr, unionZoneIds, maxTailPages, opts) {
+    const page1Res = await fetchCompletedPageForDate(dateStr, unionZoneIds, 1, opts);
+    if (!page1Res) return;
+    const p1Recs = Array.isArray(page1Res?.records)
+      ? page1Res.records
+      : Array.isArray(page1Res?.orders)
+      ? page1Res.orders
+      : [];
+    ingestCompletedRecordsBatch(p1Recs);
+
+    const totalCount = Number(page1Res?.metadata?.total_count ?? p1Recs.length);
+    const totalPages = Math.max(1, Math.ceil(totalCount / 50));
+    if (totalPages <= 1) return;
+
+    // Hurrier orders Completed Orders ascending by placed_at, so newest orders sit at the last pages
+    const startPage = totalPages;
+    const endPage = Math.max(2, totalPages - maxTailPages + 1);
+    const pagesToPull = [];
+    for (let p = startPage; p >= endPage; p--) {
+      pagesToPull.push(p);
+    }
+
+    const batches = chunkArray(pagesToPull, 4);
+    for (const batch of batches) {
+      let batchFreshTotal = 0;
+      await Promise.all(
+        batch.map(async (p) => {
+          const res = await fetchCompletedPageForDate(dateStr, unionZoneIds, p, opts);
+          const recs = Array.isArray(res?.records) ? res.records : Array.isArray(res?.orders) ? res.orders : [];
+          batchFreshTotal += ingestCompletedRecordsBatch(recs);
+        })
+      );
+      if (batchFreshTotal === 0) break;
+    }
   }
 
   async function syncRollingCompletedOrdersPool(unionZoneIds, opts, force = false) {
@@ -1244,68 +1302,14 @@
     }
     lastRollingCompletedSyncAt = now;
 
-    // Pull 3.5h ISO UTC window so orders placed before midnight or before the 2h cutoff and completed within 2h are captured
-    const fromIso = new Date(now - 3.5 * 3600 * 1000).toISOString();
-    const toIso = new Date(now + 15 * 60 * 1000).toISOString();
+    const { todayStr, yesterdayStr, cairoHour } = getCairoDateStringsForCompleted();
 
-    const buildIsoWindowQuery = (params) => {
-      params.set("from_date", fromIso);
-      params.set("to_date", toIso);
-      (Array.isArray(unionZoneIds) ? unionZoneIds : []).forEach((zid) => {
-        params.append("starting_point_id[]", String(zid));
-      });
-    };
+    // Pull newest pages for today in Cairo
+    await pullNewestCompletedTailForDate(todayStr, unionZoneIds, 16, opts);
 
-    const page1Res = await fetchCompletedWithQuery(buildIsoWindowQuery, 1, opts);
-    const p1Records = Array.isArray(page1Res?.records)
-      ? page1Res.records
-      : Array.isArray(page1Res?.orders)
-      ? page1Res.orders
-      : [];
-    const totalCount = Number(page1Res?.metadata?.total_count ?? p1Records.length);
-
-    if (p1Records.length > 0 && totalCount <= 2500) {
-      ingestCompletedRecordsBatch(p1Records);
-      const totalPages = Math.min(20, Math.max(1, Math.ceil(totalCount / 50)));
-      if (totalPages > 1) {
-        const pagesToFetch = [];
-        for (let p = 2; p <= totalPages; p++) pagesToFetch.push(p);
-        const batches = chunkArray(pagesToFetch, 5);
-        for (const batch of batches) {
-          await Promise.all(
-            batch.map(async (p) => {
-              const r = await fetchCompletedWithQuery(buildIsoWindowQuery, p, opts);
-              const recs = Array.isArray(r?.records) ? r.records : Array.isArray(r?.orders) ? r.orders : [];
-              ingestCompletedRecordsBatch(recs);
-            })
-          );
-        }
-      }
-    } else {
-      // Fallback: query without date filter and walk backwards from the last pages (newest orders)
-      const buildUnfilteredQuery = (params) => {
-        (Array.isArray(unionZoneIds) ? unionZoneIds : []).forEach((zid) => {
-          params.append("starting_point_id[]", String(zid));
-        });
-      };
-      const rawP1 = await fetchCompletedWithQuery(buildUnfilteredQuery, 1, opts);
-      const rawP1Recs = Array.isArray(rawP1?.records) ? rawP1.records : Array.isArray(rawP1?.orders) ? rawP1.orders : [];
-      ingestCompletedRecordsBatch(rawP1Recs);
-      const rawTotal = Number(rawP1?.metadata?.total_count ?? rawP1Recs.length);
-      const rawTotalPages = Math.max(1, Math.ceil(rawTotal / 50));
-      if (rawTotalPages > 1) {
-        const minPage = Math.max(2, rawTotalPages - 9);
-        for (let p = rawTotalPages; p >= minPage; p--) {
-          const tailRes = await fetchCompletedWithQuery(buildUnfilteredQuery, p, opts);
-          const tailRecs = Array.isArray(tailRes?.records)
-            ? tailRes.records
-            : Array.isArray(tailRes?.orders)
-            ? tailRes.orders
-            : [];
-          const fresh = ingestCompletedRecordsBatch(tailRecs);
-          if (p <= rawTotalPages - 2 && fresh === 0) break;
-        }
-      }
+    // If between 12:00 AM and 4:00 AM Cairo time, also pull the tail of yesterday for cross-midnight completed orders
+    if (cairoHour < 4) {
+      await pullNewestCompletedTailForDate(yesterdayStr, unionZoneIds, 8, opts);
     }
 
     // Final cleanup pass after ingestion
@@ -1449,16 +1453,6 @@
         lastSuccessAt = new Date();
         lastErrorMsg = "";
         currentModeLabel = `v${SCRIPT_VERSION} Standby Backup (Leader: ${leadership.leaderEmail})`;
-        updateBadge(true);
-        return;
-      }
-
-      // Level 2: Multi-PC / Multi-Branch Auto-Leader Election & Instant Failover
-      const leadership = await ensureFeederLeadership(storedAuth.email);
-      if (!leadership.isLeader) {
-        lastSuccessAt = new Date();
-        lastErrorMsg = "";
-        currentModeLabel = `v7.5 Standby Backup (Leader: ${leadership.leaderEmail})`;
         updateBadge(true);
         return;
       }
