@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v7.6 — Rolling 2h Completed &amp; Secured</title>
+  <title>Hurrier Live Operations Dashboard v7.8 — Completed At Only &amp; Rolling 2h</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,7 +38,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v7.6...
+      Loading Hurrier Live Operations Dashboard v7.8...
     </div>
   </div>
 
@@ -491,12 +491,17 @@
         primaryDel.completed_at,
         primaryDel.delivered_at,
         primaryDel.dropped_off_at,
+        primaryDel.finished_at,
         timings.completed_at,
         timings.delivered_at,
+        timings.dropped_off_at,
         order.completed_at,
         order.delivered_at,
+        order.dropped_off_at,
+        order.finished_at,
         rec?.completed_at,
-        rec?.delivered_at
+        rec?.delivered_at,
+        rec?.dropped_off_at
       ];
 
       for (const val of candidates) {
@@ -516,7 +521,7 @@
         const updMs = new Date(order.updated_at).getTime();
         if (!Number.isNaN(updMs) && updMs > 0) return updMs;
       }
-      return !Number.isNaN(placedMs) && placedMs > 0 ? placedMs : 0;
+      return 0;
     }
 
     function mapHurrierCompletedRecord(rec) {
@@ -563,14 +568,14 @@
       const completedTimestamp = extractCompletedTimestampFromRec(rec);
       const completedAtFormatted =
         completedTimestamp > 0
-          ? formatShortTimeOnly(new Date(completedTimestamp).toISOString())
-          : formatShortTimeOnly(order.placed_at);
+          ? formatExactTimeSeconds(completedTimestamp)
+          : "-";
 
       return {
         uid: `Completed-${order.id || codeStr}`,
         id: codeStr,
         orderCode: order.order_code || `HF_EG${codeStr}`,
-        placedAtFormatted: formatShortTimeOnly(order.placed_at),
+        placedAtFormatted: formatExactTimeSeconds(order.placed_at),
         placedTimestamp: Number.isNaN(placedTimestamp) ? 0 : placedTimestamp,
         completedAtFormatted,
         completedTimestamp: Number.isNaN(completedTimestamp) ? 0 : completedTimestamp,
@@ -3067,8 +3072,7 @@
                       className="hover:bg-blue-50/30 transition-colors cursor-pointer"
                     >
                       <td className="py-3.5 px-4 align-top">
-                        <div className="font-bold text-emerald-700">{item.completedAtFormatted}</div>
-                        <div className="text-[11px] text-gray-400 mt-0.5">Placed: {item.placedAtFormatted}</div>
+                        <div className="font-bold text-emerald-700 font-mono">{item.completedAtFormatted}</div>
                       </td>
                       <td className="py-3.5 px-4 align-top">
                         <div className="flex items-center gap-1.5">
@@ -4005,7 +4009,7 @@
                   <span className="text-2xl">🚴‍♂️</span>
                   <div>
                     <h1 className="text-lg font-bold tracking-tight">Hurrier Live Operations</h1>
-                    <p className="text-xs text-slate-300">v7.6 • Secured Google Access</p>
+                    <p className="text-xs text-slate-300">v7.8 • Secured Google Access</p>
                   </div>
                 </div>
                 <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
@@ -4148,7 +4152,7 @@
                         تحديد الزونات قبل بدء المتابعة
                       </h1>
                       <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v7.6 • {userRole === "admin" ? "Admin" : "Employee"}
+                        ★ v7.8 • {userRole === "admin" ? "Admin" : "Employee"}
                       </span>
                     </div>
                     <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5 truncate">
@@ -4458,7 +4462,7 @@
 
                 <div className="px-4 py-3 bg-slate-50 border-b border-gray-200 text-xs space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-700">★ v7.6 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                    <span className="font-bold text-emerald-700">★ v7.8 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                     <button
                       type="button"
                       onClick={handleGoogleSignOut}
@@ -4516,7 +4520,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v7.6 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                <span className="font-bold text-emerald-700">★ v7.8 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                 <button
                   type="button"
                   onClick={handleGoogleSignOut}
