@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      8.4
-// @description  [v8.4] Clean Syntax + Auth Bridge + Live Multi-Page Active Sync + Rolling 2h Completed At
+// @version      8.7
+// @description  [v8.7] Exact Completed At via current_state_transition + Version-Priority Leader Lock + Full Active Sync
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "8.4";
+  const SCRIPT_VERSION = "8.7";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
@@ -50,15 +50,20 @@
   }
 
   // 2) Hurrier Host Mode: Zone Catalog + Dynamic Cities Sync
+  const MANIAL_FAMILY_IDS = [10004, 10162, 10282, 10284, 10214, 10267];
+
   const ZONE_CATALOG_PAIRS = [
     [1, "Heliopolis"], [2, "Mohandiseen"], [10004, "Manial"], [10004, "Manial sp"],
+    [10162, "Manial nesting"], [10282, "Manial nesting p"], [10284, "Manial p"],
+    [10214, "Hybrid fleet al manial"], [10267, "Hybrid al-manial bc"],
     [10231, "Hybrid fleet mokattam easy sports"], [10002, "New maadi"], [10003, "Old maadi"],
-    [10130, "Maadi nesting sp"], [10020, "Helwan SP"], [10009, "Zahraa maadi and meraag"],
-    [10001, "Mokattam sp"], [10143, "Shobra 2 sp"], [10064, "Mokkatam asmarat sp"],
-    [10094, "Sheikh zayed 2 sp"], [10251, "Hybrid fleet imbabah"], [10179, "Obour golf pt"],
-    [10167, "Mohandiseen nesting p"], [10181, "Haram nesting pt"], [10138, "October hosary"],
-    [10012, "Tagammoa 1 sp"], [10089, "Rehab 2 sp"], [10069, "Shorouk city sp 1"],
-    [10090, "Tagamo3 5 south"], [10100, "Madinaty 3 sp south park"], [10235, "Ain shams nesting sp"],
+    [10130, "Maadi nesting sp"], [10020, "Helwan SP"], [10135, "Helwan sp 2"],
+    [10009, "Zahraa maadi and meraag"], [10001, "Mokattam sp"], [10143, "Shobra 2 sp"],
+    [10064, "Mokkatam asmarat sp"], [10094, "Sheikh zayed 2 sp"], [10251, "Hybrid fleet imbabah"],
+    [10179, "Obour golf pt"], [10167, "Mohandiseen nesting p"], [10181, "Haram nesting pt"],
+    [10138, "October hosary"], [10012, "Tagammoa 1 sp"], [10089, "Rehab 2 sp"],
+    [10253, "Hybrid fleet rehab old"], [10069, "Shorouk city sp 1"], [10090, "Tagamo3 5 south"],
+    [10100, "Madinaty 3 sp south park"], [10235, "Ain shams nesting sp"], [10286, "Hybrid fleet ain shams 2"],
     [10180, "Obour hay awal pt"], [10011, "Tagamoa 5 north"], [10074, "Hadayek el ahram sp"],
     [10091, "Mohamed naguib sp"], [10063, "Hadayek el qobba 1 sp"], [10102, "Madinaty 4 sp craft zone"],
     [10182, "Haram pt"], [10129, "Mohandiseen nesting sp"], [10183, "Haram pt 2"],
@@ -66,40 +71,41 @@
     [10163, "Tahrir nesting"], [10160, "Rock vera"], [10166, "Mohandiseen p"],
     [10128, "Naser city nesting sp"], [10033, "Hegaz"], [10125, "Haram nesting sp"],
     [10000, "Nasr city sp"], [10165, "Madienty central park ebikes"], [10006, "Merryland"],
-    [10139, "Haram sp 2"], [10022, "Tahrir"], [10162, "Manial nesting"],
-    [10005, "Sheraton"], [10045, "Shobra sp"], [10013, "Rehab 1 sp"],
-    [10096, "Palm hills sp"], [10150, "Golden square"], [10047, "October hosary 2"],
-    [10018, "Haram sp"], [10099, "Madinaty 2 sp central park"], [10067, "Obour hay awal sp"],
-    [10092, "Hadayek el qobba 2 sp"], [10164, "Shobra nesting"], [10101, "Shorouk city sp 2"],
-    [10126, "October nesting"], [10010, "Auc sp"], [10070, "Madinaty 1 sp air mall & arabesque"],
-    [10141, "Wahat fardous sp"], [10113, "Ains shams (ahmed essmat) 1"], [10159, "Obour golf sp"],
-    [10131, "Sheraton nesting sp"], [10161, "Zahraa maadi nesting"], [10151, "Wahat sp 2"],
-    [10032, "Sheikh zayed 1 sp"], [10104, "Abasseya sp"], [10217, "Hybrid fleet mokattam mafarik"],
-    [10193, "Hybrid fleet el zaitoun"], [10186, "Hybrid fleet ard el golf"], [10216, "Hybrid fleet sheraton"],
-    [10229, "Hybrid fleet heliopolis rabwa"], [10266, "Hybrid ard el golf bc"], [10223, "Hybrid fleet shorouk 1st area"],
+    [10139, "Haram sp 2"], [10022, "Tahrir"], [10005, "Sheraton"],
+    [10045, "Shobra sp"], [10013, "Rehab 1 sp"], [10096, "Palm hills sp"],
+    [10150, "Golden square"], [10047, "October hosary 2"], [10018, "Haram sp"],
+    [10099, "Madinaty 2 sp central park"], [10067, "Obour hay awal sp"], [10092, "Hadayek el qobba 2 sp"],
+    [10164, "Shobra nesting"], [10101, "Shorouk city sp 2"], [10126, "October nesting"],
+    [10010, "Auc sp"], [10070, "Madinaty 1 sp air mall & arabesque"], [10141, "Wahat fardous sp"],
+    [10113, "Ains shams (ahmed essmat) 1"], [10159, "Obour golf sp"], [10131, "Sheraton nesting sp"],
+    [10161, "Zahraa maadi nesting"], [10151, "Wahat sp 2"], [10032, "Sheikh zayed 1 sp"],
+    [10104, "Abasseya sp"], [10217, "Hybrid fleet mokattam mafarik"], [10193, "Hybrid fleet el zaitoun"],
+    [10186, "Hybrid fleet ard el golf"], [10216, "Hybrid fleet sheraton"], [10229, "Hybrid fleet heliopolis rabwa"],
+    [10266, "Hybrid ard el golf bc"], [10268, "Hybrid el hadeeqa el dawlia bc"], [10223, "Hybrid fleet shorouk 1st area"],
     [10234, "Hybrid fleet wahat beta gardens"], [10209, "Hybrid fleet tagmmoa hay 1"], [10207, "Obour industrial area hybrid fleet"],
     [10248, "Hybrid fleet sheikh zayed hay 4"], [10249, "Hybrid fleet west somed"], [10219, "Hybrid fleet ain shams"],
     [10261, "Hybrid fleet - mountain view park wahat"], [10226, "Hybrid fleet sheikh zayed hay 9"], [10189, "Hybrid fleet el sayeda"],
-    [10214, "Hybrid fleet al manial"], [10029, "Beverly hills sp"], [10238, "Hybrid fleet el daher"],
-    [10230, "Hybrid fleet nasrcity hay 8"], [10142, "Palm hills 2 sp"], [10195, "Hybrid fleet lebanon square"],
-    [10222, "Hybrid fleet shobra"], [10185, "Hybrid fleet banafseg"], [10275, "Hybrid fleet toya mall"],
-    [10174, "Hybrid fleet maadi"], [10184, "Hybrid fleet zayed"], [10212, "Hybrid fleet palm hills 1"],
-    [10232, "Hybrid fleet maadi old"], [10136, "Motamyez sp"], [10218, "Hybrid fleet el hadeeka el dawlya"],
-    [10196, "Hybrid fleet tayaran"], [10224, "Hybrid fleet tagmmoa auc"], [10225, "Hybrid fleet golden lotus"],
-    [10188, "Hybrid fleet rock vera"], [10173, "Hybrid fleet rehab"], [10208, "Hybrid fleet banks center"],
-    [10191, "Hybrid fleet october 4th"], [10210, "Hybrid fleet hadayek el ahram"], [10211, "Hybrid fleet maryoteya"],
-    [10264, "Hybrid lebanon bc"], [10252, "Hybrid fleet mohafzet el giza"], [10256, "Hybrid fleet mosaddak"],
-    [10262, "Hybrid fleet hadayek el ahram - area d"], [10227, "Hybrid fleet mokattam nafora"], [10241, "Hybrid fleet helwan"],
-    [10215, "Hybrid fleet maadi meraag"], [10194, "Hybrid fleet october 6th"], [10237, "Hybrid fleet agouza"],
-    [10114, "Ain shams (zatoun) 3"], [10198, "Hybrid fleet taqa"], [10221, "Hybrid fleet palm hills 360"],
-    [10228, "Hybrid fleet maadi laselky"], [10250, "Hybrid fleet el nadi el gedid"], [10233, "Hybrid fleet shorouk 8th district"],
-    [10177, "Hybrid fleet obour"], [10213, "Hybrid fleet el montazah"], [10265, "Hybrid taqseem laselky bc"],
-    [10220, "Hybrid fleet october wahet el mohandseen"], [10260, "Obour golf hybrid fleet"], [10197, "Hybrid fleet tersa"],
-    [10190, "Hybrid fleet talbya"], [10271, "Hybrid wahet el mohandsen bc"], [10269, "Hybrid maadi old bc"],
-    [10192, "Shobra nesting 2"], [10273, "Hybrid fleet gardenia"], [10267, "Hybrid al-manial bc"],
-    [10270, "Hybrid shobra bc"], [10277, "Hybrid el sayeda zeinab bc"], [10068, "Smart village dandy mall sp 1"],
-    [10278, "Hybrid talbyia bc"], [10272, "Hybrid mohafzet el giza bc"], [10276, "Hybrid agouza bc"],
-    [10281, "Hybrid fleet shorouk 4"], [10187, "Hybrid fleet shorouk 3rd"], [10027, "Gleem sp"], [10028, "Raml station sp"]
+    [10029, "Beverly hills sp"], [10238, "Hybrid fleet el daher"], [10230, "Hybrid fleet nasrcity hay 8"],
+    [10142, "Palm hills 2 sp"], [10195, "Hybrid fleet lebanon square"], [10222, "Hybrid fleet shobra"],
+    [10185, "Hybrid fleet banafseg"], [10275, "Hybrid fleet toya mall"], [10174, "Hybrid fleet maadi"],
+    [10184, "Hybrid fleet zayed"], [10212, "Hybrid fleet palm hills 1"], [10232, "Hybrid fleet maadi old"],
+    [10136, "Motamyez sp"], [10218, "Hybrid fleet el hadeeka el dawlya"], [10196, "Hybrid fleet tayaran"],
+    [10224, "Hybrid fleet tagmmoa auc"], [10225, "Hybrid fleet golden lotus"], [10188, "Hybrid fleet rock vera"],
+    [10173, "Hybrid fleet rehab"], [10208, "Hybrid fleet banks center"], [10191, "Hybrid fleet october 4th"],
+    [10210, "Hybrid fleet hadayek el ahram"], [10211, "Hybrid fleet maryoteya"], [10264, "Hybrid lebanon bc"],
+    [10252, "Hybrid fleet mohafzet el giza"], [10256, "Hybrid fleet mosaddak"], [10262, "Hybrid fleet hadayek el ahram - area d"],
+    [10227, "Hybrid fleet mokattam nafora"], [10241, "Hybrid fleet helwan"], [10215, "Hybrid fleet maadi meraag"],
+    [10194, "Hybrid fleet october 6th"], [10237, "Hybrid fleet agouza"], [10114, "Ain shams (zatoun) 3"],
+    [10198, "Hybrid fleet taqa"], [10221, "Hybrid fleet palm hills 360"], [10228, "Hybrid fleet maadi laselky"],
+    [10250, "Hybrid fleet el nadi el gedid"], [10233, "Hybrid fleet shorouk 8th district"], [10177, "Hybrid fleet obour"],
+    [10213, "Hybrid fleet el montazah"], [10265, "Hybrid taqseem laselky bc"], [10220, "Hybrid fleet october wahet el mohandseen"],
+    [10260, "Obour golf hybrid fleet"], [10197, "Hybrid fleet tersa"], [10190, "Hybrid fleet talbya"],
+    [10271, "Hybrid wahet el mohandsen bc"], [10269, "Hybrid maadi old bc"], [10192, "Shobra nesting 2"],
+    [10273, "Hybrid fleet gardenia"], [10270, "Hybrid shobra bc"], [10277, "Hybrid el sayeda zeinab bc"],
+    [10068, "Smart village dandy mall sp 1"], [10278, "Hybrid talbyia bc"], [10272, "Hybrid mohafzet el giza bc"],
+    [10276, "Hybrid agouza bc"], [10281, "Hybrid fleet shorouk 4"], [10187, "Hybrid fleet shorouk 3rd"],
+    [10025, "Sidi bishr sp"], [10027, "Gleem sp"], [10028, "Raml station sp"],
+    [10079, "Al bitash sp"], [10085, "Semouha club sp"], [10144, "Kilo 21 sp"]
   ];
 
   const ZONE_NAME_TO_ID = new Map();
@@ -114,9 +120,11 @@
   let isSyncInProgress = false;
 
   const rollingCompletedPool = new Map();
+  const exactCompletedMetaCache = new Map();
   const lastKnownCompletedPage = {};
   let lastRollingCompletedSyncAt = 0;
   let initialCompletedBackfillDone = false;
+  let lastCompletedWatchedZoneSig = "";
 
   const cachedActiveById = new Map();
   let lastFullActiveSweepAt = 0;
@@ -125,6 +133,35 @@
   let lastOrderDetailReqAt = 0;
   let lastCourierDetailReqAt = 0;
   let lastRiderSearchReqId = "";
+  let yesterdayCompletedBackfilledDate = "";
+
+  function acquireSamePcTabLock() {
+    try {
+      const now = Date.now();
+      const raw = window.localStorage.getItem(LOCAL_TAB_LOCK_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && parsed.tabId && parsed.tabId !== TAB_INSTANCE_ID && now - (parsed.ts || 0) < 6000) {
+        return false;
+      }
+      window.localStorage.setItem(
+        LOCAL_TAB_LOCK_KEY,
+        JSON.stringify({ tabId: TAB_INSTANCE_ID, ts: now })
+      );
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  window.addEventListener("beforeunload", () => {
+    try {
+      const raw = window.localStorage.getItem(LOCAL_TAB_LOCK_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && parsed.tabId === TAB_INSTANCE_ID) {
+        window.localStorage.removeItem(LOCAL_TAB_LOCK_KEY);
+      }
+    } catch {}
+  });
 
   // Floating Status Badge (Guaranteed Mount)
   const badge = document.createElement("div");
@@ -294,103 +331,49 @@
     try {
       const data = await hurrierGet("/dispatcher-dashboard/cities");
       if (Array.isArray(data?.cities)) {
+        const dynamicCatalog = [];
         data.cities.forEach((city) => {
+          const cityName = String(city?.name || "Cairo").trim();
           (city.zones || []).forEach((z) => {
             if (z && z.id && z.name) {
               const cleanName = String(z.name).trim().toLowerCase();
+              const noSp = cleanName.replace(/\s+sp$/i, "").trim();
               ZONE_NAME_TO_ID.set(cleanName, Number(z.id));
               ZONE_NAME_TO_ID.set(`${cleanName} sp`, Number(z.id));
+              if (noSp) ZONE_NAME_TO_ID.set(noSp, Number(z.id));
+              if (cityName === "Cairo" || cityName === "Alexandria") {
+                dynamicCatalog.push({ id: Number(z.id), name: String(z.name).trim(), city: cityName });
+              }
             }
           });
         });
         citiesSyncedOnce = true;
+        if (dynamicCatalog.length > 0) {
+          fbDb("PUT", "/config/dynamic_zones_catalog", dynamicCatalog).catch(() => {});
+        }
       }
     } catch {}
   }
-
-  function acquireSamePcTabLock() {
-    const now = Date.now();
-    try {
-      const cur = JSON.parse(window.localStorage.getItem(LOCAL_TAB_LOCK_KEY) || "null");
-      if (cur && cur.tabId !== TAB_INSTANCE_ID && now - cur.ts < 5500) {
-        return false;
-      }
-      window.localStorage.setItem(LOCAL_TAB_LOCK_KEY, JSON.stringify({ tabId: TAB_INSTANCE_ID, ts: now }));
-      return true;
-    } catch {
-      return true;
-    }
-  }
-
-  function extractCompletedTimestamp(rec) {
-    const order = rec?.order || {};
-    const primaryDel = rec?.primary_delivery || {};
-    const timings = rec?.primary_delivery_timings || {};
-
-    const candidates = [
-      primaryDel.completed_at,
-      primaryDel.delivered_at,
-      primaryDel.dropped_off_at,
-      primaryDel.finished_at,
-      timings.completed_at,
-      timings.delivered_at,
-      timings.dropped_off_at,
-      order.current_state_transition,
-      order.completed_at,
-      order.delivered_at,
-      order.dropped_off_at,
-      order.finished_at,
-      rec?.completed_at,
-      rec?.delivered_at
-    ];
-
-    for (const val of candidates) {
-      if (val) {
-        const ms = typeof val === "number" ? (val > 1e12 ? val : val * 1000) : new Date(val).getTime();
-        if (!Number.isNaN(ms) && ms > 0) return ms;
-      }
-    }
-
-    const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
-    const rawTotalTime = Number(timings.total_time);
-    if (placedMs > 0 && !Number.isNaN(rawTotalTime) && rawTotalTime > 0) {
-      const durationMs = rawTotalTime < 240 ? rawTotalTime * 60 * 1000 : rawTotalTime * 1000;
-      return placedMs + durationMs;
-    }
-
-    return 0;
-  }
-
-  function getCairoDateStringsForCompleted() {
-    const now = new Date();
-    const cairoNow = new Date(now.toLocaleString("en-US", { timeZone: "Africa/Cairo" }));
-    const fmt = (d) => {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      return `${y}-${m}-${day}`;
-    };
-    const todayStr = fmt(cairoNow);
-    const yesterdayDate = new Date(cairoNow.getTime() - 24 * 3600 * 1000);
-    const yesterdayStr = fmt(yesterdayDate);
-    return { todayStr, yesterdayStr, cairoHour: cairoNow.getHours() };
-  }
-
-  function extractRecordStartingPointIds(rec) {
+  function extractRecordStartingPointsMeta(rec) {
     const ids = new Set();
+    const names = [];
     const collect = (arr) => {
       if (!Array.isArray(arr)) return;
       arr.forEach((sp) => {
         if (!sp) return;
         if (typeof sp === "string") {
           const key = sp.trim().toLowerCase();
-          const mappedId = ZONE_NAME_TO_ID.get(key) || ZONE_NAME_TO_ID.get(`${key} sp`);
+          if (key) names.push(key);
+          const noSp = key.replace(/\s+sp$/i, "").trim();
+          const mappedId = ZONE_NAME_TO_ID.get(key) || ZONE_NAME_TO_ID.get(`${key} sp`) || ZONE_NAME_TO_ID.get(noSp);
           if (mappedId) ids.add(mappedId);
         } else if (typeof sp === "object") {
           if (sp.id) ids.add(Number(sp.id));
           if (sp.name) {
             const key = String(sp.name).trim().toLowerCase();
-            const mappedId = ZONE_NAME_TO_ID.get(key) || ZONE_NAME_TO_ID.get(`${key} sp`);
+            if (key) names.push(key);
+            const noSp = key.replace(/\s+sp$/i, "").trim();
+            const mappedId = ZONE_NAME_TO_ID.get(key) || ZONE_NAME_TO_ID.get(`${key} sp`) || ZONE_NAME_TO_ID.get(noSp);
             if (mappedId) ids.add(mappedId);
           }
         }
@@ -399,11 +382,26 @@
     collect(rec?.starting_points);
     collect(rec?.order?.drop_off_address?.starting_points);
     collect(rec?.order?.dropoff_address?.starting_points);
-    return ids;
+    return { ids, names };
   }
 
-  // Multi-page fetcher for Queued / Dispatched / Preorder / Actionable / WaitForAssembled
-  async function fetchPaginatedDeliveries(path, maxPages = 6) {
+  function doesRecordMatchSessionZones(rec, targetSet, hasManialSelected, hasTahrirSelected) {
+    if (!targetSet || targetSet.size === 0) return true;
+    const { ids, names } = extractRecordStartingPointsMeta(rec);
+    for (const id of ids) {
+      if (targetSet.has(id)) return true;
+    }
+    if (hasManialSelected && names.some((n) => n.includes("manial"))) {
+      return true;
+    }
+    if (hasTahrirSelected && names.some((n) => n.startsWith("tahrir"))) {
+      return true;
+    }
+    return false;
+  }
+
+  // Multi-page fetcher for Queued / Dispatched / Preorder / Actionable / WaitForAssembled (Scans ALL pages until < 50)
+  async function fetchPaginatedDeliveries(path, maxPages = 35) {
     const all = [];
     try {
       const p1 = await hurrierGet(`${path}?page=1&per_page=50`);
@@ -411,67 +409,86 @@
       all.push(...r1);
       if (r1.length < 50 || maxPages <= 1) return all;
 
-      const pages = [];
-      for (let pg = 2; pg <= maxPages; pg++) pages.push(pg);
-      const settled = await Promise.allSettled(
-        pages.map((pg) => hurrierGet(`${path}?page=${pg}&per_page=50`))
-      );
-      for (const s of settled) {
-        if (s.status === "fulfilled" && Array.isArray(s.value?.records)) {
-          all.push(...s.value.records);
-          if (s.value.records.length < 50) break;
+      let reachedEnd = false;
+      for (let startPg = 2; startPg <= maxPages && !reachedEnd; startPg += 5) {
+        const batch = [];
+        for (let pg = startPg; pg < startPg + 5 && pg <= maxPages; pg++) batch.push(pg);
+        const settled = await Promise.allSettled(
+          batch.map((pg) => hurrierGet(`${path}?page=${pg}&per_page=50`))
+        );
+        for (const s of settled) {
+          if (s.status === "fulfilled" && Array.isArray(s.value?.records)) {
+            all.push(...s.value.records);
+            if (s.value.records.length < 50) reachedEnd = true;
+          }
         }
       }
     } catch {}
     return all;
   }
 
-  // Smart Multi-Page Active Deliveries Sync (Full sweep every 12s + Fast tail pages every 2s)
-  async function syncActiveDeliveries(totalActiveHint) {
+  // 100% Complete Multi-Page Active Deliveries Sync (No 40-page cap: scans until true end page + 2s live tail delta)
+  async function syncActiveDeliveries() {
     const now = Date.now();
-    const estPages = Math.min(40, Math.max(6, Math.ceil((totalActiveHint || 600) / 50) + 2));
-    const needFullSweep = cachedActiveById.size === 0 || now - lastFullActiveSweepAt >= 12000;
+    const SAFETY_MAX_PAGES = 250;
+    const needFullSweep = cachedActiveById.size === 0 || now - lastFullActiveSweepAt >= 10000;
 
     if (needFullSweep) {
       lastFullActiveSweepAt = now;
       const freshMap = new Map();
       let reachedEnd = false;
       let highestNonEmptyPage = 1;
+      let hadUnrecoveredError = false;
 
-      for (let batchStart = 1; batchStart <= estPages && !reachedEnd; batchStart += 6) {
+      for (let batchStart = 1; batchStart <= SAFETY_MAX_PAGES && !reachedEnd; batchStart += 8) {
         const batchPages = [];
-        for (let p = batchStart; p < batchStart + 6 && p <= estPages; p++) {
+        for (let p = batchStart; p < batchStart + 8 && p <= SAFETY_MAX_PAGES; p++) {
           batchPages.push(p);
         }
         const results = await Promise.allSettled(
           batchPages.map((pg) => hurrierGet(`/dispatcher-dashboard/deliveries/active?page=${pg}&per_page=50`))
         );
-        results.forEach((res, idx) => {
-          if (res.status === "fulfilled") {
-            const recs = Array.isArray(res.value?.records) ? res.value.records : [];
+
+        for (let idx = 0; idx < results.length; idx++) {
+          const pg = batchPages[idx];
+          let recs = null;
+          if (results[idx].status === "fulfilled") {
+            recs = Array.isArray(results[idx].value?.records) ? results[idx].value.records : [];
+          } else {
+            try {
+              const retryData = await hurrierGet(`/dispatcher-dashboard/deliveries/active?page=${pg}&per_page=50`);
+              recs = Array.isArray(retryData?.records) ? retryData.records : [];
+            } catch {
+              hadUnrecoveredError = true;
+            }
+          }
+
+          if (Array.isArray(recs)) {
             if (recs.length > 0) {
-              highestNonEmptyPage = Math.max(highestNonEmptyPage, batchPages[idx]);
+              highestNonEmptyPage = Math.max(highestNonEmptyPage, pg);
               recs.forEach((r) => {
-                const key = String(r.id || r.order?.id || r.order?.code || Math.random());
-                freshMap.set(key, r);
+                const key = String(r.id || r.order?.id || r.order?.code || "");
+                if (key) freshMap.set(key, r);
               });
             }
             if (recs.length < 50) {
               reachedEnd = true;
             }
           }
-        });
+        }
       }
 
       if (freshMap.size > 0) {
-        cachedActiveById.clear();
+        if (!hadUnrecoveredError) {
+          cachedActiveById.clear();
+        }
         freshMap.forEach((v, k) => cachedActiveById.set(k, v));
         lastKnownActivePages = highestNonEmptyPage;
       }
     } else {
-      // Fast 2s update of newest tail pages
-      const startTail = Math.max(1, lastKnownActivePages - 3);
-      const endTail = lastKnownActivePages + 1;
+      // Fast 2s update of newest tail pages so brand-new active orders appear immediately
+      const startTail = Math.max(1, lastKnownActivePages - 4);
+      const endTail = lastKnownActivePages + 3;
       const tailPages = [];
       for (let p = startTail; p <= endTail; p++) tailPages.push(p);
 
@@ -495,17 +512,116 @@
     return Array.from(cachedActiveById.values());
   }
 
-  // Rolling 2-Hour Completed Orders Pool (by Completed At, excluding Cancelled)
-  function ingestCompletedRecordsBatch(records) {
+  function parseValidTimestampMs(val) {
+    if (!val) return 0;
+    const ms = typeof val === "number" ? (val > 1e12 ? val : val * 1000) : new Date(val).getTime();
+    return !Number.isNaN(ms) && ms > 946684800000 ? ms : 0;
+  }
+
+  function getCairoDateStringsForCompleted() {
+    const now = new Date();
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      hour12: false
+    });
+    const parts = fmt.formatToParts(now);
+    const getP = (t) => parts.find((p) => p.type === t)?.value || "";
+    const todayStr = `${getP("year")}-${getP("month")}-${getP("day")}`;
+    const cairoHour = Number(getP("hour") || 0) % 24;
+
+    const yest = new Date(now.getTime() - 24 * 3600 * 1000);
+    const yParts = fmt.formatToParts(yest);
+    const getYP = (t) => yParts.find((p) => p.type === t)?.value || "";
+    const yesterdayStr = `${getYP("year")}-${getYP("month")}-${getYP("day")}`;
+
+    return { todayStr, yesterdayStr, cairoHour };
+  }
+
+  // Exact Completed At Resolver via /orders/detail?code={code} (Cached once per order)
+  async function resolveExactCompletedMetaForOrders(candidates) {
+    if (!Array.isArray(candidates) || candidates.length === 0) return;
+
+    for (let i = 0; i < candidates.length; i += 8) {
+      const batch = candidates.slice(i, i + 8);
+      await Promise.allSettled(
+        batch.map(async ({ orderKey, orderCode }) => {
+          if (exactCompletedMetaCache.has(orderKey)) return;
+          try {
+            const detailData = await hurrierGet(
+              `/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(orderKey)}`
+            );
+            const dOrder = detailData?.order || detailData || {};
+            const stLower = String(dOrder.status || "").toLowerCase();
+            if (stLower.includes("cancel")) {
+              exactCompletedMetaCache.set(orderKey, {
+                completedAtMs: 0,
+                cancelled: true,
+                cachedAt: Date.now()
+              });
+              return;
+            }
+
+            let exactMs =
+              parseValidTimestampMs(dOrder.current_state_transition) ||
+              parseValidTimestampMs(dOrder.event_timestamp) ||
+              parseValidTimestampMs(dOrder.completed_at) ||
+              parseValidTimestampMs(dOrder.delivered_at);
+
+            if (!exactMs) {
+              try {
+                const delivData = await hurrierGet(
+                  `/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(orderCode)}`
+                );
+                const deliveries = Array.isArray(delivData?.deliveries) ? delivData.deliveries : [];
+                for (const del of deliveries) {
+                  const transitions = Array.isArray(del?.transitions) ? del.transitions : [];
+                  for (let t = transitions.length - 1; t >= 0; t--) {
+                    const tr = transitions[t];
+                    if (String(tr?.to_state || "").toLowerCase() === "completed") {
+                      exactMs =
+                        parseValidTimestampMs(tr?.metadata?.performed_at) ||
+                        parseValidTimestampMs(tr?.created_at);
+                      if (exactMs) break;
+                    }
+                  }
+                  if (exactMs) break;
+                }
+              } catch {}
+            }
+
+            if (exactMs > 0) {
+              exactCompletedMetaCache.set(orderKey, {
+                completedAtMs: exactMs,
+                cancelled: false,
+                cachedAt: Date.now()
+              });
+            }
+          } catch {}
+        })
+      );
+    }
+  }
+
+  // Rolling 2-Hour Completed Orders Pool (Strictly by Exact Completed At, excluding Cancelled)
+  async function ingestCompletedRecordsBatch(records, unionZoneSet, hasManialUnion, hasTahrirUnion) {
     if (!Array.isArray(records) || records.length === 0) return 0;
     const cutoffMs = Date.now() - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
-    let added = 0;
+    const needExactFetch = [];
+    const matchedItems = [];
 
     for (const rec of records) {
       if (!rec || typeof rec !== "object") continue;
       const order = rec.order || {};
       const stLower = String(order.status || rec.status || "").toLowerCase();
       if (stLower.includes("cancel")) continue;
+
+      if (!doesRecordMatchSessionZones(rec, unionZoneSet, hasManialUnion, hasTahrirUnion)) {
+        continue;
+      }
 
       const orderKey = String(
         order.confirmation_number ||
@@ -516,16 +632,35 @@
       ).trim();
       if (!orderKey) continue;
 
-      const completedAtMs = extractCompletedTimestamp(rec);
-      if (!completedAtMs || completedAtMs < cutoffMs) continue;
+      const orderCode = String(order.order_code || `HF_EG${orderKey}`).trim();
+      matchedItems.push({ orderKey, orderCode, rec });
 
-      const spIds = extractRecordStartingPointIds(rec);
+      if (!exactCompletedMetaCache.has(orderKey)) {
+        needExactFetch.push({ orderKey, orderCode });
+      }
+    }
+
+    if (needExactFetch.length > 0) {
+      await resolveExactCompletedMetaForOrders(needExactFetch);
+    }
+
+    let added = 0;
+    for (const { orderKey, rec } of matchedItems) {
+      const meta = exactCompletedMetaCache.get(orderKey);
+      if (!meta || meta.cancelled || !meta.completedAtMs) continue;
+      if (meta.completedAtMs < cutoffMs) {
+        rollingCompletedPool.delete(orderKey);
+        continue;
+      }
+
+      const spMeta = extractRecordStartingPointsMeta(rec);
       rollingCompletedPool.set(orderKey, {
-        completedAtMs,
-        spIds,
+        completedAtMs: meta.completedAtMs,
+        spIds: spMeta.ids,
+        spNames: spMeta.names,
         rec: {
           ...rec,
-          __completed_at_ms: completedAtMs
+          __completed_at_ms: meta.completedAtMs
         }
       });
       added++;
@@ -533,99 +668,101 @@
     return added;
   }
 
-  async function discoverLastCompletedPage(dateStr) {
-    const p1 = await hurrierGet(`/dispatcher-dashboard/orders/completed?date=${dateStr}&page=1&per_page=50`);
-    const p1Recs = Array.isArray(p1?.records) ? p1.records : [];
-    if (p1Recs.length === 0) return 0;
-    ingestCompletedRecordsBatch(p1Recs);
-    if (p1Recs.length < 50) return 1;
-
-    const explicitTotal = Number(
-      p1?.total_records ?? p1?.total_count ?? p1?.total ?? p1?.count ?? p1?.pagination?.total ?? 0
-    );
-    if (explicitTotal > 0) {
-      return Math.max(1, Math.ceil(explicitTotal / 50));
-    }
-
-    let low = Math.max(1, lastKnownCompletedPage[dateStr] || 1);
-    let step = 1;
-    let high = low;
-
-    while (high <= 16384) {
-      const probePage = low + step;
-      const res = await hurrierGet(`/dispatcher-dashboard/orders/completed?date=${dateStr}&page=${probePage}&per_page=50`);
-      const recs = Array.isArray(res?.records) ? res.records : [];
-      if (recs.length === 0) {
-        high = probePage - 1;
-        break;
-      }
-      ingestCompletedRecordsBatch(recs);
-      low = probePage;
-      if (recs.length < 50) {
-        lastKnownCompletedPage[dateStr] = probePage;
-        return probePage;
-      }
-      step *= 2;
-      high = low + step;
-    }
-
-    while (low < high) {
-      const mid = Math.ceil((low + high) / 2);
-      const res = await hurrierGet(`/dispatcher-dashboard/orders/completed?date=${dateStr}&page=${mid}&per_page=50`);
-      const recs = Array.isArray(res?.records) ? res.records : [];
-      if (recs.length > 0) {
-        ingestCompletedRecordsBatch(recs);
-        low = mid;
-        if (recs.length < 50) break;
-      } else {
-        high = mid - 1;
-      }
-    }
-
-    lastKnownCompletedPage[dateStr] = Math.max(1, low);
-    return lastKnownCompletedPage[dateStr];
-  }
-
-  async function pullCompletedWindowForDate(dateStr, minPlacedCutoffMs, isIncremental) {
+  async function pullCompletedWindowForDate(
+    dateStr,
+    minPlacedCutoffMs,
+    isIncremental,
+    unionZoneSet,
+    hasManialUnion,
+    hasTahrirUnion
+  ) {
     try {
-      const prevKnown = lastKnownCompletedPage[dateStr] || 1;
-      const totalPages = await discoverLastCompletedPage(dateStr);
-      if (totalPages <= 0) return;
-
-      if (isIncremental) {
-        const startPg = Math.max(1, Math.min(prevKnown - 2, totalPages - 3));
-        const pages = [];
-        for (let pg = totalPages; pg >= startPg; pg--) pages.push(pg);
-        const settled = await Promise.allSettled(
-          pages.map((pg) => hurrierGet(`/dispatcher-dashboard/orders/completed?date=${dateStr}&page=${pg}&per_page=50`))
+      const fetchCompPage = async (pg) => {
+        const res = await hurrierGet(
+          `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${pg}&per_page=50`
         );
-        settled.forEach((s) => {
-          if (s.status === "fulfilled" && Array.isArray(s.value?.records)) {
-            ingestCompletedRecordsBatch(s.value.records);
+        return Array.isArray(res?.records) ? res.records : [];
+      };
+
+      let lastPage = lastKnownCompletedPage[dateStr] || 0;
+
+      if (lastPage > 0) {
+        while (lastPage < 2000) {
+          const recs = await fetchCompPage(lastPage);
+          await ingestCompletedRecordsBatch(recs, unionZoneSet, hasManialUnion, hasTahrirUnion);
+          if (recs.length < 50) break;
+          const nextProbe = await fetchCompPage(lastPage + 1);
+          await ingestCompletedRecordsBatch(nextProbe, unionZoneSet, hasManialUnion, hasTahrirUnion);
+          if (nextProbe.length === 0) break;
+          lastPage += 1;
+          if (nextProbe.length < 50) break;
+        }
+      } else {
+        const p1 = await fetchCompPage(1);
+        if (p1.length === 0) return;
+        if (p1.length < 50) {
+          await ingestCompletedRecordsBatch(p1, unionZoneSet, hasManialUnion, hasTahrirUnion);
+          lastKnownCompletedPage[dateStr] = 1;
+          return;
+        }
+
+        let lo = 1;
+        let hi = 0;
+        const probes = [8, 24, 64, 150, 320, 650, 1200];
+        for (const probePg of probes) {
+          const recs = await fetchCompPage(probePg);
+          if (recs.length === 50) {
+            lo = probePg;
+          } else if (recs.length > 0) {
+            lastPage = probePg;
+            break;
+          } else {
+            hi = probePg;
+            break;
           }
-        });
-        return;
+        }
+
+        if (!lastPage) {
+          if (!hi) {
+            lastPage = lo;
+          } else {
+            while (lo + 1 < hi) {
+              const mid = Math.floor((lo + hi) / 2);
+              const recs = await fetchCompPage(mid);
+              if (recs.length === 0) {
+                hi = mid;
+              } else if (recs.length < 50) {
+                lo = mid;
+                break;
+              } else {
+                lo = mid;
+              }
+            }
+            lastPage = lo;
+          }
+        }
       }
 
-      // Initial Backfill: Scan backwards from newest page (totalPages) downwards
-      const minPage = Math.max(1, totalPages - 45);
-      let stopEarly = false;
-      for (let cursor = totalPages; cursor >= minPage && !stopEarly; cursor -= 5) {
-        const batch = [];
-        for (let pg = cursor; pg > cursor - 5 && pg >= minPage; pg--) {
-          batch.push(pg);
+      if (lastPage < 1) lastPage = 1;
+      lastKnownCompletedPage[dateStr] = lastPage;
+
+      const maxPagesToScanBack = isIncremental ? 6 : 80;
+      const minPage = Math.max(1, lastPage - maxPagesToScanBack + 1);
+      let stopScanning = false;
+
+      for (let cursor = lastPage; cursor >= minPage && !stopScanning; cursor -= 5) {
+        const batchPages = [];
+        for (let p = cursor; p >= Math.max(minPage, cursor - 4); p--) {
+          batchPages.push(p);
         }
-        const settled = await Promise.allSettled(
-          batch.map((pg) => hurrierGet(`/dispatcher-dashboard/orders/completed?date=${dateStr}&page=${pg}&per_page=50`))
-        );
-        for (const s of settled) {
-          if (s.status === "fulfilled" && Array.isArray(s.value?.records) && s.value.records.length > 0) {
-            const recs = s.value.records;
-            ingestCompletedRecordsBatch(recs);
-            const newestInPage = recs[recs.length - 1];
-            const placedMs = newestInPage?.order?.placed_at ? new Date(newestInPage.order.placed_at).getTime() : 0;
-            if (placedMs > 0 && placedMs < minPlacedCutoffMs) {
-              stopEarly = true;
+        const results = await Promise.allSettled(batchPages.map((p) => fetchCompPage(p)));
+        for (const r of results) {
+          if (r.status === "fulfilled" && Array.isArray(r.value) && r.value.length > 0) {
+            await ingestCompletedRecordsBatch(r.value, unionZoneSet, hasManialUnion, hasTahrirUnion);
+            const firstPlacedIso = r.value[0]?.order?.placed_at;
+            const firstPlacedMs = firstPlacedIso ? new Date(firstPlacedIso).getTime() : 0;
+            if (!isIncremental && firstPlacedMs > 0 && firstPlacedMs < minPlacedCutoffMs) {
+              stopScanning = true;
             }
           }
         }
@@ -633,29 +770,64 @@
     } catch {}
   }
 
-  async function syncRollingCompletedOrdersPool(force = false) {
+  async function syncRollingCompletedOrdersPool(activeSessions, force = false) {
     const now = Date.now();
-    const retentionCutoffMs = now - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
+    const expireCutoff = now - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
 
-    for (const [key, entry] of rollingCompletedPool.entries()) {
-      if (!entry || entry.completedAtMs < retentionCutoffMs) {
-        rollingCompletedPool.delete(key);
+    for (const [k, entry] of rollingCompletedPool.entries()) {
+      if (!entry || entry.completedAtMs < expireCutoff) {
+        rollingCompletedPool.delete(k);
+      }
+    }
+    for (const [k, meta] of exactCompletedMetaCache.entries()) {
+      if (!meta || now - (meta.cachedAt || 0) > 6 * 3600 * 1000) {
+        exactCompletedMetaCache.delete(k);
       }
     }
 
-    if (!force && now - lastRollingCompletedSyncAt < ROLLING_COMPLETED_SYNC_MS) {
+    const unionZoneSet = new Set();
+    (Array.isArray(activeSessions) ? activeSessions : []).forEach((s) => {
+      (Array.isArray(s?.zoneIds) ? s.zoneIds : []).forEach((id) => unionZoneSet.add(Number(id)));
+    });
+    const zoneSig = Array.from(unionZoneSet).sort((a, b) => a - b).join(",");
+    const zonesChanged = zoneSig !== lastCompletedWatchedZoneSig;
+
+    if (!force && !zonesChanged && now - lastRollingCompletedSyncAt < ROLLING_COMPLETED_SYNC_MS) {
       return;
     }
     lastRollingCompletedSyncAt = now;
+    if (zonesChanged) {
+      lastCompletedWatchedZoneSig = zoneSig;
+      initialCompletedBackfillDone = false;
+      yesterdayCompletedBackfilledDate = "";
+    }
+
+    const hasManialUnion = MANIAL_FAMILY_IDS.some((id) => unionZoneSet.has(id));
+    const hasTahrirUnion = unionZoneSet.has(10022) || unionZoneSet.has(10163);
 
     const { todayStr, yesterdayStr, cairoHour } = getCairoDateStringsForCompleted();
-    const minPlacedCutoffMs = now - 3.5 * 3600 * 1000;
+    const minPlacedCutoffMs = now - 4.5 * 3600 * 1000;
     const isIncremental = initialCompletedBackfillDone && rollingCompletedPool.size > 0;
 
-    await pullCompletedWindowForDate(todayStr, minPlacedCutoffMs, isIncremental);
+    await pullCompletedWindowForDate(
+      todayStr,
+      minPlacedCutoffMs,
+      isIncremental,
+      unionZoneSet,
+      hasManialUnion,
+      hasTahrirUnion
+    );
 
-    if (cairoHour < 4) {
-      await pullCompletedWindowForDate(yesterdayStr, minPlacedCutoffMs, isIncremental);
+    if (cairoHour < 5 && yesterdayCompletedBackfilledDate !== yesterdayStr) {
+      await pullCompletedWindowForDate(
+        yesterdayStr,
+        minPlacedCutoffMs,
+        false,
+        unionZoneSet,
+        hasManialUnion,
+        hasTahrirUnion
+      );
+      yesterdayCompletedBackfilledDate = yesterdayStr;
     }
 
     initialCompletedBackfillDone = true;
@@ -664,19 +836,29 @@
   function getSessionRollingCompletedPayload(sessionZoneIds) {
     const cutoffMs = Date.now() - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
     const targetSet = new Set((Array.isArray(sessionZoneIds) ? sessionZoneIds : []).map(Number));
+    const hasManialSelected = MANIAL_FAMILY_IDS.some((id) => targetSet.has(id));
+    const hasTahrirSelected = targetSet.has(10022) || targetSet.has(10163);
     const matched = [];
 
     for (const entry of rollingCompletedPool.values()) {
       if (!entry || entry.completedAtMs < cutoffMs) continue;
-      if (targetSet.size === 0 || entry.spIds.size === 0) {
+      if (targetSet.size === 0 || (entry.spIds.size === 0 && (!entry.spNames || entry.spNames.length === 0))) {
         matched.push(entry.rec);
       } else {
+        let ok = false;
         for (const id of entry.spIds) {
           if (targetSet.has(id)) {
-            matched.push(entry.rec);
+            ok = true;
             break;
           }
         }
+        if (!ok && hasManialSelected && Array.isArray(entry.spNames) && entry.spNames.some((n) => n.includes("manial"))) {
+          ok = true;
+        }
+        if (!ok && hasTahrirSelected && Array.isArray(entry.spNames) && entry.spNames.some((n) => n.startsWith("tahrir"))) {
+          ok = true;
+        }
+        if (ok) matched.push(entry.rec);
       }
     }
     matched.sort((a, b) => (b.__completed_at_ms || 0) - (a.__completed_at_ms || 0));
@@ -780,20 +962,20 @@
       const activeSessions = Object.values(allSessions).filter(
         (s) => s && Array.isArray(s.zoneIds) && s.zoneIds.length > 0 && now - (s.lastSeen || 0) < 45000
       );
-
-      if (activeSessions.length === 0) {
-        setBadge("#78350f", `v${SCRIPT_VERSION} Standby (0 Viewers)`);
-        return;
-      }
-
-      // Cross-PC Leader Election (/feeder_lock)
+      // Cross-PC Leader Election (/feeder_lock) with Version Priority (Newer version always preempts older version)
       const lockRes = await fbDb("GET", "/feeder_lock");
       const lock = lockRes.data;
-      if (lock && lock.leaderId !== TAB_INSTANCE_ID && now - (lock.ts || 0) < 6000) {
+      const lockIsNewerOrSame =
+        lock && compareVersions(lock.version || "0", SCRIPT_VERSION) >= 0;
+      if (lock && lock.leaderId !== TAB_INSTANCE_ID && lockIsNewerOrSame && now - (lock.ts || 0) < 6000) {
         setBadge("#0f766e", `v${SCRIPT_VERSION} [Backup Standby] (${activeSessions.length} Viewers)`);
         return;
       }
-      await fbDb("PUT", "/feeder_lock", { leaderId: TAB_INSTANCE_ID, ts: now });
+      await fbDb("PUT", "/feeder_lock", {
+        leaderId: TAB_INSTANCE_ID,
+        version: SCRIPT_VERSION,
+        ts: now
+      });
 
       await processOnDemandDashboardRequests();
 
@@ -827,8 +1009,8 @@
         });
       }
 
-      const dispMaxPages = Math.min(8, Math.max(2, Math.ceil((totalEgyptDispatched || 100) / 50) + 1));
-      const queuedMaxPages = Math.min(8, Math.max(2, Math.ceil((totalEgyptQueued || 100) / 50) + 1));
+      const dispMaxPages = Math.min(35, Math.max(4, Math.ceil((totalEgyptDispatched || 150) / 50) + 4));
+      const queuedMaxPages = Math.min(35, Math.max(4, Math.ceil((totalEgyptQueued || 150) / 50) + 4));
 
       // 2) Fetch All Live Delivery Queues + Rolling Completed Pool
       const [
@@ -839,15 +1021,15 @@
         preorderRecords,
         waitRecords
       ] = await Promise.all([
-        syncActiveDeliveries(totalEgyptActive),
+        syncActiveDeliveries(),
         fetchPaginatedDeliveries("/dispatcher-dashboard/deliveries/dispatched", dispMaxPages),
         fetchPaginatedDeliveries("/dispatcher-dashboard/deliveries/queued", queuedMaxPages),
-        fetchPaginatedDeliveries("/dispatcher-dashboard/deliveries/actionable", 3),
-        fetchPaginatedDeliveries("/dispatcher-dashboard/deliveries/preorder", 3),
-        fetchPaginatedDeliveries("/dispatcher-dashboard/deliveries/wait_for_assembled", 3)
+        fetchPaginatedDeliveries("/dispatcher-dashboard/deliveries/actionable", 15),
+        fetchPaginatedDeliveries("/dispatcher-dashboard/deliveries/preorder", 15),
+        fetchPaginatedDeliveries("/dispatcher-dashboard/deliveries/wait_for_assembled", 15)
       ]);
 
-      await syncRollingCompletedOrdersPool(false);
+      await syncRollingCompletedOrdersPool(activeSessions, false);
 
       const tabAllRecords = {
         Active: activeRecords,
@@ -875,16 +1057,12 @@
 
       for (const sess of activeSessions) {
         const targetSet = new Set((Array.isArray(sess.zoneIds) ? sess.zoneIds : []).map(Number));
+        const hasManialSelected = MANIAL_FAMILY_IDS.some((id) => targetSet.has(id));
+        const hasTahrirSelected = targetSet.has(10022) || targetSet.has(10163);
         const filterBySessionZones = (records) =>
-          (Array.isArray(records) ? records : []).filter((rec) => {
-            if (targetSet.size === 0) return true;
-            const recSpIds = extractRecordStartingPointIds(rec);
-            if (recSpIds.size === 0) return false;
-            for (const id of recSpIds) {
-              if (targetSet.has(id)) return true;
-            }
-            return false;
-          });
+          (Array.isArray(records) ? records : []).filter((rec) =>
+            doesRecordMatchSessionZones(rec, targetSet, hasManialSelected, hasTahrirSelected)
+          );
 
         const filteredTabRecords = {};
         const counts = {};
