@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v8.7 — Exact Completed At Sync</title>
+  <title>Hurrier Live Operations Dashboard v8.9 — Live Rider Status & Lock Fix</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -37,7 +37,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v8.7...
+      Loading Hurrier Live Operations Dashboard v8.9...
     </div>
   </div>
 
@@ -603,275 +603,624 @@
       const distMeters = Number(primaryDel.delivery_distance ?? rec?.distance ?? 0);
 
       return {
-        uid: `Completed-${order.id || codeStr}`,
+        uid: `comp-${order.id || codeStr || Math.random()}`,
         id: codeStr || "-",
-        orderCode: order.order_code || (codeStr ? `HF_EG${codeStr}` : "-"),
-        orderStatus: orderStatusLower,
+        orderCode: order.order_code || (codeStr ? `HF_EG${codeStr}` : ""),
         vo: String(order.vendor_order_number || "-"),
-        city: normalizeHurrierCity(dropoff.city || dropoff.city_name, zonesList),
-        zone: zonesList.length > 0 ? zonesList.join(", ") : "-",
+        vendor: normalizeText(order.vendor_name || order.restaurant_name || "-"),
+        vendorCode: String(order.vendor_code || "-"),
+        city: normalizeHurrierCity(dropoff.city || dropoff.city_name || "", zonesList),
+        zone: zonesList.join(", ") || "-",
         zonesList,
         zoneIdsList,
-        courier: normalizeText(primaryDel.courier_name || "-"),
-        courierId: primaryDel.courier_id ? String(primaryDel.courier_id) : "",
-        vendor: normalizeText(order.vendor_name || order.featured_business?.name || "-"),
-        vendorCode: String(order.vendor_code || "-"),
-        customerName: normalizeText(order.customer_name || "-"),
+        courier: normalizeText(primaryDel.courier_name || rec?.courier_name || "-"),
+        courierId:
+          primaryDel.courier_id || rec?.courier_id
+            ? String(primaryDel.courier_id || rec?.courier_id)
+            : "",
         distance: distMeters > 0 ? `${(distMeters / 1000).toFixed(2)} km` : "-",
-        completedTimestamp,
-        completedAtFormatted,
-        placedAt: order.placed_at || "",
-        placedAtFormatted: formatShortTimeOnly(order.placed_at),
+        orderValue: formatPiastersMoney(order.total ?? order.order_value),
         acceptTime: formatCompletedTimingSeconds(timings.accepting_time),
         retailerLate: formatCompletedTimingSeconds(timings.vendor_late),
         courierLate: formatCompletedTimingSeconds(timings.courier_late),
         waitTime: formatCompletedTimingSeconds(timings.wait_pickup_time),
         deliveryLate: formatCompletedTimingSeconds(timings.delivery_late),
         timeInBag: formatCompletedTimingSeconds(timings.time_in_bag),
-        orderDuration: formatCompletedTimingSeconds(computedDurationSec),
-        isPreorder: Boolean(order.is_preorder),
-        dropoffIssue: normalizeText(order.deliveries_dropoff_issues || "-"),
+        orderDuration: formatDurationSecondsToMin(computedDurationSec),
+        isPreorder: Boolean(order.is_preorder || order.is_pre_order),
+        dropoffIssue: normalizeText(order.deliveries_dropoff_issues || "-") || "-",
+        completedTimestamp,
+        completedAtFormatted,
+        orderStatus: orderStatusLower,
         status: "Completed",
-        deadline: "-",
-        instructions: [
-          order.is_cash_collection ? "Cash" : order.is_card_on_delivery ? "Card" : "Online",
-          humanizeSnakeCase(order.vendor_vertical_type || "Restaurants")
-        ].filter(Boolean),
-        orderValue: formatPiastersMoney(order.total),
-        rawRecord: rec
+        instructions: [],
+        raw: rec
       };
     }
 
     function mapHurrierDeliveryRecord(rec, tabName, idx) {
       const order = rec?.order || {};
-      const dropoff = order.drop_off_address || order.dropoff_address || {};
-      const sps = Array.isArray(rec?.starting_points)
+      const rawSps = Array.isArray(rec?.starting_points)
         ? rec.starting_points
-        : Array.isArray(dropoff.starting_points)
-        ? dropoff.starting_points
+        : Array.isArray(order?.drop_off_address?.starting_points)
+        ? order.drop_off_address.starting_points
+        : Array.isArray(order?.dropoff_address?.starting_points)
+        ? order.dropoff_address.starting_points
         : [];
-      const zonesList = sps
-        .map((sp) => (typeof sp === "string" ? sp : sp?.name))
+
+      const zonesList = rawSps
+        .map((sp) => (typeof sp === "string" ? normalizeText(sp) : normalizeText(sp?.name)))
         .filter(Boolean);
-      const zoneIdsList = sps
-        .map((sp) => (sp && typeof sp === "object" && sp.id ? Number(sp.id) : 0))
+
+      const zoneIdsList = rawSps
+        .map((sp) => {
+          if (sp && typeof sp === "object" && sp.id) return Number(sp.id);
+          const n = normalizeText(typeof sp === "string" ? sp : sp?.name).toLowerCase();
+          const noSp = n.replace(/\s+sp$/i, "").trim();
+          const found = ALL_ZONES_CATALOG.find(
+            (z) =>
+              z.name.toLowerCase() === n ||
+              z.name.toLowerCase() === `${n} sp` ||
+              z.name.toLowerCase().replace(/\s+sp$/i, "").trim() === noSp
+          );
+          return found ? Number(found.id) : 0;
+        })
         .filter((n) => n > 0);
 
-      const codeStr = String(
+      const code = String(
         order.code ||
           order.confirmation_number ||
           String(order.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
           order.id ||
+          rec?.id ||
           ""
       ).trim();
 
-      const statusRaw = String(rec?.status || order.status || tabName).toLowerCase();
-      const statusLabel = humanizeSnakeCase(statusRaw);
-
-      const courierName = normalizeText(rec?.courier_name || "");
-      const courierLabel = courierName
-        ? courierName
-        : statusRaw === "courier_notified"
-        ? "Pending Acceptance"
-        : statusRaw === "queued" || statusRaw === "pending"
-        ? "Assigning..."
-        : "-";
-
+      const isPreorder = Boolean(order.is_pre_order || order.is_preorder || tabName === "Pre-order");
       const deadlineIso =
-        order.scheduled_dropoff_at ||
-        order.promised_delivery_time ||
-        order.scheduled_pickup_at ||
-        "";
-      const deadlineStr = formatRelativeDeadline(deadlineIso, tabName === "Pre-order" || tabName === "Upcoming");
+        order.scheduled_dropoff_at || order.scheduled_drop_off_at || order.scheduled_pickup_at || "";
+      const deadline = formatRelativeDeadline(deadlineIso, isPreorder);
 
-      const distMeters = Number(rec?.distance ?? 0);
-      const distanceStr = distMeters > 0 ? `${(distMeters / 1000).toFixed(2)} km` : "-";
+      const rawStatus = String(rec?.status || order.status || tabName || "").toLowerCase();
+      const courierName =
+        normalizeText(rec?.courier_name || "") ||
+        (rawStatus === "queued" || rawStatus === "pending" || rawStatus === "scheduled"
+          ? "Assigning..."
+          : rawStatus === "courier_notified"
+          ? "Pending Acceptance"
+          : "-");
 
       const instructions = [];
       if (order.is_cash_collection) instructions.push("Cash");
-      else if (order.is_card_on_delivery) instructions.push("Card");
-      else instructions.push("Online");
+      if (order.is_card_on_delivery) instructions.push("Card");
 
-      const vType = humanizeSnakeCase(order.vertical_type || order.vendor_vertical_type || "");
-      if (vType) instructions.push(vType);
+      const vt = String(order.vertical_type || order.vendor_vertical_type || "").toLowerCase();
+      if (vt === "darkstores" || isTalabatMartVendor(order.vendor_name)) {
+        instructions.push("Darkstores");
+      } else if (vt === "hypermarket" || vt === "supermarket" || vt === "grocery") {
+        instructions.push("Supermarket");
+      } else {
+        instructions.push("Restaurants");
+      }
 
       const tags = Array.isArray(order.tags) ? order.tags : [];
       const isSplit = tags.includes("split_order") || rec?.is_primary === false;
+      if (tags.includes("large_order")) instructions.push("Large Order");
 
-      const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
+      const distMeters = Number(rec?.distance || 0);
+      const placedIso =
+        order.placed_at || order.send_to_restaurant_at || order.restaurant_confirmed_at || "";
+      const placedMs = placedIso ? new Date(placedIso).getTime() : 0;
+
+      const dropAddr = order.dropoff_address || order.drop_off_address || {};
 
       return {
-        uid: `${tabName}-${rec?.id || order.id || codeStr}-${idx}`,
-        deliveryId: rec?.id ? String(rec.id) : "",
-        id: codeStr || "-",
-        orderCode: order.order_code || (codeStr ? `HF_EG${codeStr}` : "-"),
+        uid: `${tabName}-${rec?.id || code}-${idx}`,
+        id: code || "-",
+        orderCode: order.order_code || (code ? `HF_EG${code}` : ""),
         vo: String(order.vendor_order_number || "-"),
-        vendor: normalizeText(order.vendor_name || "-"),
-        vendorCode: String(order.vendor_code || "-"),
-        city: normalizeHurrierCity(dropoff.city_name || dropoff.city, zonesList),
-        zone: zonesList.length > 0 ? zonesList.join(", ") : "-",
+        vendor: normalizeText(order.vendor_name || order.restaurant_name || "-"),
+        city: normalizeHurrierCity(dropAddr.city || dropAddr.city_name || "", zonesList),
+        zone: zonesList.join(", ") || "-",
         zonesList,
         zoneIdsList,
-        courier: courierLabel,
+        courier: courierName,
         courierId: rec?.courier_id ? String(rec.courier_id) : "",
-        status: statusLabel,
-        deadline: deadlineStr,
-        distance: distanceStr,
+        status: humanizeSnakeCase(rec?.status || order.status || tabName),
+        deadline,
+        time_in: order.scheduled_pickup_at ? formatShortTimeOnly(order.scheduled_pickup_at) : "-",
+        time_at: deadlineIso ? formatShortTimeOnly(deadlineIso) : "-",
+        distance: distMeters > 0 ? `${(distMeters / 1000).toFixed(2)} km` : "-",
         orderValue: formatPiastersMoney(order.order_value ?? order.total),
         instructions,
         isSplit,
-        placedMs,
-        time_in: "-",
-        time_at: "-",
-        rawRecord: rec
+        placedMs: Number.isNaN(placedMs) ? 0 : placedMs,
+        raw: rec
       };
     }
 
-    function buildFullOrderView(baseOrder, fetchedDetailEntry) {
-      const rec = baseOrder?.rawRecord || {};
-      const orderFromRec = rec.order || {};
-      const detailObj = fetchedDetailEntry?.detail?.order || fetchedDetailEntry?.detail || orderFromRec;
-      const deliveriesArr = Array.isArray(fetchedDetailEntry?.deliveries?.deliveries)
-        ? fetchedDetailEntry.deliveries.deliveries
-        : Array.isArray(fetchedDetailEntry?.deliveries)
-        ? fetchedDetailEntry.deliveries
-        : rec.id
-        ? [rec]
+    function buildFullOrderView(orderItem, cachedEntry) {
+      const dOrder =
+        cachedEntry?.detail?.order || cachedEntry?.detail || orderItem?.raw?.order || {};
+      const rawDeliveries = Array.isArray(cachedEntry?.deliveries?.deliveries)
+        ? cachedEntry.deliveries.deliveries
         : [];
 
-      const pickupAddr = detailObj.pickup_address || orderFromRec.pickup_address || {};
-      const dropoffAddr = detailObj.drop_off_address || detailObj.dropoff_address || orderFromRec.drop_off_address || {};
-      const customerObj = detailObj.customer || {};
-      const vendorObj = detailObj.vendor || {};
-      const timingObj = detailObj.timing || {};
+      const id = String(orderItem?.id || dOrder.code || "-");
+      const orderCode = String(
+        dOrder.order_code || orderItem?.orderCode || (id !== "-" ? `HF_EG${id}` : "")
+      );
 
-      const tags = Array.isArray(detailObj.tags) ? detailObj.tags : Array.isArray(orderFromRec.tags) ? orderFromRec.tags : [];
+      const tags = Array.isArray(dOrder.tags)
+        ? dOrder.tags
+        : Array.isArray(orderItem?.raw?.order?.tags)
+        ? orderItem.raw.order.tags
+        : [];
+
       const orderBadges = [];
-      if (detailObj.is_cash_collection || orderFromRec.is_cash_collection) orderBadges.push("Cash");
-      if (tags.includes("proof_of_pickup")) orderBadges.push("Proof of pickup");
-      if (tags.includes("large_order")) orderBadges.push("Large order");
-      if (tags.includes("split_order")) orderBadges.push("Split order");
+      if (dOrder.is_cash_collection || orderItem?.instructions?.includes("Cash")) {
+        orderBadges.push("Cash");
+      }
+      if (tags.includes("proof_of_pickup") || dOrder.proof_of_pickup_link) {
+        orderBadges.push("Proof of pickup");
+      }
+      if (tags.includes("split_order") || orderItem?.isSplit) {
+        orderBadges.push("Split Order");
+      }
+      if (dOrder.is_pre_order || orderItem?.isPreorder) {
+        orderBadges.push("Preorder");
+      }
 
-      const structuredDeliveries = deliveriesArr.map((del, dIdx) => {
-        const zList = Array.isArray(del.starting_points)
-          ? del.starting_points.map((s) => (typeof s === "string" ? s : s?.name)).filter(Boolean)
-          : baseOrder.zonesList || [];
-        const zStr = zList.length > 0 ? zList.join(", ") : baseOrder.zone || "-";
+      const status = humanizeSnakeCase(dOrder.status || orderItem?.status || "Active");
+      const statusSinceStr = formatSinceTimestamp(dOrder.current_state_transition);
+      const platformName = dOrder.platform === "TB_OT" ? "talabat" : dOrder.platform || "talabat";
+      const vendorObj = dOrder.vendor || {};
+      const vendorName = normalizeText(
+        vendorObj.vendor_name || dOrder.restaurant_name || orderItem?.vendor || "-"
+      );
+      const vendorCode = String(vendorObj.vendor_code || orderItem?.vendorCode || "-");
+      const vendorOrderNo = String(vendorObj.vendor_order_number || orderItem?.vo || "-");
+      const orderValue = formatPiastersMoney(
+        dOrder.order_value ?? dOrder.subtotal ?? orderItem?.raw?.order?.order_value
+      ) !== "-"
+        ? formatPiastersMoney(dOrder.order_value ?? dOrder.subtotal ?? orderItem?.raw?.order?.order_value)
+        : orderItem?.orderValue || "-";
 
-        const transitions = Array.isArray(del.transitions) ? del.transitions : [];
-        const events = transitions.map((tr, tIdx) => {
-          const toState = String(tr.to_state || tr.event_type || "event");
-          const evLabel = humanizeSnakeCase(toState);
-          const meta = tr.metadata || {};
-          const subParts = [];
-          if (meta.dispatch_type) subParts.push(humanizeSnakeCase(meta.dispatch_type));
-          if (tr.un_dispatch_type) subParts.push(humanizeSnakeCase(tr.un_dispatch_type));
-          if (meta.split_reason) subParts.push(meta.split_reason);
+      const pickupObj = dOrder.pickup_address || orderItem?.raw?.order?.pickup_address || {};
+      const pickupAddress =
+        normalizeText(
+          [pickupObj.street_address, pickupObj.district, pickupObj.city_name]
+            .filter(Boolean)
+            .join(" • ")
+        ) || "-";
 
-          const loc = tr.courier_location || {};
-          const lat = loc.latitude ?? meta.courier_lat;
-          const lng = loc.longitude ?? meta.courier_long;
-          const locUrl = lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : "";
+      const custObj = dOrder.customer || {};
+      const customerName = normalizeText(
+        custObj.customer_name || orderItem?.raw?.order?.customer_name || "Customer"
+      );
+      const customerPhone = normalizeText(custObj.customer_phone_number || "");
 
-          const schedDrop = tr.scheduled_drop_off_at || timingObj.scheduled_drop_off_at;
-          const estDropDep = tr.estimated_drop_off_departure_at || meta.estimated_dropoff_departure_at;
-          const rawCreated = String(tr.created_at || "").trim();
-          const formattedTimeSec = /\d{4}-\d{2}-\d{2}T/.test(rawCreated)
-            ? formatExactTimeSeconds(rawCreated)
-            : rawCreated || formatExactTimeSeconds(meta.performed_at);
+      const dropObj =
+        dOrder.drop_off_address ||
+        dOrder.dropoff_address ||
+        orderItem?.raw?.order?.drop_off_address ||
+        orderItem?.raw?.order?.dropoff_address ||
+        {};
+      const dropoffParts = [
+        dropObj.street_address,
+        dropObj.district,
+        dropObj.building ? `عقار ${dropObj.building}` : "",
+        dropObj.floor ? `دور ${dropObj.floor}` : "",
+        dropObj.apartment_number ? `شقة ${dropObj.apartment_number}` : "",
+        dropObj.special_instructions
+      ].filter(Boolean);
+      const dropoffAddress = normalizeText(dropoffParts.join(" — ")) || "-";
 
-          return {
-            key: tr.id || `${dIdx}-${tIdx}`,
-            timeSec: formattedTimeSec,
-            eventLabel: evLabel,
-            subLabel: subParts.join(" • "),
-            isRemoved: toState.includes("un_dispatch") || toState.includes("cancel") || toState.includes("reject"),
-            courierName: normalizeText(tr.courier_name || "-"),
-            locUrl,
-            estDropoffDelta: formatDiffBetweenIsos(schedDrop, estDropDep)
-          };
-        });
-
-        const delStatusLower = String(del.status || baseOrder.status || "").toLowerCase();
-        return {
-          id: del.id || `${baseOrder.id}-${dIdx + 1}`,
-          status: humanizeSnakeCase(del.status || baseOrder.status),
-          isCancelledDelivery: delStatusLower.includes("cancel"),
-          zones: zStr,
-          courier: normalizeText(del.courier_name || baseOrder.courier || "-"),
-          courierId: del.courier_id ? String(del.courier_id) : baseOrder.courierId || "",
-          utilization: del.utilization !== undefined && del.utilization !== null ? `${del.utilization}%` : "-",
-          events
-        };
+      const sortedDeliveries = [...rawDeliveries].sort((a, b) => {
+        const aComp = String(a?.status || "").toLowerCase() === "completed" ? 0 : 1;
+        const bComp = String(b?.status || "").toLowerCase() === "completed" ? 0 : 1;
+        if (aComp !== bComp) return aComp - bComp;
+        const aCanc = String(a?.status || "").toLowerCase().includes("cancel") ? 1 : 0;
+        const bCanc = String(b?.status || "").toLowerCase().includes("cancel") ? 1 : 0;
+        return aCanc - bCanc;
       });
 
-      structuredDeliveries.sort((a, b) => {
-        if (a.isCancelledDelivery === b.isCancelledDelivery) return 0;
-        return a.isCancelledDelivery ? 1 : -1;
-      });
+      const structuredDeliveries =
+        sortedDeliveries.length > 0
+          ? sortedDeliveries.map((del, dIdx) => {
+              const delStatusRaw = String(del.status || "").toLowerCase();
+              const isCancelledDelivery = delStatusRaw.includes("cancel");
+              const delZones = Array.isArray(del.starting_points)
+                ? del.starting_points
+                    .map((sp) => (typeof sp === "string" ? sp : sp?.name))
+                    .filter(Boolean)
+                    .join(", ")
+                : orderItem?.zone || "-";
+              const transitions = Array.isArray(del.transitions) ? del.transitions : [];
+              const events = transitions.map((tr, tIdx) => {
+                const rawCreated = String(tr.created_at || "").trim();
+                const timeSec = /^\d{1,2}:\d{2}(:\d{2})?\s*[AP]M$/i.test(rawCreated)
+                  ? rawCreated
+                  : formatExactTimeSeconds(tr.metadata?.performed_at || rawCreated);
+                const toState = String(tr.to_state || "").toLowerCase();
+                const isRemoved =
+                  Boolean(tr.un_dispatch_type) ||
+                  toState.includes("cancel") ||
+                  toState.includes("undispatch");
+                const subParts = [
+                  tr.dispatch_type ? humanizeSnakeCase(tr.dispatch_type) : "",
+                  tr.un_dispatch_type ? humanizeSnakeCase(tr.un_dispatch_type) : "",
+                  tr.metadata?.split_reason || ""
+                ].filter(Boolean);
+                const lat = tr.courier_location?.latitude ?? tr.metadata?.courier_lat;
+                const lng = tr.courier_location?.longitude ?? tr.metadata?.courier_long;
+                const locUrl =
+                  lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : "";
 
-      const rawItems = Array.isArray(detailObj.detail?.order_items)
-        ? detailObj.detail.order_items
-        : Array.isArray(detailObj.order_items)
-        ? detailObj.order_items
+                return {
+                  key: `${del.id || dIdx}-tr-${tr.id || tIdx}`,
+                  timeSec,
+                  eventLabel: humanizeSnakeCase(tr.to_state || "Event"),
+                  subLabel: subParts.join(" • "),
+                  courierName: normalizeText(tr.courier_name || del.courier_name || "-"),
+                  locUrl,
+                  isRemoved
+                };
+              });
+
+              return {
+                id: String(del.id || `del-${dIdx}`),
+                status: humanizeSnakeCase(del.status || "Active"),
+                isCancelledDelivery,
+                zones: delZones || "-",
+                courier: normalizeText(del.courier_name || orderItem?.courier || "-"),
+                utilization:
+                  del.utilization !== undefined && del.utilization !== null
+                    ? `${del.utilization}%`
+                    : "-",
+                events
+              };
+            })
+          : [
+              {
+                id: "fallback-del-1",
+                status: status,
+                isCancelledDelivery: status.toLowerCase().includes("cancel"),
+                zones: orderItem?.zone || "-",
+                courier: orderItem?.courier || "-",
+                utilization: "-",
+                events: []
+              }
+            ];
+
+      const rawItems = Array.isArray(dOrder?.detail?.order_items)
+        ? dOrder.detail.order_items
         : [];
       const items = rawItems.map((it, idx) => ({
-        id: it.id || idx,
-        name: normalizeText(it.item || it.name || "Item"),
-        quantity: it.quantity ?? 1,
+        id: String(it.id || idx),
+        name: normalizeText(it.item || it.name || `Item #${idx + 1}`),
+        quantity: Number(it.quantity ?? 1),
         priceFormatted: formatPiastersMoney(it.price)
       }));
 
+      const timingObj = dOrder.timing || {};
       const timeChecks = [
-        { label: "Placed at", value: formatReadableTimestamp(detailObj.placed_at || orderFromRec.placed_at) },
-        { label: "Sent to vendor", value: formatReadableTimestamp(detailObj.send_to_restaurant_at || orderFromRec.sent_to_vendor_at) },
-        { label: "Vendor confirmed", value: formatReadableTimestamp(detailObj.restaurant_confirmed_at || orderFromRec.accepted_by_vendor_at) },
-        { label: "Food ready at", value: formatReadableTimestamp(detailObj.food_is_ready_at || orderFromRec.food_is_ready_at) },
-        { label: "Promised delivery", value: formatReadableTimestamp(timingObj.scheduled_drop_off_at || orderFromRec.scheduled_dropoff_at) },
-        { label: "Completed / Transition", value: formatReadableTimestamp(detailObj.current_state_transition || baseOrder.completedTimestamp) }
+        { label: "Placed At", value: formatExactTimeSeconds(dOrder.placed_at) },
+        { label: "Sent to Vendor", value: formatExactTimeSeconds(dOrder.send_to_restaurant_at) },
+        { label: "Vendor Confirmed", value: formatExactTimeSeconds(dOrder.restaurant_confirmed_at) },
+        { label: "Food / Order Ready", value: formatExactTimeSeconds(dOrder.food_is_ready_at) },
+        {
+          label: "Scheduled Pickup",
+          value: formatExactTimeSeconds(
+            timingObj.original_scheduled_pickup_at || dOrder.scheduled_pickup_at
+          )
+        },
+        {
+          label: "Promised Dropoff",
+          value: formatExactTimeSeconds(
+            timingObj.scheduled_drop_off_at ||
+              dOrder?.estimations?.promised_delivery_time ||
+              dOrder.scheduled_dropoff_at
+          )
+        },
+        {
+          label: "Latest Transition",
+          value: formatExactTimeSeconds(dOrder.current_state_transition)
+        }
       ];
 
       return {
-        id: baseOrder.id,
-        orderCode: detailObj.order_code || baseOrder.orderCode,
-        status: humanizeSnakeCase(detailObj.status || baseOrder.status),
-        statusSinceStr: formatSinceTimestamp(detailObj.current_state_transition || detailObj.placed_at),
-        platformName: detailObj.platform === "TB_OT" ? "Talabat" : detailObj.platform || "Talabat",
-        vendorCode: String(vendorObj.vendor_code || detailObj.vendor_code || baseOrder.vendorCode || "-"),
-        vendorOrderNo: String(vendorObj.vendor_order_number || detailObj.vendor_order_number || baseOrder.vo || "-"),
-        vendorName: normalizeText(vendorObj.vendor_name || detailObj.restaurant_name || baseOrder.vendor || "-"),
-        pickupAddress: normalizeText(pickupAddr.street_address || pickupAddr.address_line_1 || "-"),
-        customerName: normalizeText(customerObj.customer_name || baseOrder.customerName || "-"),
-        customerPhone: normalizeText(customerObj.customer_phone_number || ""),
-        dropoffAddress: normalizeText(
-          [dropoffAddr.street_address, dropoffAddr.district, dropoffAddr.special_instructions].filter(Boolean).join(" • ") || "-"
-        ),
-        orderValue: formatPiastersMoney(detailObj.order_value ?? detailObj.total ?? orderFromRec.total),
-        distance: baseOrder.distance,
+        id,
+        orderCode,
         orderBadges,
+        isLoadedFromApi: Boolean(cachedEntry && (cachedEntry.detail || cachedEntry.deliveries)),
+        status,
+        statusSinceStr,
+        platformName,
+        vendorCode,
+        vendorOrderNo,
+        orderValue,
+        distance: orderItem?.distance || "-",
+        vendorName,
+        pickupAddress,
+        customerName,
+        customerPhone,
+        dropoffAddress,
         structuredDeliveries,
         items,
-        timeChecks,
-        isLoadedFromApi: Boolean(fetchedDetailEntry)
+        timeChecks
+      };
+    }
+
+    function unwrapCourierRecord(entry) {
+      let cur = entry;
+      let guard = 0;
+      while (
+        cur &&
+        typeof cur === "object" &&
+        !Array.isArray(cur) &&
+        (cur.courier || cur.data) &&
+        typeof (cur.courier || cur.data) === "object" &&
+        guard < 4
+      ) {
+        cur = cur.courier || cur.data;
+        guard++;
+      }
+      return cur && typeof cur === "object" ? cur : {};
+    }
+
+    function formatCourierUntilTime(rawVal) {
+      if (!rawVal) return "";
+      const s = String(rawVal).trim();
+      if (!s || s.startsWith("0001-01-01")) return "";
+      if (/^\d{1,2}:\d{2}(\s*[AP]M)?$/i.test(s)) return s;
+      const d = typeof rawVal === "number" ? new Date(rawVal > 1e12 ? rawVal : rawVal * 1000) : new Date(s);
+      if (!Number.isNaN(d.getTime()) && d.getTime() > 946684800000) {
+        return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+      }
+      return "";
+    }
+
+    function isFutureOrActiveTimestamp(rawVal) {
+      if (!rawVal) return false;
+      const s = String(rawVal).trim();
+      if (!s || s.startsWith("0001-01-01")) return false;
+      if (/^\d{1,2}:\d{2}(\s*[AP]M)?$/i.test(s)) return true;
+      const d = typeof rawVal === "number" ? new Date(rawVal > 1e12 ? rawVal : rawVal * 1000) : new Date(s);
+      return !Number.isNaN(d.getTime()) && d.getTime() > Date.now() - 60 * 1000;
+    }
+
+    function extractCourierStatusDetails(fetchedCourierEntry, knownMeta) {
+      if (!fetchedCourierEntry) {
+        return {
+          statusLabel: knownMeta?.status ? humanizeSnakeCase(knownMeta.status) : "⏳ جاري جلب الحالة الحية...",
+          statusTone: "loading",
+          untilFormatted: "",
+          performedBy: "",
+          reason: "",
+          contract: "",
+          balanceFormatted: ""
+        };
+      }
+
+      const norm = fetchedCourierEntry?.normalized || {};
+      const cObj = unwrapCourierRecord(fetchedCourierEntry);
+
+      let tnwSub = null;
+      const candidateSubKeys = [
+        "temp_not_working",
+        "temporary_not_working",
+        "temp_break",
+        "temporary_break",
+        "not_working",
+        "not_working_status",
+        "break_info",
+        "current_break",
+        "status_info",
+        "state_info",
+        "availability"
+      ];
+      for (const k of candidateSubKeys) {
+        if (cObj[k] && typeof cObj[k] === "object" && !Array.isArray(cObj[k])) {
+          tnwSub = cObj[k];
+          break;
+        }
+      }
+      if (!tnwSub && cObj.current_shift && typeof cObj.current_shift === "object") {
+        for (const k of candidateSubKeys) {
+          if (cObj.current_shift[k] && typeof cObj.current_shift[k] === "object") {
+            tnwSub = cObj.current_shift[k];
+            break;
+          }
+        }
+      }
+
+      const statusObj =
+        typeof cObj.status === "object" && cObj.status !== null
+          ? cObj.status
+          : typeof cObj.state === "object" && cObj.state !== null
+          ? cObj.state
+          : null;
+
+      const rawUntil =
+        norm.statusUntil ||
+        tnwSub?.until ||
+        tnwSub?.end_at ||
+        tnwSub?.ends_at ||
+        tnwSub?.end_time ||
+        tnwSub?.expires_at ||
+        cObj.temp_not_working_until ||
+        cObj.temporary_not_working_until ||
+        cObj.not_working_until ||
+        cObj.status_until ||
+        cObj.state_until ||
+        cObj.break_until ||
+        statusObj?.until ||
+        statusObj?.end_at ||
+        "";
+
+      const untilFormatted = formatCourierUntilTime(rawUntil);
+
+      const rawPerformedBy = normalizeText(
+        norm.performedBy ||
+          tnwSub?.performed_by ||
+          tnwSub?.created_by ||
+          tnwSub?.actor ||
+          cObj.temp_not_working_performed_by ||
+          cObj.not_working_performed_by ||
+          cObj.status_performed_by ||
+          cObj.performed_by ||
+          statusObj?.performed_by ||
+          ""
+      );
+
+      const rawReason = normalizeText(
+        norm.statusReason ||
+          tnwSub?.reason ||
+          tnwSub?.reason_text ||
+          tnwSub?.title ||
+          cObj.temp_not_working_reason ||
+          cObj.not_working_reason ||
+          cObj.status_reason ||
+          cObj.break_reason ||
+          cObj.reason ||
+          statusObj?.reason ||
+          ""
+      );
+
+      const tnwExplicitActive =
+        cObj.is_temp_not_working === true ||
+        cObj.is_temporary_not_working === true ||
+        cObj.temp_not_working === true ||
+        cObj.temporary_not_working === true ||
+        (tnwSub &&
+          tnwSub.active !== false &&
+          tnwSub.is_active !== false &&
+          tnwSub.enabled !== false &&
+          (tnwSub.active === true ||
+            tnwSub.is_active === true ||
+            tnwSub.enabled === true ||
+            isFutureOrActiveTimestamp(rawUntil) ||
+            Boolean(rawReason)));
+
+      const rawStatusCandidates = [
+        norm.status,
+        typeof cObj.temporary_not_working === "string" ? cObj.temporary_not_working : "",
+        typeof cObj.temp_not_working === "string" ? cObj.temp_not_working : "",
+        statusObj?.state,
+        statusObj?.status,
+        statusObj?.name,
+        typeof cObj.state === "string" ? cObj.state : "",
+        typeof cObj.courier_state === "string" ? cObj.courier_state : "",
+        typeof cObj.working_state === "string" ? cObj.working_state : "",
+        typeof cObj.current_state === "string" ? cObj.current_state : "",
+        typeof cObj.status === "string" ? cObj.status : "",
+        typeof cObj.courier_status === "string" ? cObj.courier_status : "",
+        typeof cObj.working_status === "string" ? cObj.working_status : "",
+        typeof cObj.availability_status === "string" ? cObj.availability_status : "",
+        typeof cObj.shift_status === "string" ? cObj.shift_status : "",
+        cObj.current_shift?.status,
+        cObj.current_shift?.state,
+        cObj.shift?.status
+      ];
+
+      const rawStatusStr =
+        rawStatusCandidates.find((s) => typeof s === "string" && s.trim() !== "") || "";
+      const stLower = rawStatusStr.trim().toLowerCase();
+
+      let statusLabel = "";
+      if (
+        tnwExplicitActive ||
+        stLower.includes("temp_not_working") ||
+        stLower.includes("temporary_not_working") ||
+        stLower.includes("temporary not working") ||
+        stLower.includes("temp_break") ||
+        stLower.includes("temporary_break")
+      ) {
+        statusLabel = "Temporary not working";
+      } else if (
+        stLower === "not_working" ||
+        stLower === "not working" ||
+        stLower.includes("offline") ||
+        stLower.includes("unavailable") ||
+        (!stLower && cObj.is_working === false)
+      ) {
+        statusLabel = "Not working";
+      } else if (stLower === "break" || stLower === "on_break" || stLower === "on break") {
+        statusLabel = "On Break";
+      } else if (stLower.includes("ending")) {
+        statusLabel = "Ending";
+      } else if (stLower.includes("starting")) {
+        statusLabel = "Starting";
+      } else if (rawStatusStr) {
+        statusLabel = humanizeSnakeCase(rawStatusStr);
+      } else {
+        statusLabel = "Working";
+      }
+
+      const lowerFinal = statusLabel.toLowerCase();
+      const statusTone =
+        lowerFinal.includes("temporary") || lowerFinal.includes("break")
+          ? "warning"
+          : lowerFinal.includes("not working") || lowerFinal.includes("offline")
+          ? "danger"
+          : lowerFinal.includes("ending")
+          ? "orange"
+          : "working";
+
+      const rawContract = normalizeText(
+        norm.contract ||
+          cObj.contract_type ||
+          cObj.contract?.name ||
+          cObj.contract?.type ||
+          (typeof cObj.contract === "string" ? cObj.contract : "") ||
+          cObj.employment_type ||
+          ""
+      );
+
+      let balanceFormatted = "";
+      const rawBal = norm.balance ?? cObj.balance ?? cObj.wallet_balance ?? cObj.cash_balance;
+      if (rawBal !== undefined && rawBal !== null && rawBal !== "") {
+        const numBal = Number(rawBal);
+        balanceFormatted = !Number.isNaN(numBal) ? `${numBal.toFixed(2)} EGP` : String(rawBal);
+      }
+
+      return {
+        statusLabel,
+        statusTone,
+        untilFormatted,
+        performedBy: rawPerformedBy ? humanizeSnakeCase(rawPerformedBy).toLowerCase() : "",
+        reason: rawReason,
+        contract: rawContract ? humanizeSnakeCase(rawContract) : "",
+        balanceFormatted
       };
     }
 
     function buildFullCourierView(courierReq, fetchedCourierEntry, knownMeta) {
       const cid = String(courierReq?.id || "");
-      const name = normalizeText(courierReq?.name || knownMeta?.name || `Courier #${cid}`);
-      const cObj = fetchedCourierEntry?.courier || fetchedCourierEntry || {};
-      const userId = String(cObj.user_id || cObj.userId || knownMeta?.userId || cid || "");
-      const phone = normalizeText(cObj.phone_number || cObj.mobile || cObj.phone || knownMeta?.phone || "");
-      const statusLabel = humanizeSnakeCase(cObj.status || cObj.shift_status || "Working");
-      const vehicle = normalizeText(cObj.vehicle_type || cObj.vehicle?.name || cObj.vehicle || "Motorbike");
+      const norm = fetchedCourierEntry?.normalized || {};
+      const cObj = unwrapCourierRecord(fetchedCourierEntry);
+      const name = normalizeText(
+        norm.name || cObj.name || cObj.courier_name || courierReq?.name || knownMeta?.name || `Courier #${cid}`
+      );
+      const userId = String(
+        norm.userId || cObj.user_id || cObj.userId || knownMeta?.userId || cid || ""
+      );
+      const phone = normalizeText(
+        norm.phone || cObj.phone_number || cObj.mobile || cObj.phone || knownMeta?.phone || ""
+      );
+      const vehicle = normalizeText(
+        norm.vehicle || cObj.vehicle_type || cObj.vehicle?.name || (typeof cObj.vehicle === "string" ? cObj.vehicle : "") || "Motorbike"
+      );
+      const statusMeta = extractCourierStatusDetails(fetchedCourierEntry, knownMeta);
 
       return {
         id: cid,
         name,
         userId,
         phone,
-        statusLabel,
         vehicle,
+        ...statusMeta,
         isLoadedFromApi: Boolean(fetchedCourierEntry)
       };
     }
@@ -1053,53 +1402,53 @@
                 JSON.stringify({
                   idToken,
                   refreshToken: user.refreshToken || "",
-                  email: user.email,
+                  email: user.email || "",
                   apiKey: firebaseApiKey,
                   updatedAt: Date.now()
                 })
               );
             } catch {}
 
-            const emailKey = emailToFirebaseKey(user.email);
-            const res = await fetch(
+            const emailKey = emailToFirebaseKey(user.email || "");
+            const checkRes = await fetch(
               `${FIREBASE_DB_URL}/allowed_emails/${encodeURIComponent(emailKey)}.json?auth=${encodeURIComponent(idToken)}`
             );
-            const entry = res.ok ? await res.json() : null;
-
-            if (entry && (entry.role === "admin" || entry.role === "employee" || entry.allowed === true)) {
-              setUserRole(entry.role === "admin" ? "admin" : "employee");
-              setAuthState("authorized");
-              return;
-            }
-
-            const allRes = await fetch(
-              `${FIREBASE_DB_URL}/allowed_emails.json?auth=${encodeURIComponent(idToken)}`
-            );
-            const allData = allRes.ok ? await allRes.json() : null;
-            if (!allData || Object.keys(allData).length === 0) {
-              const adminRecord = {
-                email: user.email.toLowerCase(),
-                label: user.displayName || "Primary Admin",
-                role: "admin",
-                addedAt: Date.now()
-              };
-              await fetch(
-                `${FIREBASE_DB_URL}/allowed_emails/${encodeURIComponent(emailKey)}.json?auth=${encodeURIComponent(idToken)}`,
-                {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(adminRecord)
-                }
+            if (checkRes.ok) {
+              const entry = await checkRes.json();
+              if (entry && entry.email) {
+                setUserRole(entry.role === "admin" ? "admin" : "employee");
+                setAuthState("authorized");
+                setAuthErrorMsg("");
+                return;
+              }
+              const allRes = await fetch(
+                `${FIREBASE_DB_URL}/allowed_emails.json?auth=${encodeURIComponent(idToken)}`
               );
-              setUserRole("admin");
-              setAuthState("authorized");
-              return;
+              const allData = allRes.ok ? await allRes.json() : null;
+              if (!allData || Object.keys(allData).length === 0) {
+                await fetch(
+                  `${FIREBASE_DB_URL}/allowed_emails/${encodeURIComponent(emailKey)}.json?auth=${encodeURIComponent(idToken)}`,
+                  {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      email: (user.email || "").toLowerCase(),
+                      label: user.displayName || "Primary Admin",
+                      role: "admin",
+                      addedAt: Date.now()
+                    })
+                  }
+                );
+                setUserRole("admin");
+                setAuthState("authorized");
+                setAuthErrorMsg("");
+                return;
+              }
             }
-
             setAuthState("unauthorized");
           } catch (err) {
-            console.error("Whitelist verify error:", err);
-            setAuthState("unauthorized");
+            setAuthErrorMsg(err?.message || "تعذر التحقق من صلاحية الحساب.");
+            setAuthState("signed_out");
           }
         });
 
@@ -1107,16 +1456,97 @@
       }, [firebaseApiKey]);
 
       const handleGoogleSignIn = async () => {
-        setIsSigningIn(true);
         setAuthErrorMsg("");
+        setIsSigningIn(true);
         try {
           const provider = new window.firebase.auth.GoogleAuthProvider();
           provider.setCustomParameters({ prompt: "select_account" });
           await window.firebase.auth().signInWithPopup(provider);
         } catch (err) {
-          setAuthErrorMsg(err?.message || "فشل تسجيل الدخول بحساب Google");
+          setAuthErrorMsg(err?.message || "تعذر تسجيل الدخول عبر Google.");
         } finally {
           setIsSigningIn(false);
+        }
+      };
+
+      // On-demand Courier Detail Fetching (Supports forceRefresh for live status check)
+      const fetchCourierDetailsOnDemand = useCallback(
+        async (courierId, courierName, forceRefresh = false) => {
+          const cid = String(courierId || "").trim();
+          if (!cid) return null;
+          if (!forceRefresh && courierDetailsCache[cid]) return courierDetailsCache[cid];
+
+          try {
+            const reqTimestamp = Date.now();
+            await dbFetch("/config/courier_detail_req", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                courierId: cid,
+                courierName: courierName || "",
+                requestedAt: reqTimestamp
+              })
+            });
+
+            for (let attempt = 0; attempt < 12; attempt++) {
+              await new Promise((r) => setTimeout(r, 550));
+              const res = await dbFetch(`/courier_details/${encodeURIComponent(cid)}`);
+              if (res.ok) {
+                const data = await res.json();
+                const isFreshEnough =
+                  !forceRefresh || (data?.updatedAt && data.updatedAt >= reqTimestamp - 2500);
+                const cObj = unwrapCourierRecord(data);
+                const norm = data?.normalized || {};
+                if (
+                  data &&
+                  isFreshEnough &&
+                  (cObj.id || cObj.user_id || cObj.phone_number || norm.userId || norm.status)
+                ) {
+                  setCourierDetailsCache((prev) => ({ ...prev, [cid]: data }));
+                  const stDetails = extractCourierStatusDetails(data, null);
+                  setKnownCouriersMeta((prev) => ({
+                    ...prev,
+                    [cid]: {
+                      name: normalizeText(
+                        norm.name || cObj.name || courierName || prev[cid]?.name || ""
+                      ),
+                      userId: String(norm.userId || cObj.user_id || prev[cid]?.userId || cid),
+                      phone: normalizeText(
+                        norm.phone ||
+                          cObj.phone_number ||
+                          cObj.mobile ||
+                          cObj.phone ||
+                          prev[cid]?.phone ||
+                          ""
+                      ),
+                      status: stDetails.statusLabel
+                    }
+                  }));
+                  return data;
+                }
+              }
+            }
+          } catch {}
+          return courierDetailsCache[cid] || null;
+        },
+        [courierDetailsCache, dbFetch]
+      );
+
+      const handleCourierHover = useCallback(
+        (courierId, courierName) => {
+          if (courierId && !courierDetailsCache[String(courierId)]) {
+            fetchCourierDetailsOnDemand(courierId, courierName, false);
+          }
+        },
+        [courierDetailsCache, fetchCourierDetailsOnDemand]
+      );
+
+      const openCourierModal = (e, courierId, courierName) => {
+        if (e) e.stopPropagation();
+        const cid = String(courierId || "").trim();
+        setSelectedCourier({ id: cid, name: courierName });
+        if (cid) {
+          fetchCourierDetailsOnDemand(cid, courierName, true);
         }
       };
 
@@ -1429,68 +1859,6 @@
         [orderDetailsCache, requestOrderDetailsFromBridge]
       );
 
-      // On-demand Courier Detail Fetching
-      const fetchCourierDetailsOnDemand = useCallback(
-        async (courierId, courierName) => {
-          const cid = String(courierId || "").trim();
-          if (!cid) return null;
-          if (courierDetailsCache[cid]) return courierDetailsCache[cid];
-
-          try {
-            await dbFetch("/config/courier_detail_req", {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                courierId: cid,
-                courierName: courierName || "",
-                requestedAt: Date.now()
-              })
-            });
-
-            for (let attempt = 0; attempt < 10; attempt++) {
-              await new Promise((r) => setTimeout(r, 600));
-              const res = await dbFetch(`/courier_details/${encodeURIComponent(cid)}`);
-              if (res.ok) {
-                const data = await res.json();
-                if (data && (data.courier || data.phone_number || data.user_id)) {
-                  setCourierDetailsCache((prev) => ({ ...prev, [cid]: data }));
-                  const cObj = data.courier || data;
-                  setKnownCouriersMeta((prev) => ({
-                    ...prev,
-                    [cid]: {
-                      name: normalizeText(cObj.name || courierName || prev[cid]?.name || ""),
-                      userId: String(cObj.user_id || prev[cid]?.userId || cid),
-                      phone: normalizeText(cObj.phone_number || cObj.mobile || cObj.phone || prev[cid]?.phone || "")
-                    }
-                  }));
-                  return data;
-                }
-              }
-            }
-          } catch {}
-          return null;
-        },
-        [courierDetailsCache, dbFetch]
-      );
-
-      const handleCourierHover = useCallback(
-        (courierId, courierName) => {
-          if (courierId && !courierDetailsCache[String(courierId)]) {
-            fetchCourierDetailsOnDemand(courierId, courierName);
-          }
-        },
-        [courierDetailsCache, fetchCourierDetailsOnDemand]
-      );
-
-      const openCourierModal = (e, courierId, courierName) => {
-        if (e) e.stopPropagation();
-        const cid = String(courierId || "").trim();
-        setSelectedCourier({ id: cid, name: courierName });
-        if (cid) {
-          fetchCourierDetailsOnDemand(cid, courierName);
-        }
-      };
-
       // Live Rider Search
       const triggerLiveRiderSearch = useCallback(
         async (rawQuery) => {
@@ -1580,9 +1948,11 @@
           setCopyingFollowupState(`single:${item.uid}`);
           let phone = knownCouriersMeta[item.courierId]?.phone || "";
           if (!phone && item.courierId) {
-            const fetched = await fetchCourierDetailsOnDemand(item.courierId, item.courier);
-            const cObj = fetched?.courier || fetched || {};
-            phone = normalizeText(cObj.phone_number || cObj.mobile || cObj.phone || "");
+            const fetched = await fetchCourierDetailsOnDemand(item.courierId, item.courier, false);
+            const cObj = unwrapCourierRecord(fetched);
+            phone = normalizeText(
+              fetched?.normalized?.phone || cObj.phone_number || cObj.mobile || cObj.phone || ""
+            );
           }
           copyToClipboard(`followup:${item.uid}`, formatFollowupBlock(item, phone));
           setCopyingFollowupState("");
@@ -1598,9 +1968,11 @@
           for (const item of itemsList) {
             let phone = knownCouriersMeta[item.courierId]?.phone || "";
             if (!phone && item.courierId) {
-              const fetched = await fetchCourierDetailsOnDemand(item.courierId, item.courier);
-              const cObj = fetched?.courier || fetched || {};
-              phone = normalizeText(cObj.phone_number || cObj.mobile || cObj.phone || "");
+              const fetched = await fetchCourierDetailsOnDemand(item.courierId, item.courier, false);
+              const cObj = unwrapCourierRecord(fetched);
+              phone = normalizeText(
+                fetched?.normalized?.phone || cObj.phone_number || cObj.mobile || cObj.phone || ""
+              );
             }
             blocks.push(formatFollowupBlock(item, phone));
           }
@@ -2192,11 +2564,8 @@
                       🏪 {item.vendor} <span className="text-gray-400 font-normal">(VO #{item.vo})</span>
                     </div>
                     <div className="flex items-center justify-between text-[11px] text-gray-600">
-                      <span className="truncate max-w-[65%]">📍 {item.zone}</span>
-                      <span className="font-mono font-semibold text-gray-700">{item.orderDuration}</span>
-                    </div>
-                    <div className="text-[11px] text-blue-600 font-semibold truncate">
-                      🚴‍♂️ {item.courier}
+                      <span className="truncate max-w-[65%]">🚴‍♂️ {item.courier}</span>
+                      <span className="font-mono">{item.distance} • {item.orderDuration}</span>
                     </div>
                   </div>
                 ))
@@ -3178,7 +3547,7 @@
                   <span className="text-2xl">🚴‍♂️</span>
                   <div>
                     <h1 className="text-lg font-bold tracking-tight">Hurrier Live Operations</h1>
-                    <p className="text-xs text-slate-300">v8.7 • Secured Google Access</p>
+                    <p className="text-xs text-slate-300">v8.9 • Secured Google Access</p>
                   </div>
                 </div>
                 <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
@@ -3317,7 +3686,7 @@
                         تحديد الزونات قبل بدء المتابعة
                       </h1>
                       <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v8.7 • {userRole === "admin" ? "Admin" : "Employee"}
+                        ★ v8.9 • {userRole === "admin" ? "Admin" : "Employee"}
                       </span>
                     </div>
                     <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5 truncate">
@@ -3626,7 +3995,7 @@
 
                 <div className="px-4 py-3 bg-slate-50 border-b border-gray-200 text-xs space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-700">★ v8.7 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                    <span className="font-bold text-emerald-700">★ v8.9 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                     <button
                       type="button"
                       onClick={handleGoogleSignOut}
@@ -3684,7 +4053,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v8.7 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                <span className="font-bold text-emerald-700">★ v8.9 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                 <button
                   type="button"
                   onClick={handleGoogleSignOut}
@@ -4067,14 +4436,17 @@
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {combinedRiderSearchResults.map((rider, idx) => {
                           const stLower = String(rider.status || "").toLowerCase();
-                          const isNotWorking = stLower.includes("not") || stLower.includes("offline") || stLower.includes("inactive");
+                          const isTempNotWorking = stLower.includes("temp") || stLower.includes("break");
+                          const isNotWorking =
+                            !isTempNotWorking &&
+                            (stLower.includes("not") || stLower.includes("offline") || stLower.includes("inactive"));
                           const statusBadgeClass =
-                            stLower.includes("work") && !isNotWorking
+                            isTempNotWorking
+                              ? "bg-amber-50 text-amber-800 border-amber-300"
+                              : stLower.includes("work") && !isNotWorking
                               ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                               : isNotWorking
                               ? "bg-red-50 text-red-700 border-red-200"
-                              : stLower.includes("break")
-                              ? "bg-amber-50 text-amber-800 border-amber-200"
                               : stLower.includes("end")
                               ? "bg-orange-50 text-orange-700 border-orange-200"
                               : "bg-gray-100 text-gray-700 border-gray-300";
@@ -4114,10 +4486,16 @@
                                       </span>
                                     )}
                                   </div>
+                                  {(rider.statusUntil || rider.statusReason) && (
+                                    <div className="mt-1.5 text-[11px] text-amber-800 font-semibold space-y-0.5">
+                                      {rider.statusUntil && <div>Until {formatCourierUntilTime(rider.statusUntil) || rider.statusUntil}</div>}
+                                      {rider.statusReason && <div>Reason: {rider.statusReason}</div>}
+                                    </div>
+                                  )}
                                 </div>
 
                                 <span className={`px-2.5 py-0.5 rounded-full font-bold border flex-shrink-0 ${statusBadgeClass}`}>
-                                  {humanizeSnakeCase(rider.status || "Not Working")}
+                                  {rider.status || "Working"}
                                 </span>
                               </div>
 
@@ -4590,12 +4968,32 @@
                       <h3 className="text-lg font-bold text-blue-600 leading-snug break-words">
                         {selectedCourierFullView.name}
                       </h3>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard("riderNameModal", selectedCourierFullView.name)}
+                        className="text-gray-400 hover:text-blue-600 text-xs px-1.5 py-0.5 rounded border border-gray-200 flex-shrink-0"
+                        title="نسخ اسم الرايدر"
+                      >
+                        {copiedText === "riderNameModal" ? "✓" : "⧉"}
+                      </button>
                     </div>
-                    <div className="text-sm text-gray-600 font-medium">
-                      User ID:{" "}
-                      <strong className="font-mono text-gray-900">
-                        {selectedCourierFullView.userId ? `#${selectedCourierFullView.userId}` : "جاري الجلب..."}
-                      </strong>
+                    <div className="flex items-center gap-2 text-sm text-gray-600 font-medium">
+                      <span>
+                        User ID{" "}
+                        <strong className="font-mono text-gray-900">
+                          {selectedCourierFullView.userId ? `#${selectedCourierFullView.userId}` : "جاري الجلب..."}
+                        </strong>
+                      </span>
+                      {selectedCourierFullView.userId && (
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard("riderUidModal", selectedCourierFullView.userId)}
+                          className="text-gray-400 hover:text-blue-600 text-xs px-1.5 py-0.5 rounded border border-gray-200"
+                          title="نسخ User ID"
+                        >
+                          {copiedText === "riderUidModal" ? "✓" : "⧉"}
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -4627,12 +5025,63 @@
                     </div>
                   )}
 
-                  <div className="p-4 rounded-lg bg-gray-100/90 border border-gray-200 space-y-1">
+                  <div
+                    className={`p-4 rounded-lg border space-y-1 ${
+                      selectedCourierFullView.statusTone === "warning"
+                        ? "bg-amber-50/90 border-amber-200"
+                        : selectedCourierFullView.statusTone === "danger"
+                        ? "bg-red-50/90 border-red-200"
+                        : selectedCourierFullView.statusTone === "orange"
+                        ? "bg-orange-50/90 border-orange-200"
+                        : "bg-gray-100/90 border-gray-200"
+                    }`}
+                  >
                     <div className="text-xs text-gray-500 font-medium">Status</div>
-                    <div className="text-base font-bold text-gray-900">{selectedCourierFullView.statusLabel}</div>
+                    <div
+                      className={`text-base font-bold ${
+                        selectedCourierFullView.statusTone === "warning"
+                          ? "text-amber-900"
+                          : selectedCourierFullView.statusTone === "danger"
+                          ? "text-red-800"
+                          : "text-gray-900"
+                      }`}
+                    >
+                      {selectedCourierFullView.statusLabel}
+                    </div>
+                    {selectedCourierFullView.untilFormatted && (
+                      <div className="text-xs text-gray-600 pt-0.5">
+                        Until {selectedCourierFullView.untilFormatted}
+                      </div>
+                    )}
+                    {selectedCourierFullView.performedBy && (
+                      <div className="text-xs text-gray-600">
+                        Performed by {selectedCourierFullView.performedBy}
+                      </div>
+                    )}
+                    {selectedCourierFullView.reason && (
+                      <div className="text-xs text-gray-700 font-medium">
+                        Reason: {selectedCourierFullView.reason}
+                      </div>
+                    )}
                   </div>
 
+                  {selectedCourierFullView.balanceFormatted && (
+                    <div className="px-4 py-3 rounded-lg bg-[#eef3fc] border border-blue-100 flex items-center justify-between">
+                      <span className="font-bold text-gray-900">Balance</span>
+                      <span className="font-mono font-bold text-gray-900">
+                        {selectedCourierFullView.balanceFormatted}
+                      </span>
+                    </div>
+                  )}
+
                   <div className="divide-y divide-gray-200 border-t border-b border-gray-200">
+                    {selectedCourierFullView.contract && (
+                      <div className="py-3 flex items-center justify-between">
+                        <span className="font-semibold text-gray-900">Contract</span>
+                        <span className="text-gray-600 font-medium">{selectedCourierFullView.contract}</span>
+                      </div>
+                    )}
+
                     <div className="py-3 flex items-center justify-between">
                       <span className="font-semibold text-gray-900">Vehicle</span>
                       <span className="text-gray-600 font-medium">{selectedCourierFullView.vehicle}</span>
@@ -4644,7 +5093,7 @@
                         <span className="font-mono font-bold text-gray-900">{selectedCourierFullView.phone}</span>
                       ) : !selectedCourierFullView.isLoadedFromApi ? (
                         <span className="text-xs font-semibold text-emerald-700 animate-pulse">
-                          ⏳ جاري جلب رقم الموبايل من Hurrier...
+                          ⏳ جاري جلب بيانات الرايدر من Hurrier...
                         </span>
                       ) : (
                         <span className="text-gray-400 text-xs">غير متاح</span>
@@ -4654,7 +5103,7 @@
                 </div>
 
                 <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between text-xs text-gray-500">
-                  <span>View-Only Rider Card</span>
+                  <span>View-Only Rider Card (Live Synced)</span>
                   <button
                     type="button"
                     onClick={() => setSelectedCourier(null)}
