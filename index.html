@@ -852,6 +852,13 @@
                     .filter(Boolean)
                     .join(", ")
                 : orderItem?.zone || "-";
+              const delCourierName = normalizeText(del.courier_name || orderItem?.courier || "-");
+              const delCourierId = String(
+                del.courier_id ||
+                  (delCourierName !== "-" && delCourierName === normalizeText(orderItem?.courier || "")
+                    ? orderItem?.courierId || ""
+                    : "")
+              );
               const transitions = Array.isArray(del.transitions) ? del.transitions : [];
               const events = transitions.map((tr, tIdx) => {
                 const rawCreated = String(tr.created_at || "").trim();
@@ -873,12 +880,24 @@
                 const locUrl =
                   lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : "";
 
+                const rawTrName = normalizeText(tr.courier_name || "");
+                const fallbackDelName = tr.courier_id ? normalizeText(del.courier_name || "") : "";
+                const evCourierName = rawTrName || fallbackDelName || "-";
+                const evCourierId = String(
+                  tr.courier_id ||
+                    tr.metadata?.courier_id ||
+                    (evCourierName !== "-" && evCourierName === normalizeText(del.courier_name || "")
+                      ? del.courier_id || ""
+                      : "")
+                );
+
                 return {
                   key: `${del.id || dIdx}-tr-${tr.id || tIdx}`,
                   timeSec,
                   eventLabel: humanizeSnakeCase(tr.to_state || "Event"),
                   subLabel: subParts.join(" • "),
-                  courierName: normalizeText(tr.courier_name || del.courier_name || "-"),
+                  courierName: evCourierName,
+                  courierId: evCourierId,
                   locUrl,
                   isRemoved
                 };
@@ -889,7 +908,8 @@
                 status: humanizeSnakeCase(del.status || "Active"),
                 isCancelledDelivery,
                 zones: delZones || "-",
-                courier: normalizeText(del.courier_name || orderItem?.courier || "-"),
+                courier: delCourierName,
+                courierId: delCourierId,
                 utilization:
                   del.utilization !== undefined && del.utilization !== null
                     ? `${del.utilization}%`
@@ -904,6 +924,7 @@
                 isCancelledDelivery: status.toLowerCase().includes("cancel"),
                 zones: orderItem?.zone || "-",
                 courier: orderItem?.courier || "-",
+                courierId: orderItem?.courierId || "",
                 utilization: "-",
                 events: []
               }
@@ -1520,18 +1541,38 @@
         [courierDetailsCache, dbFetch]
       );
 
+      const resolveCourierIdByName = useCallback(
+        (nameStr) => {
+          const clean = normalizeText(nameStr).toLowerCase();
+          if (!clean || clean === "-") return "";
+          const fromMeta = Object.values(knownCouriersMeta).find(
+            (m) => m?.name && normalizeText(m.name).toLowerCase() === clean && m.courierId
+          );
+          if (fromMeta) return String(fromMeta.courierId);
+          const fromActive = activeCouriersList.find(
+            (c) =>
+              normalizeText(c.name || c.courier_name || "").toLowerCase() === clean &&
+              (c.id || c.courier_id)
+          );
+          if (fromActive) return String(fromActive.id || fromActive.courier_id);
+          return "";
+        },
+        [knownCouriersMeta, activeCouriersList]
+      );
+
       const handleCourierHover = useCallback(
         (courierId, courierName) => {
-          if (courierId && !courierDetailsCache[String(courierId)]) {
-            fetchCourierDetailsOnDemand(courierId, courierName, false);
+          const cid = String(courierId || "").trim() || resolveCourierIdByName(courierName);
+          if (cid && !courierDetailsCache[cid]) {
+            fetchCourierDetailsOnDemand(cid, courierName, false);
           }
         },
-        [courierDetailsCache, fetchCourierDetailsOnDemand]
+        [courierDetailsCache, fetchCourierDetailsOnDemand, resolveCourierIdByName]
       );
 
       const openCourierModal = (e, courierId, courierName) => {
         if (e) e.stopPropagation();
-        const cid = String(courierId || "").trim();
+        const cid = String(courierId || "").trim() || resolveCourierIdByName(courierName);
         setSelectedCourier({ id: cid, name: courierName });
         if (cid) {
           fetchCourierDetailsOnDemand(cid, courierName, true);
@@ -2229,12 +2270,18 @@
       const selectedCourierFullView = useMemo(() => {
         if (!selectedCourier) return null;
         const cid = String(selectedCourier.id || "");
+        const cleanSelName = normalizeText(selectedCourier.name || "").toLowerCase();
         const metaById =
           knownCouriersMeta[cid] ||
-          Object.values(knownCouriersMeta).find((m) => String(m?.userId || "") === cid);
+          Object.values(knownCouriersMeta).find((m) => String(m?.userId || "") === cid) ||
+          (cleanSelName
+            ? Object.values(knownCouriersMeta).find(
+                (m) => m?.name && normalizeText(m.name).toLowerCase() === cleanSelName
+              )
+            : null);
         const realCid = metaById?.courierId || cid;
         return buildFullCourierView(
-          selectedCourier,
+          { id: realCid, name: selectedCourier.name },
           courierDetailsCache[cid] || courierDetailsCache[realCid],
           metaById,
           isCourierModalRefreshing
@@ -2796,7 +2843,17 @@
                       🏪 {item.vendor} <span className="text-gray-400 font-normal">(VO #{item.vo})</span>
                     </div>
                     <div className="flex items-center justify-between text-[11px] text-gray-600">
-                      <span className="truncate max-w-[65%]">🚴‍♂️ {item.courier}</span>
+                      {item.courier && item.courier !== "-" ? (
+                        <button
+                          type="button"
+                          onClick={(e) => openCourierModal(e, item.courierId, item.courier)}
+                          className="truncate max-w-[65%] text-left text-blue-600 font-bold underline decoration-blue-300"
+                        >
+                          🚴‍♂️ {item.courier}
+                        </button>
+                      ) : (
+                        <span className="truncate max-w-[65%]">🚴‍♂️ -</span>
+                      )}
                       <span className="font-mono">{item.distance} • {item.orderDuration}</span>
                     </div>
                   </div>
@@ -5163,7 +5220,22 @@
                                   </div>
                                   <div>
                                     <div className="text-gray-500 text-[11px]">Courier</div>
-                                    <div className="font-semibold text-blue-600 truncate">{del.courier}</div>
+                                    {del.courier &&
+                                    del.courier !== "-" &&
+                                    del.courier !== "Assigning..." &&
+                                    del.courier !== "Pending Acceptance" ? (
+                                      <button
+                                        type="button"
+                                        onMouseEnter={() => handleCourierHover(del.courierId, del.courier)}
+                                        onClick={(e) => openCourierModal(e, del.courierId, del.courier)}
+                                        className="font-semibold text-blue-600 hover:text-blue-800 hover:underline truncate max-w-full text-left block"
+                                        title="اضغط لعرض بيانات الرايدر"
+                                      >
+                                        {del.courier}
+                                      </button>
+                                    ) : (
+                                      <div className="font-semibold text-gray-600 truncate">{del.courier}</div>
+                                    )}
                                   </div>
                                   <div>
                                     <div className="text-gray-500 text-[11px]">Utilization</div>
@@ -5198,7 +5270,28 @@
                                               </div>
                                               {ev.subLabel && <div className="text-[11px] text-gray-500">{ev.subLabel}</div>}
                                             </td>
-                                            <td className="py-2.5 px-3 text-gray-700">{ev.courierName}</td>
+                                            <td className="py-2.5 px-3">
+                                              {ev.courierName &&
+                                              ev.courierName !== "-" &&
+                                              ev.courierName !== "Assigning..." &&
+                                              ev.courierName !== "Pending Acceptance" ? (
+                                                <button
+                                                  type="button"
+                                                  onMouseEnter={() =>
+                                                    handleCourierHover(ev.courierId, ev.courierName)
+                                                  }
+                                                  onClick={(e) =>
+                                                    openCourierModal(e, ev.courierId, ev.courierName)
+                                                  }
+                                                  className="text-blue-600 hover:text-blue-800 hover:underline font-medium text-left"
+                                                  title="اضغط لعرض بيانات الرايدر"
+                                                >
+                                                  {ev.courierName}
+                                                </button>
+                                              ) : (
+                                                <span className="text-gray-500">{ev.courierName}</span>
+                                              )}
+                                            </td>
                                             <td className="py-2.5 px-2 text-center">
                                               {ev.locUrl ? (
                                                 <a href={ev.locUrl} target="_blank" rel="noopener noreferrer">📍</a>
