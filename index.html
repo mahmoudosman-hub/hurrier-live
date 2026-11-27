@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v8.4 — Completed At Only &amp; Rolling 2h</title>
+  <title>Hurrier Live Operations Dashboard v8.7 — Exact Completed At Sync</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -37,7 +37,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v8.4...
+      Loading Hurrier Live Operations Dashboard v8.7...
     </div>
   </div>
 
@@ -73,11 +73,20 @@
     }
 
     const ALL_ZONES_CATALOG = [
+      { id: 1, name: "Heliopolis", city: "Cairo" },
+      { id: 2, name: "Mohandiseen", city: "Cairo" },
+      { id: 10004, name: "Manial", city: "Cairo" },
+      { id: 10162, name: "Manial nesting", city: "Cairo" },
+      { id: 10282, name: "Manial nesting p", city: "Cairo" },
+      { id: 10284, name: "Manial p", city: "Cairo" },
+      { id: 10214, name: "Hybrid fleet al manial", city: "Cairo" },
+      { id: 10267, name: "Hybrid al-manial bc", city: "Cairo" },
       { id: 10231, name: "Hybrid fleet mokattam easy sports", city: "Cairo" },
       { id: 10002, name: "New maadi", city: "Cairo" },
       { id: 10003, name: "Old maadi", city: "Cairo" },
       { id: 10130, name: "Maadi nesting sp", city: "Cairo" },
       { id: 10020, name: "Helwan SP", city: "Cairo" },
+      { id: 10135, name: "Helwan sp 2", city: "Cairo" },
       { id: 10009, name: "Zahraa maadi and meraag", city: "Cairo" },
       { id: 10001, name: "Mokattam sp", city: "Cairo" },
       { id: 10143, name: "Shobra 2 sp", city: "Cairo" },
@@ -90,10 +99,12 @@
       { id: 10138, name: "October hosary", city: "Cairo" },
       { id: 10012, name: "Tagammoa 1 sp", city: "Cairo" },
       { id: 10089, name: "Rehab 2 sp", city: "Cairo" },
+      { id: 10253, name: "Hybrid fleet rehab old", city: "Cairo" },
       { id: 10069, name: "Shorouk city sp 1", city: "Cairo" },
       { id: 10090, name: "Tagamo3 5 south", city: "Cairo" },
       { id: 10100, name: "Madinaty 3 sp south park", city: "Cairo" },
       { id: 10235, name: "Ain shams nesting sp", city: "Cairo" },
+      { id: 10286, name: "Hybrid fleet ain shams 2", city: "Cairo" },
       { id: 10180, name: "Obour hay awal pt", city: "Cairo" },
       { id: 10011, name: "Tagamoa 5 north", city: "Cairo" },
       { id: 10074, name: "Hadayek el ahram sp", city: "Cairo" },
@@ -117,9 +128,7 @@
       { id: 10006, name: "Merryland", city: "Cairo" },
       { id: 10139, name: "Haram sp 2", city: "Cairo" },
       { id: 10022, name: "Tahrir", city: "Cairo" },
-      { id: 10162, name: "Manial nesting", city: "Cairo" },
       { id: 10005, name: "Sheraton", city: "Cairo" },
-      { id: 10004, name: "Manial sp", city: "Cairo" },
       { id: 10045, name: "Shobra sp", city: "Cairo" },
       { id: 10013, name: "Rehab 1 sp", city: "Cairo" },
       { id: 10096, name: "Palm hills sp", city: "Cairo" },
@@ -148,6 +157,7 @@
       { id: 10216, name: "Hybrid fleet sheraton", city: "Cairo" },
       { id: 10229, name: "Hybrid fleet heliopolis rabwa", city: "Cairo" },
       { id: 10266, name: "Hybrid ard el golf bc", city: "Cairo" },
+      { id: 10268, name: "Hybrid el hadeeqa el dawlia bc", city: "Cairo" },
       { id: 10223, name: "Hybrid fleet shorouk 1st area", city: "Cairo" },
       { id: 10234, name: "Hybrid fleet wahat beta gardens", city: "Cairo" },
       { id: 10209, name: "Hybrid fleet tagmmoa hay 1", city: "Cairo" },
@@ -158,7 +168,6 @@
       { id: 10261, name: "Hybrid fleet - mountain view park wahat", city: "Cairo" },
       { id: 10226, name: "Hybrid fleet sheikh zayed hay 9", city: "Cairo" },
       { id: 10189, name: "Hybrid fleet el sayeda", city: "Cairo" },
-      { id: 10214, name: "Hybrid fleet al manial", city: "Cairo" },
       { id: 10029, name: "Beverly hills sp", city: "Cairo" },
       { id: 10238, name: "Hybrid fleet el daher", city: "Cairo" },
       { id: 10230, name: "Hybrid fleet nasrcity hay 8", city: "Cairo" },
@@ -208,7 +217,6 @@
       { id: 10269, name: "Hybrid maadi old bc", city: "Cairo" },
       { id: 10192, name: "Shobra nesting 2", city: "Cairo" },
       { id: 10273, name: "Hybrid fleet gardenia", city: "Cairo" },
-      { id: 10267, name: "Hybrid al-manial bc", city: "Cairo" },
       { id: 10270, name: "Hybrid shobra bc", city: "Cairo" },
       { id: 10277, name: "Hybrid el sayeda zeinab bc", city: "Cairo" },
       { id: 10068, name: "Smart village dandy mall sp 1", city: "Cairo" },
@@ -217,14 +225,34 @@
       { id: 10276, name: "Hybrid agouza bc", city: "Cairo" },
       { id: 10281, name: "Hybrid fleet shorouk 4", city: "Cairo" },
       { id: 10187, name: "Hybrid fleet shorouk 3rd", city: "Cairo" },
+      { id: 10025, name: "Sidi bishr sp", city: "Alexandria" },
       { id: 10027, name: "Gleem sp", city: "Alexandria" },
-      { id: 10028, name: "Raml station sp", city: "Alexandria" }
+      { id: 10028, name: "Raml station sp", city: "Alexandria" },
+      { id: 10079, name: "Al bitash sp", city: "Alexandria" },
+      { id: 10085, name: "Semouha club sp", city: "Alexandria" },
+      { id: 10144, name: "Kilo 21 sp", city: "Alexandria" },
+      { id: 10199, name: "Gleem part-time sp", city: "Alexandria" },
+      { id: 10200, name: "Gleem bicycle part-time sp", city: "Alexandria" },
+      { id: 10201, name: "Raml station part-time sp", city: "Alexandria" },
+      { id: 10202, name: "Raml station bicycle part-time sp", city: "Alexandria" },
+      { id: 10203, name: "Semouha club bicycle part-time sp", city: "Alexandria" },
+      { id: 10204, name: "Semouha club part-time sp", city: "Alexandria" },
+      { id: 10205, name: "Sidi bishr bicycle part-time sp", city: "Alexandria" },
+      { id: 10206, name: "Sidi bishr part-time sp", city: "Alexandria" },
+      { id: 10239, name: "Hybrid fleet montaza", city: "Alexandria" },
+      { id: 10240, name: "Hybrid fleet semouha plaza", city: "Alexandria" },
+      { id: 10242, name: "Hybrid fleet ibrahimia", city: "Alexandria" },
+      { id: 10247, name: "Hybrid fleet el seyouf", city: "Alexandria" },
+      { id: 10254, name: "Hybrid fleet fleming", city: "Alexandria" },
+      { id: 10255, name: "Hybrid fleet miami bc", city: "Alexandria" }
     ];
+
+    const MANIAL_FAMILY_IDS = [10004, 10162, 10282, 10284, 10214, 10267];
 
     const ZONE_QUICK_PRESETS = [
       {
         label: "الهرم وفيصل والطالبية",
-        ids: [10018, 10139, 10125, 10181, 10182, 10183, 10190, 10278, 10197, 10211]
+        ids: [10018, 10139, 10125, 10181, 10182, 10183, 10190, 10278, 10197, 10211, 10252, 10272]
       },
       {
         label: "حدائق الأهرام",
@@ -232,23 +260,27 @@
       },
       {
         label: "المنيل والسيدة زينب والتحرير",
-        ids: [10004, 10162, 10214, 10267, 10022, 10163, 10189, 10277]
+        ids: [10004, 10162, 10282, 10284, 10214, 10267, 10022, 10163, 10189, 10277]
+      },
+      {
+        label: "المهندسين والدقي والعجوزة وإمبابة",
+        ids: [2, 10129, 10166, 10167, 10237, 10276, 10256, 10195, 10264, 10251]
       },
       {
         label: "المعادي والمقطم وحلوان",
-        ids: [10002, 10003, 10130, 10009, 10161, 10174, 10232, 10269, 10215, 10228, 10265, 10001, 10064, 10217, 10227, 10231, 10020, 10241]
+        ids: [10002, 10003, 10130, 10009, 10161, 10174, 10232, 10269, 10215, 10228, 10265, 10250, 10001, 10064, 10217, 10227, 10231, 10020, 10135, 10241]
       },
       {
         label: "مدينة نصر ومصر الجديدة وشبرا",
-        ids: [10000, 10024, 10128, 10230, 10218, 10196, 10127, 10186, 10266, 10229, 10005, 10131, 10216, 10006, 10033, 10045, 10143, 10164, 10192, 10222, 10270]
+        ids: [1, 10000, 10024, 10128, 10230, 10218, 10268, 10196, 10198, 10273, 10127, 10186, 10266, 10229, 10005, 10131, 10216, 10006, 10033, 10104, 10238, 10193, 10045, 10143, 10164, 10192, 10222, 10270]
       },
       {
         label: "أكتوبر والشيخ زايد",
-        ids: [10138, 10047, 10126, 10191, 10194, 10220, 10271, 10136, 10141, 10151, 10234, 10261, 10032, 10094, 10184, 10226, 10248, 10249, 10029, 10096, 10142, 10212, 10221]
+        ids: [10138, 10047, 10126, 10191, 10194, 10220, 10271, 10136, 10141, 10151, 10213, 10234, 10261, 10032, 10094, 10184, 10226, 10248, 10249, 10029, 10068, 10096, 10142, 10212, 10221]
       },
       {
         label: "التجمع والرحاب ومدينتي والشروق",
-        ids: [10011, 10012, 10090, 10209, 10010, 10224, 10225, 10185, 10150, 10013, 10089, 10173, 10070, 10099, 10100, 10102, 10165, 10069, 10101, 10187, 10223, 10233, 10281]
+        ids: [10011, 10012, 10090, 10091, 10208, 10209, 10275, 10010, 10224, 10225, 10185, 10150, 10160, 10188, 10013, 10089, 10173, 10253, 10070, 10099, 10100, 10102, 10165, 10069, 10101, 10187, 10223, 10233, 10281]
       }
     ];
 
@@ -270,7 +302,7 @@
 
     function isRealHurrierZoneId(id) {
       const n = Number(id);
-      return Number.isInteger(n) && n >= 10000 && n < 90000;
+      return Number.isInteger(n) && n >= 1 && n < 90000;
     }
 
     function normalizeText(v) {
@@ -280,6 +312,30 @@
         .replace(/&quot;/g, '"')
         .replace(/\s+/g, " ")
         .trim();
+    }
+
+    function normalizeHurrierCity(rawCity, zonesList = []) {
+      const c = normalizeText(rawCity).toLowerCase();
+      if (c.includes("alex") || c.includes("إسكندر") || c.includes("اسكندر")) return "Alexandria";
+      if (
+        c.includes("cairo") ||
+        c.includes("قاهر") ||
+        c.includes("giza") ||
+        c.includes("جيز") ||
+        c.includes("october") ||
+        c.includes("أكتوبر") ||
+        c.includes("اكتوبر") ||
+        c.includes("حلوان") ||
+        c.includes("معادي")
+      ) {
+        return "Cairo";
+      }
+      if (Array.isArray(zonesList) && zonesList.length > 0) {
+        const firstZ = normalizeText(zonesList[0]).toLowerCase();
+        const found = ALL_ZONES_CATALOG.find((z) => z.name.toLowerCase() === firstZ);
+        if (found?.city) return found.city;
+      }
+      return rawCity ? normalizeText(rawCity) : "Cairo";
     }
 
     function isTalabatMartVendor(vendorName) {
@@ -493,20 +549,19 @@
       for (const val of candidates) {
         if (val) {
           const ms = typeof val === "number" ? (val > 1e12 ? val : val * 1000) : new Date(val).getTime();
-          if (!Number.isNaN(ms) && ms > 0) return ms;
+          if (!Number.isNaN(ms) && ms > 946684800000) return ms;
         }
       }
 
       const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
-      const rawTotalTime = Number(timings.total_time);
-      if (placedMs > 0 && !Number.isNaN(rawTotalTime) && rawTotalTime > 0) {
-        const durationMs = rawTotalTime < 240 ? rawTotalTime * 60 * 1000 : rawTotalTime * 1000;
-        return placedMs + durationMs;
+      const rawTotalTimeSec = Number(timings.total_time);
+      if (placedMs > 0 && !Number.isNaN(rawTotalTimeSec) && rawTotalTimeSec > 0) {
+        return placedMs + rawTotalTimeSec * 1000;
       }
 
       if (order.updated_at) {
         const updMs = new Date(order.updated_at).getTime();
-        if (!Number.isNaN(updMs) && updMs > 0) return updMs;
+        if (!Number.isNaN(updMs) && updMs > 946684800000) return updMs;
       }
       return 0;
     }
@@ -524,6 +579,9 @@
       const zonesList = sps
         .map((sp) => (typeof sp === "string" ? sp : sp?.name))
         .filter(Boolean);
+      const zoneIdsList = sps
+        .map((sp) => (sp && typeof sp === "object" && sp.id ? Number(sp.id) : 0))
+        .filter((n) => n > 0);
 
       const codeStr = String(
         order.confirmation_number ||
@@ -536,12 +594,10 @@
       const completedTimestamp = extractCompletedTimestampFromRec(rec);
       const completedAtFormatted = completedTimestamp > 0 ? formatExactTimeSeconds(completedTimestamp) : "-";
       const orderStatusLower = String(order.status || rec?.status || "completed").toLowerCase();
-      const rawTotalTime = Number(timings.total_time);
-      const totalDurationSec =
-        !Number.isNaN(rawTotalTime) && rawTotalTime > 0
-          ? rawTotalTime < 240
-            ? rawTotalTime * 60
-            : rawTotalTime
+      const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
+      const computedDurationSec =
+        completedTimestamp > 0 && placedMs > 0 && completedTimestamp >= placedMs
+          ? Math.round((completedTimestamp - placedMs) / 1000)
           : timings.total_time;
 
       const distMeters = Number(primaryDel.delivery_distance ?? rec?.distance ?? 0);
@@ -552,9 +608,10 @@
         orderCode: order.order_code || (codeStr ? `HF_EG${codeStr}` : "-"),
         orderStatus: orderStatusLower,
         vo: String(order.vendor_order_number || "-"),
-        city: normalizeText(dropoff.city || dropoff.city_name || "Cairo"),
+        city: normalizeHurrierCity(dropoff.city || dropoff.city_name, zonesList),
         zone: zonesList.length > 0 ? zonesList.join(", ") : "-",
         zonesList,
+        zoneIdsList,
         courier: normalizeText(primaryDel.courier_name || "-"),
         courierId: primaryDel.courier_id ? String(primaryDel.courier_id) : "",
         vendor: normalizeText(order.vendor_name || order.featured_business?.name || "-"),
@@ -571,7 +628,7 @@
         waitTime: formatCompletedTimingSeconds(timings.wait_pickup_time),
         deliveryLate: formatCompletedTimingSeconds(timings.delivery_late),
         timeInBag: formatCompletedTimingSeconds(timings.time_in_bag),
-        orderDuration: formatCompletedTimingSeconds(totalDurationSec),
+        orderDuration: formatCompletedTimingSeconds(computedDurationSec),
         isPreorder: Boolean(order.is_preorder),
         dropoffIssue: normalizeText(order.deliveries_dropoff_issues || "-"),
         status: "Completed",
@@ -596,6 +653,9 @@
       const zonesList = sps
         .map((sp) => (typeof sp === "string" ? sp : sp?.name))
         .filter(Boolean);
+      const zoneIdsList = sps
+        .map((sp) => (sp && typeof sp === "object" && sp.id ? Number(sp.id) : 0))
+        .filter((n) => n > 0);
 
       const codeStr = String(
         order.code ||
@@ -648,9 +708,10 @@
         vo: String(order.vendor_order_number || "-"),
         vendor: normalizeText(order.vendor_name || "-"),
         vendorCode: String(order.vendor_code || "-"),
-        city: normalizeText(dropoff.city_name || dropoff.city || "Cairo"),
+        city: normalizeHurrierCity(dropoff.city_name || dropoff.city, zonesList),
         zone: zonesList.length > 0 ? zonesList.join(", ") : "-",
         zonesList,
+        zoneIdsList,
         courier: courierLabel,
         courierId: rec?.courier_id ? String(rec.courier_id) : "",
         status: statusLabel,
@@ -714,10 +775,14 @@
 
           const schedDrop = tr.scheduled_drop_off_at || timingObj.scheduled_drop_off_at;
           const estDropDep = tr.estimated_drop_off_departure_at || meta.estimated_dropoff_departure_at;
+          const rawCreated = String(tr.created_at || "").trim();
+          const formattedTimeSec = /\d{4}-\d{2}-\d{2}T/.test(rawCreated)
+            ? formatExactTimeSeconds(rawCreated)
+            : rawCreated || formatExactTimeSeconds(meta.performed_at);
 
           return {
             key: tr.id || `${dIdx}-${tIdx}`,
-            timeSec: tr.created_at || formatExactTimeSeconds(meta.performed_at),
+            timeSec: formattedTimeSec,
             eventLabel: evLabel,
             subLabel: subParts.join(" • "),
             isRemoved: toState.includes("un_dispatch") || toState.includes("cancel") || toState.includes("reject"),
@@ -876,7 +941,7 @@
       const [knownCouriersMeta, setKnownCouriersMeta] = useState({});
       const [activeViewersList, setActiveViewersList] = useState([]);
       const [isViewersPopoverOpen, setIsViewersPopoverOpen] = useState(false);
-
+      const [dynamicZonesCatalog, setDynamicZonesCatalog] = useState([]);
       const [completedHoursWindow, setCompletedHoursWindow] = useState(2);
       const [completedSortAsc, setCompletedSortAsc] = useState(false);
       const [completedCityFilter, setCompletedCityFilter] = useState("All Cities");
@@ -1119,33 +1184,68 @@
         await loadAllowedEmails();
       };
 
+      useEffect(() => {
+        if (authState !== "authorized") return;
+        let cancelled = false;
+        (async () => {
+          try {
+            const res = await dbFetch("/config/dynamic_zones_catalog");
+            if (res.ok && !cancelled) {
+              const list = await res.json();
+              if (Array.isArray(list) && list.length > 0) {
+                setDynamicZonesCatalog(list);
+              }
+            }
+          } catch {}
+        })();
+        return () => {
+          cancelled = true;
+        };
+      }, [authState, dbFetch]);
+
+      const effectiveZonesCatalog = useMemo(() => {
+        const byId = new Map();
+        ALL_ZONES_CATALOG.forEach((z) => byId.set(Number(z.id), z));
+        (Array.isArray(dynamicZonesCatalog) ? dynamicZonesCatalog : []).forEach((z) => {
+          if (z && z.id && z.name && !byId.has(Number(z.id))) {
+            byId.set(Number(z.id), {
+              id: Number(z.id),
+              name: String(z.name).trim(),
+              city: z.city || "Cairo"
+            });
+          }
+        });
+        return Array.from(byId.values());
+      }, [dynamicZonesCatalog]);
+
+      const filteredZonesForModal = useMemo(() => {
+        const q = zoneSearchQuery.trim().toLowerCase();
+        if (!q) return effectiveZonesCatalog;
+        return effectiveZonesCatalog.filter(
+          (z) => z.name.toLowerCase().includes(q) || String(z.id).includes(q) || z.city.toLowerCase().includes(q)
+        );
+      }, [zoneSearchQuery, effectiveZonesCatalog]);
+
+      const selectedZoneNames = useMemo(() => {
+        const idSet = new Set(selectedZoneIds.map(Number));
+        const names = effectiveZonesCatalog
+          .filter((z) => idSet.has(Number(z.id)))
+          .map((z) => normalizeText(z.name).toLowerCase());
+        if (MANIAL_FAMILY_IDS.some((id) => idSet.has(id)) && !names.includes("manial")) {
+          names.push("manial");
+        }
+        return names;
+      }, [selectedZoneIds, effectiveZonesCatalog]);
+
       const handleDeleteAllowedEmail = async (item) => {
+        if (!item?.key || item.email === currentUser?.email) return;
         await dbFetch(`/allowed_emails/${encodeURIComponent(item.key)}`, {
           method: "DELETE"
         });
         await loadAllowedEmails();
       };
 
-      const filteredZonesForModal = useMemo(() => {
-        const q = zoneSearchQuery.trim().toLowerCase();
-        if (!q) return ALL_ZONES_CATALOG;
-        return ALL_ZONES_CATALOG.filter(
-          (z) => z.name.toLowerCase().includes(q) || String(z.id).includes(q) || z.city.toLowerCase().includes(q)
-        );
-      }, [zoneSearchQuery]);
-
-      const selectedZoneNames = useMemo(() => {
-        const idSet = new Set(selectedZoneIds.map(Number));
-        const names = ALL_ZONES_CATALOG.filter((z) => idSet.has(Number(z.id))).map((z) =>
-          normalizeText(z.name).toLowerCase()
-        );
-        if (idSet.has(10004) && !names.includes("manial")) {
-          names.push("manial");
-        }
-        return names;
-      }, [selectedZoneIds]);
-
-      const handleConfirmZoneSelection = () => {
+      const handleConfirmZoneSelection = useCallback(() => {
         if (selectedZoneIds.length === 0) return;
         try {
           window.localStorage.setItem("hurrier_selected_zone_ids", JSON.stringify(selectedZoneIds));
@@ -1153,13 +1253,16 @@
           window.localStorage.setItem("hurrier_zone_setup_confirmed", "1");
         } catch {}
         setIsZoneSetupConfirmed(true);
-      };
+      }, [selectedZoneIds, employeeName]);
 
-      const handleChangeZones = () => {
+      const handleChangeZones = useCallback(() => {
+        try {
+          window.localStorage.setItem("hurrier_zone_setup_confirmed", "0");
+        } catch {}
         setIsZoneSetupConfirmed(false);
-      };
+      }, []);
 
-      // Session Heartbeat to Firebase (/active_sessions/{sessionId})
+      // Send Live Session Heartbeat to Firebase (/active_sessions/{sessionId})
       useEffect(() => {
         if (authState !== "authorized" || !isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
         let cancelled = false;
@@ -1518,17 +1621,28 @@
 
       const matchesZoneFilter = useCallback(
         (item) => {
-          if (selectedZoneNames.length === 0) return true;
+          if (selectedZoneIds.length === 0) return true;
+          const idSet = new Set(selectedZoneIds.map(Number));
+          if (Array.isArray(item.zoneIdsList) && item.zoneIdsList.some((zid) => idSet.has(Number(zid)))) {
+            return true;
+          }
+
+          const hasManialSelected = MANIAL_FAMILY_IDS.some((id) => idSet.has(id));
+          const hasTahrirSelected = idSet.has(10022) || idSet.has(10163);
           const stripSp = (s) => s.replace(/\s+sp$/i, "").trim();
+
           const itemZones = Array.isArray(item.zonesList)
             ? item.zonesList.map((z) => normalizeText(z).toLowerCase()).filter(Boolean)
             : [normalizeText(item.zone).toLowerCase()].filter(Boolean);
           if (itemZones.length === 0 || (itemZones.length === 1 && itemZones[0] === "-")) return false;
-          return itemZones.some((iz) =>
-            selectedZoneNames.some((sz) => iz === sz || stripSp(iz) === stripSp(sz))
-          );
+
+          return itemZones.some((iz) => {
+            if (hasManialSelected && iz.includes("manial")) return true;
+            if (hasTahrirSelected && iz.startsWith("tahrir")) return true;
+            return selectedZoneNames.some((sz) => iz === sz || stripSp(iz) === stripSp(sz));
+          });
         },
-        [selectedZoneNames]
+        [selectedZoneIds, selectedZoneNames]
       );
 
       // Base deliveries for active tab
@@ -1653,7 +1767,23 @@
         const graceMs = isSearching ? 15 * 60 * 1000 : 0;
         const cutoffMs = anchorNow - windowMs - graceMs;
 
-        const filtered = completedOrders.filter((item) => {
+        const enriched = completedOrders.map((item) => {
+          const cachedDet = orderDetailsCache[item.id]?.detail?.order || orderDetailsCache[item.id]?.detail;
+          const exactIso = cachedDet?.current_state_transition;
+          if (exactIso) {
+            const exactMs = new Date(exactIso).getTime();
+            if (!Number.isNaN(exactMs) && exactMs > 946684800000 && exactMs !== item.completedTimestamp) {
+              return {
+                ...item,
+                completedTimestamp: exactMs,
+                completedAtFormatted: formatExactTimeSeconds(exactMs)
+              };
+            }
+          }
+          return item;
+        });
+
+        const filtered = enriched.filter((item) => {
           if (item.orderStatus && item.orderStatus.includes("cancel")) return false;
           if (!item.completedTimestamp || item.completedTimestamp < cutoffMs) return false;
 
@@ -1685,6 +1815,7 @@
         );
       }, [
         completedOrders,
+        orderDetailsCache,
         completedHoursWindow,
         completedCityFilter,
         completedZoneFilter,
@@ -1986,7 +2117,7 @@
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-semibold text-gray-700 focus:outline-none focus:border-blue-500"
                   >
                     <option value="SELECTED_ZONES">زونات الداشبورد المختارة ({selectedZoneIds.length})</option>
-                    {ALL_ZONES_CATALOG.filter((z) => selectedZoneIds.includes(Number(z.id))).map((z) => (
+                    {effectiveZonesCatalog.filter((z) => selectedZoneIds.includes(Number(z.id))).map((z) => (
                       <option key={z.id} value={z.name}>
                         {z.name}
                       </option>
@@ -2062,11 +2193,10 @@
                     </div>
                     <div className="flex items-center justify-between text-[11px] text-gray-600">
                       <span className="truncate max-w-[65%]">📍 {item.zone}</span>
-                      <span className="font-mono">{item.orderDuration}</span>
+                      <span className="font-mono font-semibold text-gray-700">{item.orderDuration}</span>
                     </div>
-                    <div className="pt-1.5 border-t border-gray-100 flex items-center justify-between text-[11px]">
-                      <span className="text-blue-600 font-bold truncate">🚴‍♂️ {item.courier}</span>
-                      <span className="font-mono text-gray-500">{item.distance}</span>
+                    <div className="text-[11px] text-blue-600 font-semibold truncate">
+                      🚴‍♂️ {item.courier}
                     </div>
                   </div>
                 ))
@@ -3048,7 +3178,7 @@
                   <span className="text-2xl">🚴‍♂️</span>
                   <div>
                     <h1 className="text-lg font-bold tracking-tight">Hurrier Live Operations</h1>
-                    <p className="text-xs text-slate-300">v8.4 • Secured Google Access</p>
+                    <p className="text-xs text-slate-300">v8.7 • Secured Google Access</p>
                   </div>
                 </div>
                 <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
@@ -3187,7 +3317,7 @@
                         تحديد الزونات قبل بدء المتابعة
                       </h1>
                       <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v8.4 • {userRole === "admin" ? "Admin" : "Employee"}
+                        ★ v8.7 • {userRole === "admin" ? "Admin" : "Employee"}
                       </span>
                     </div>
                     <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5 truncate">
@@ -3496,7 +3626,7 @@
 
                 <div className="px-4 py-3 bg-slate-50 border-b border-gray-200 text-xs space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-700">★ v8.4 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                    <span className="font-bold text-emerald-700">★ v8.7 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                     <button
                       type="button"
                       onClick={handleGoogleSignOut}
@@ -3554,7 +3684,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v8.4 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                <span className="font-bold text-emerald-700">★ v8.7 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                 <button
                   type="button"
                   onClick={handleGoogleSignOut}
