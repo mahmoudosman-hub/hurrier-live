@@ -49,8 +49,8 @@
   const SYNC_INTERVAL_MS = 2000;
   const LEADER_LEASE_MS = 6000;
   const SESSION_STALE_MS = 45000;
-  const LOCAL_CHANNEL_NAME = "hurrier_live_sync_pc_channel_v75";
-  const LOCAL_TAB_STORAGE_KEY = "hurrier_live_sync_local_tab_leader_v75";
+  const LOCAL_CHANNEL_NAME = "hurrier_live_sync_pc_channel_v80";
+  const LOCAL_TAB_STORAGE_KEY = "hurrier_live_sync_local_tab_leader_v80";
   const LOCAL_TAB_HEARTBEAT_MS = 1000;
   const LOCAL_TAB_TIMEOUT_MS = 3500;
 
@@ -75,7 +75,6 @@
   let remoteAvailableVersion = "";
   let lastRollingCompletedSyncAt = 0;
   let initialCompletedBackfillDone = false;
-  let capturedCompletedApiBaseUrl = "";
 
   const CAPTURED_AUTH_HEADERS = {};
   const courierNameToIdMap = new Map();
@@ -115,7 +114,6 @@
       }
     }
 
-    // Exact calculation from Hurrier's placed_at + total_time (Hurrier returns minutes when < 240, seconds when >= 240)
     const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
     const rawTotalTime = Number(timings.total_time);
     if (placedMs > 0 && !Number.isNaN(rawTotalTime) && rawTotalTime > 0) {
@@ -213,6 +211,91 @@
     return out;
   }
 
+  function getCairoDateStringsForCompleted() {
+    const now = new Date();
+    const todayStr = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(now);
+
+    const yesterdayDate = new Date(now.getTime() - 24 * 3600 * 1000);
+    const yesterdayStr = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(yesterdayDate);
+
+    const hourStr = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Africa/Cairo",
+      hour: "numeric",
+      hour12: false
+    }).format(now);
+    const cairoHour = Number(hourStr) % 24;
+
+    return { todayStr, yesterdayStr, cairoHour };
+  }
+
+  function extractZoneIdsFromDeliveryRecord(rec) {
+    const ids = new Set();
+    const sps = Array.isArray(rec?.starting_points)
+      ? rec.starting_points
+      : Array.isArray(rec?.order?.starting_points)
+      ? rec.order.starting_points
+      : Array.isArray(rec?.order?.drop_off_address?.starting_points)
+      ? rec.order.drop_off_address.starting_points
+      : [];
+    sps.forEach((sp) => {
+      if (sp && typeof sp === "object") {
+        const n = Number(sp.id || sp.starting_point_id);
+        if (!Number.isNaN(n) && n > 0) ids.add(n);
+      }
+    });
+    return Array.from(ids);
+  }
+
+  // Background Rolling 2-Hour Completed Orders Pool (indexed by Completed At + Auto-Cleanup > 2h)
+  function ingestCompletedRecordsBatch(records) {
+    if (!Array.isArray(records) || records.length === 0) return 0;
+    const cutoffMs = Date.now() - ROLLING_COMPLETED_WINDOW_MS;
+    let freshCount = 0;
+
+    for (const rec of records) {
+      if (!rec || typeof rec !== "object") continue;
+      const order = rec.order || {};
+      const orderKey = String(
+        order.id ||
+          order.confirmation_number ||
+          String(order.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+          ""
+      ).trim();
+      if (!orderKey) continue;
+
+      const completedAtMs = extractCompletedTimestamp(rec);
+      if (!completedAtMs || completedAtMs < cutoffMs) continue;
+
+      const zoneIds = extractZoneIdsFromDeliveryRecord(rec);
+      const enrichedRec = {
+        ...rec,
+        __completed_at_ms: completedAtMs
+      };
+
+      const existing = rollingCompletedPool.get(orderKey);
+      if (!existing || completedAtMs > existing.completedAtMs) {
+        rollingCompletedPool.set(orderKey, {
+          orderKey,
+          completedAtMs,
+          zoneIds,
+          record: enrichedRec
+        });
+        freshCount += 1;
+      }
+    }
+    return freshCount;
+  }
+
   function ingestPassiveCouriersPayload(payload) {
     try {
       const rootObj = payload?.courier && typeof payload.courier === "object" ? payload.courier : null;
@@ -303,7 +386,6 @@
               .catch(() => {});
           }
           if (urlStr.includes("/api/") && /orders\/completed/i.test(urlStr)) {
-            capturedCompletedApiBaseUrl = urlStr;
             promise
               .then((resp) => {
                 if (resp && resp.ok && typeof resp.clone === "function") {
@@ -352,7 +434,7 @@
     } catch {}
   })();
 
-  // --- LEVEL 1: SAME-PC MULTI-TAB COORDINATION (BroadcastChannel + LocalStorage) ---
+  // --- LEVEL 1: SAME-PC MULTI-TAB COORDINATION ---
   function initLocalTabCoordinator() {
     try {
       if (typeof BroadcastChannel !== "undefined") {
@@ -819,7 +901,6 @@
       core10.length === 10 || (rawDigits.length >= 9 && /^(\+?20|0020|01)/.test(cleanQ.replace(/[\s\-()]+/g, "")));
     const isPureDigits = /^\d+$/.test(rawDigits) && rawDigits.length >= 3 && rawDigits.length <= 12 && !isPhoneQuery;
 
-    // 1) Instant check in local memory courierDetailCache
     const directMatchedMap = new Map();
     const pushDirectMatch = (resObj) => {
       if (!resObj) return;
@@ -860,43 +941,6 @@
       return enrichedQuick;
     }
 
-    // 2) Check Firebase courier_details cache
-    try {
-      const fbCouriers = await firebaseRequest("GET", "courier_details").catch(() => null);
-      if (fbCouriers && typeof fbCouriers === "object") {
-        Object.values(fbCouriers).forEach((doc) => {
-          if (doc && typeof doc === "object") {
-            const formatted = formatCachedDocToSearchResult(doc);
-            if (formatted) {
-              if (formatted.courierId) {
-                courierDetailCache.set(sanitizeCourierStorageKey(formatted.courierId), {
-                  fetchedAt: Date.now(),
-                  data: doc
-                });
-              }
-              if (formatted.userId) {
-                courierDetailCache.set(sanitizeCourierStorageKey(formatted.userId), {
-                  fetchedAt: Date.now(),
-                  data: doc
-                });
-              }
-              pushDirectMatch(formatted);
-            }
-          }
-        });
-      }
-    } catch {}
-
-    if (directMatchedMap.size > 0) {
-      const fbList = Array.from(directMatchedMap.values())
-        .sort((a, b) => b.score - a.score)
-        .map(({ r }) => r)
-        .slice(0, 5);
-      riderSearchCache.set(cacheKey, { fetchedAt: Date.now(), results: fbList });
-      return fbList;
-    }
-
-    // 3) Query Hurrier API endpoints + full zone/city courier roster (including 0-order working/break/ending riders)
     const searchTerms = new Set([cleanQ]);
     if (core10) {
       searchTerms.add(`0${core10}`);
@@ -938,17 +982,7 @@
           )
         );
         apiTasks.push(
-          safeFetchJson(`${BASE_API}/dispatcher-dashboard/couriers?query=${encodeURIComponent(term)}`, opts).then(
-            (res) => extractCouriersArrayFromResponse(res).forEach(addCandidate)
-          )
-        );
-        apiTasks.push(
           safeFetchJson(`${BASE_API}/couriers?search=${encodeURIComponent(term)}`, opts).then((res) =>
-            extractCouriersArrayFromResponse(res).forEach(addCandidate)
-          )
-        );
-        apiTasks.push(
-          safeFetchJson(`${BASE_API}/courier-service/couriers?search=${encodeURIComponent(term)}`, opts).then((res) =>
             extractCouriersArrayFromResponse(res).forEach(addCandidate)
           )
         );
@@ -976,21 +1010,6 @@
             addCandidate({ ...cObj, user_id: detailRes?.user_id || cObj.user_id || rawDigits });
           }
         })
-      );
-      apiTasks.push(
-        safeFetchJson(`${BASE_API}/dispatcher-dashboard/couriers?user_id=${encodeURIComponent(rawDigits)}`, opts).then(
-          (res) => extractCouriersArrayFromResponse(res).forEach(addCandidate)
-        )
-      );
-      apiTasks.push(
-        safeFetchJson(`${BASE_API}/dispatcher-dashboard/couriers?user_ids[]=${encodeURIComponent(rawDigits)}`, opts).then(
-          (res) => extractCouriersArrayFromResponse(res).forEach(addCandidate)
-        )
-      );
-      apiTasks.push(
-        safeFetchJson(`${BASE_API}/dispatcher-dashboard/couriers/${encodeURIComponent(rawDigits)}`, opts).then(
-          (res) => extractCouriersArrayFromResponse(res).forEach(addCandidate)
-        )
       );
     }
 
@@ -1053,54 +1072,12 @@
       })
     );
 
-    let scored = enrichedResults
+    const scored = enrichedResults
       .map((r) => ({ r, score: matchRiderProfileByQuery(r, cleanQ) }))
       .filter(({ score }) => score > 0)
       .sort((a, b) => b.score - a.score)
       .map(({ r }) => r)
       .slice(0, 5);
-
-    // 4) Fallback for Phone Search: enrich uncached zone/city roster couriers in parallel batches
-    if (scored.length === 0 && isPhoneQuery) {
-      const seenPoolKeys = new Set();
-      const combinedPool = [];
-      [...latestActiveCourierEntries, ...rosterList].forEach((entry) => {
-        const k = sanitizeCourierStorageKey(entry.courierId || entry.userId || entry.courierName.toLowerCase());
-        if (k && !seenPoolKeys.has(k) && !courierDetailCache.get(k)?.data?.fetchedFromApi) {
-          seenPoolKeys.add(k);
-          combinedPool.push(entry);
-        }
-      });
-
-      const batches = chunkArray(combinedPool.slice(0, 180), 18);
-      for (const batch of batches) {
-        const batchMatches = [];
-        await Promise.all(
-          batch.map(async (entry) => {
-            const full = await fetchFullCourierDetails(
-              `${entry.courierId || entry.userId}|${entry.courierName}`,
-              opts,
-              false
-            );
-            if (full && full.data) {
-              const formatted = formatCachedDocToSearchResult(full.data);
-              if (formatted) {
-                if (formatted.courierId) {
-                  firebaseRequest("PUT", `courier_details/${sanitizeCourierStorageKey(formatted.courierId)}`, full.data).catch(() => {});
-                }
-                if (matchRiderProfileByQuery(formatted, cleanQ) > 0) {
-                  batchMatches.push(formatted);
-                }
-              }
-            }
-          })
-        );
-        if (batchMatches.length > 0) {
-          scored = batchMatches.slice(0, 5);
-          break;
-        }
-      }
-    }
 
     if (scored.length > 0) {
       riderSearchCache.set(cacheKey, { fetchedAt: Date.now(), results: scored });
@@ -1109,11 +1086,10 @@
   }
 
   async function fetchFullOrderDetails(orderToken, opts) {
-    const [rawOrderId, rawDeliveryId] = String(orderToken || "").split("|");
+    const [rawOrderId] = String(orderToken || "").split("|");
     const cleanOrderId = String(rawOrderId || "")
       .replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "")
       .trim();
-    const cleanDelId = String(rawDeliveryId || "").trim();
     if (!cleanOrderId) return null;
 
     const cached = orderDetailCache.get(cleanOrderId);
@@ -1165,19 +1141,7 @@
     return doc;
   }
 
-  // Background Rolling 2-Hour Completed Orders Pool (indexed by Completed At + Auto-Cleanup > 2h)
-  function ingestCompletedRecordsBatch(records) {
-    if (!Array.isArray(records) || records.length === 0) return 0;
-    const cutoffMs = Date.now() - ROLLING_COMPLETED_WINDOW_MS;
-    let freshCount = 0;
-
-    for (const rec of records) {
-      const order = rec?.order || {};
-      const orderKey = String(
-        order.id ||
-          order.confirmation_number ||
-          String(order.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
-          ""
+  // Binary-Search & Tail-Scan for Completed Orders (Last 2h by Completed At)
   async function fetchCompletedPageForDate(dateStr, pageNum, opts) {
     const params = new URLSearchParams();
     params.set("date", dateStr);
@@ -1252,7 +1216,6 @@
       startPage = await findFirstCompletedPageAfterCutoff(dateStr, totalPages, minPlacedMs, opts);
     }
 
-    // On incremental cycles after initial backfill, scan the newest 30 pages from totalPages downward
     const effectiveStart = isIncremental ? Math.max(startPage, totalPages - 30) : Math.max(startPage, totalPages - 90);
     const pagesToPull = [];
     for (let p = totalPages; p >= effectiveStart; p--) {
@@ -1291,17 +1254,14 @@
     const minPlacedCutoffMs = now - 3.5 * 3600 * 1000;
     const isIncremental = initialCompletedBackfillDone && rollingCompletedPool.size > 0;
 
-    // Pull orders placed in the last 3.5h for today in Cairo (using Binary Search to skip early pages)
     await pullCompletedWindowForDate(todayStr, minPlacedCutoffMs, isIncremental, opts);
 
-    // If between 12:00 AM and 4:00 AM Cairo time, also pull cross-midnight orders from yesterday's tail
     if (cairoHour < 4) {
       await pullCompletedWindowForDate(yesterdayStr, minPlacedCutoffMs, isIncremental, opts);
     }
 
     initialCompletedBackfillDone = true;
 
-    // Final cleanup pass after ingestion
     const afterCutoff = Date.now() - ROLLING_COMPLETED_WINDOW_MS;
     for (const [key, entry] of rollingCompletedPool.entries()) {
       if (!entry || entry.completedAtMs < afterCutoff) {
@@ -1387,22 +1347,6 @@
     } catch {}
   }
 
-  function extractZoneIdsFromDeliveryRecord(rec) {
-    const ids = new Set();
-    const sps = Array.isArray(rec?.starting_points)
-      ? rec.starting_points
-      : Array.isArray(rec?.order?.starting_points)
-      ? rec.order.starting_points
-      : [];
-    sps.forEach((sp) => {
-      if (sp && typeof sp === "object") {
-        const n = Number(sp.id || sp.starting_point_id);
-        if (!Number.isNaN(n) && n > 0) ids.add(n);
-      }
-    });
-    return Array.from(ids);
-  }
-
   function filterRecordsForSessionZones(records, sessionZoneIds) {
     if (!Array.isArray(sessionZoneIds) || sessionZoneIds.length === 0) return [];
     const targetSet = new Set(sessionZoneIds.map(Number));
@@ -1427,7 +1371,6 @@
         return;
       }
 
-      // Level 1: Same-PC Tab Lock
       if (!ensureLocalTabLeadership()) {
         lastSuccessAt = new Date();
         lastErrorMsg = "";
@@ -1436,7 +1379,6 @@
         return;
       }
 
-      // Level 2: Multi-PC / Multi-Branch Auto-Leader Election & Instant Failover
       const leadership = await ensureFeederLeadership(storedAuth.email);
       if (!leadership.isLeader) {
         lastSuccessAt = new Date();
@@ -1497,7 +1439,6 @@
           safeFetchJson(`${BASE_API}/issue-service/issues?${zoneQuery}`, opts)
         ]);
 
-      // Track active riders from current deliveries for fast phone search
       const activeRidersMap = new Map();
       [...(activeRes.records || []), ...(dispatchedRes.records || [])].forEach((r) => {
         const cid = String(r?.courier_id || "").trim();
@@ -1508,7 +1449,6 @@
       });
       latestActiveCourierEntries = Array.from(activeRidersMap.values());
 
-      // Discover all zones from stats
       const discoveredZones = [];
       if (statsRes && Array.isArray(statsRes.cities)) {
         statsRes.cities.forEach((c) => {
@@ -1522,10 +1462,8 @@
         });
       }
 
-      // Automatically maintain Rolling 2-Hour Completed Orders pool (by Completed At + Auto-Cleanup > 2h)
       await syncRollingCompletedOrdersPool(unionZoneIds, opts, false);
 
-      // Push personalized bundles to each active employee session
       await Promise.all(
         validSessions.map(async (sess) => {
           const sZones = (sess.zone_ids || []).map(Number);
@@ -1555,7 +1493,6 @@
 
       await processOrderDetailRequests(opts, validSessions);
 
-      // Background-prewarm 5 riders per cycle (including 0-order zone riders) so User ID & Phone search is instant
       const prewarmSource =
         cachedZoneRosterEntries.length > 0 ? cachedZoneRosterEntries : latestActiveCourierEntries;
       if (prewarmSource.length > 0) {
@@ -1661,7 +1598,6 @@
     }
   }
 
-  // Fast 700ms poller dedicated to instant Rider Search & Order Detail requests
   function startFastRequestPoller() {
     setInterval(async () => {
       if (isRiderSearchPolling) return;
