@@ -3,12 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v8.1 — Completed At Only &amp; Rolling 2h</title>
+  <title>Hurrier Live Operations Dashboard v8.2 — Completed At Only &amp; Rolling 2h</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <!-- Official Firebase App & Auth Compat SDKs (Google Sign-In) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
   <style>
@@ -38,7 +37,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v8.1...
+      Loading Hurrier Live Operations Dashboard v8.2...
     </div>
   </div>
 
@@ -536,6 +535,7 @@
 
       const completedTimestamp = extractCompletedTimestampFromRec(rec);
       const completedAtFormatted = completedTimestamp > 0 ? formatExactTimeSeconds(completedTimestamp) : "-";
+      const orderStatusLower = String(order.status || rec?.status || "completed").toLowerCase();
       const rawTotalTime = Number(timings.total_time);
       const totalDurationSec =
         !Number.isNaN(rawTotalTime) && rawTotalTime > 0
@@ -550,14 +550,21 @@
         uid: `Completed-${order.id || codeStr}`,
         id: codeStr || "-",
         orderCode: order.order_code || (codeStr ? `HF_EG${codeStr}` : "-"),
+        orderStatus: orderStatusLower,
         vo: String(order.vendor_order_number || "-"),
         city: normalizeText(dropoff.city || dropoff.city_name || "Cairo"),
-        zone: zonesList.length > 0 ? zonesList.join(", ") : "Unknown Zone",
+        zone: zonesList.length > 0 ? zonesList.join(", ") : "-",
         zonesList,
         courier: normalizeText(primaryDel.courier_name || "-"),
         courierId: primaryDel.courier_id ? String(primaryDel.courier_id) : "",
-        vendor: normalizeText(order.vendor_name || order.featured_business?.name || "Vendor"),
+        vendor: normalizeText(order.vendor_name || order.featured_business?.name || "-"),
+        vendorCode: String(order.vendor_code || "-"),
+        customerName: normalizeText(order.customer_name || "-"),
         distance: distMeters > 0 ? `${(distMeters / 1000).toFixed(2)} km` : "-",
+        completedTimestamp,
+        completedAtFormatted,
+        placedAt: order.placed_at || "",
+        placedAtFormatted: formatShortTimeOnly(order.placed_at),
         acceptTime: formatCompletedTimingSeconds(timings.accepting_time),
         retailerLate: formatCompletedTimingSeconds(timings.vendor_late),
         courierLate: formatCompletedTimingSeconds(timings.courier_late),
@@ -567,15 +574,29 @@
         orderDuration: formatCompletedTimingSeconds(totalDurationSec),
         isPreorder: Boolean(order.is_preorder),
         dropoffIssue: normalizeText(order.deliveries_dropoff_issues || "-"),
-        placedTimestamp: order.placed_at ? new Date(order.placed_at).getTime() : 0,
-        completedTimestamp,
-        completedAtFormatted,
+        status: "Completed",
+        deadline: "-",
+        instructions: [
+          order.is_cash_collection ? "Cash" : order.is_card_on_delivery ? "Card" : "Online",
+          humanizeSnakeCase(order.vendor_vertical_type || "Restaurants")
+        ].filter(Boolean),
+        orderValue: formatPiastersMoney(order.total),
         rawRecord: rec
       };
     }
 
-    function mapHurrierDeliveryRecord(rec, tabName, sourceOrderIndex = 0) {
+    function mapHurrierDeliveryRecord(rec, tabName, idx) {
       const order = rec?.order || {};
+      const dropoff = order.drop_off_address || order.dropoff_address || {};
+      const sps = Array.isArray(rec?.starting_points)
+        ? rec.starting_points
+        : Array.isArray(dropoff.starting_points)
+        ? dropoff.starting_points
+        : [];
+      const zonesList = sps
+        .map((sp) => (typeof sp === "string" ? sp : sp?.name))
+        .filter(Boolean);
+
       const codeStr = String(
         order.code ||
           order.confirmation_number ||
@@ -584,173 +605,133 @@
           ""
       ).trim();
 
-      const sps = Array.isArray(rec?.starting_points)
-        ? rec.starting_points
-        : Array.isArray(order.starting_points)
-        ? order.starting_points
-        : [];
-      const zonesList = sps
-        .map((sp) => (typeof sp === "string" ? sp : sp?.name))
-        .filter(Boolean);
+      const statusRaw = String(rec?.status || order.status || tabName).toLowerCase();
+      const statusLabel = humanizeSnakeCase(statusRaw);
 
-      const rawStatus = String(rec?.status || order.status || tabName || "active").toLowerCase();
-      const statusLabel = humanizeSnakeCase(rawStatus);
-      const isPreorder = tabName === "Pre-order" || Boolean(order.is_pre_order || order.is_preorder);
-      const deadlineIso = order.scheduled_dropoff_at || order.promised_delivery_time || order.scheduled_pickup_at;
+      const courierName = normalizeText(rec?.courier_name || "");
+      const courierLabel = courierName
+        ? courierName
+        : statusRaw === "courier_notified"
+        ? "Pending Acceptance"
+        : statusRaw === "queued" || statusRaw === "pending"
+        ? "Assigning..."
+        : "-";
 
-      const tags = Array.isArray(order.tags) ? order.tags : [];
+      const deadlineIso =
+        order.scheduled_dropoff_at ||
+        order.promised_delivery_time ||
+        order.scheduled_pickup_at ||
+        "";
+      const deadlineStr = formatRelativeDeadline(deadlineIso, tabName === "Pre-order" || tabName === "Upcoming");
+
+      const distMeters = Number(rec?.distance ?? 0);
+      const distanceStr = distMeters > 0 ? `${(distMeters / 1000).toFixed(2)} km` : "-";
+
       const instructions = [];
       if (order.is_cash_collection) instructions.push("Cash");
       else if (order.is_card_on_delivery) instructions.push("Card");
       else instructions.push("Online");
 
-      const vType = String(order.vertical_type || "").toLowerCase();
-      if (vType === "darkstores" || isTalabatMartVendor(order.vendor_name)) {
-        instructions.push("Darkstores");
-      } else if (vType) {
-        instructions.push(humanizeSnakeCase(vType));
-      }
+      const vType = humanizeSnakeCase(order.vertical_type || order.vendor_vertical_type || "");
+      if (vType) instructions.push(vType);
 
-      const distMeters = Number(rec?.distance ?? 0);
-      const valPiasters = Number(order.order_value ?? 0);
+      const tags = Array.isArray(order.tags) ? order.tags : [];
+      const isSplit = tags.includes("split_order") || rec?.is_primary === false;
 
-      let courierDisplay = normalizeText(rec?.courier_name || "");
-      if (!courierDisplay) {
-        if (rawStatus === "queued" || rawStatus === "pending") courierDisplay = "Assigning...";
-        else if (rawStatus === "courier_notified") courierDisplay = "Pending Acceptance";
-        else courierDisplay = "-";
-      }
+      const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
 
       return {
-        uid: `${tabName}-${rec?.id || order.id || codeStr}`,
+        uid: `${tabName}-${rec?.id || order.id || codeStr}-${idx}`,
+        deliveryId: rec?.id ? String(rec.id) : "",
         id: codeStr || "-",
         orderCode: order.order_code || (codeStr ? `HF_EG${codeStr}` : "-"),
         vo: String(order.vendor_order_number || "-"),
-        status: statusLabel,
-        tab: tabName,
-        deadline: formatRelativeDeadline(deadlineIso, isPreorder),
-        courier: courierDisplay,
-        courierId: rec?.courier_id ? String(rec.courier_id) : "",
-        time_in: rec?.time_in_status ? formatDurationSecondsToMin(rec.time_in_status) : "-",
-        time_at: order.scheduled_pickup_at ? formatShortTimeOnly(order.scheduled_pickup_at) : "-",
-        zone: zonesList.length > 0 ? zonesList.join(", ") : "Unknown Zone",
+        vendor: normalizeText(order.vendor_name || "-"),
+        vendorCode: String(order.vendor_code || "-"),
+        city: normalizeText(dropoff.city_name || dropoff.city || "Cairo"),
+        zone: zonesList.length > 0 ? zonesList.join(", ") : "-",
         zonesList,
-        distance: distMeters > 0 ? `${(distMeters / 1000).toFixed(2)} km` : "-",
-        orderValue: valPiasters > 0 ? formatPiastersMoney(valPiasters) : "-",
-        vendor: normalizeText(order.vendor_name || "Vendor"),
+        courier: courierLabel,
+        courierId: rec?.courier_id ? String(rec.courier_id) : "",
+        status: statusLabel,
+        deadline: deadlineStr,
+        distance: distanceStr,
+        orderValue: formatPiastersMoney(order.order_value ?? order.total),
         instructions,
-        isSplit: tags.includes("split_order") || rec?.is_primary === false,
-        placedTimestamp: order.send_to_restaurant_at ? new Date(order.send_to_restaurant_at).getTime() : 0,
-        sourceOrderIndex,
+        isSplit,
+        placedMs,
+        time_in: "-",
+        time_at: "-",
         rawRecord: rec
       };
     }
 
-    function mapHurrierIssueRecord(iss, idx) {
-      const orderCode = String(iss?.order_code || iss?.code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "").trim();
-      return {
-        uid: `Issue-${iss?.id || idx}`,
-        id: String(iss?.id || idx + 1),
-        orderId: orderCode || "-",
-        type: humanizeSnakeCase(iss?.issue_type || iss?.type || "Issue"),
-        reason: normalizeText(iss?.reason || iss?.category || iss?.description || "Action Required"),
-        courier: normalizeText(iss?.courier_name || "-"),
-        courierId: iss?.courier_id ? String(iss.courier_id) : "",
-        status: humanizeSnakeCase(iss?.status || "open"),
-        pickedBy: normalizeText(iss?.picked_by || iss?.assignee || "-"),
-        deadline: formatRelativeDeadline(iss?.deadline || iss?.created_at, false),
-        rawRecord: iss
-      };
-    }
+    function buildFullOrderView(baseOrder, fetchedDetailEntry) {
+      const rec = baseOrder?.rawRecord || {};
+      const orderFromRec = rec.order || {};
+      const detailObj = fetchedDetailEntry?.detail?.order || fetchedDetailEntry?.detail || orderFromRec;
+      const deliveriesArr = Array.isArray(fetchedDetailEntry?.deliveries?.deliveries)
+        ? fetchedDetailEntry.deliveries.deliveries
+        : Array.isArray(fetchedDetailEntry?.deliveries)
+        ? fetchedDetailEntry.deliveries
+        : rec.id
+        ? [rec]
+        : [];
 
-    function buildFullOrderDetailsView(baseOrder, apiDetailDoc) {
-      if (!baseOrder) return null;
-      const rawRec = baseOrder.rawRecord || {};
-      const baseOrd = rawRec.order || {};
-      const apiOrder = apiDetailDoc?.order || {};
-      const ord = { ...baseOrd, ...apiOrder };
+      const pickupAddr = detailObj.pickup_address || orderFromRec.pickup_address || {};
+      const dropoffAddr = detailObj.drop_off_address || detailObj.dropoff_address || orderFromRec.drop_off_address || {};
+      const customerObj = detailObj.customer || {};
+      const vendorObj = detailObj.vendor || {};
+      const timingObj = detailObj.timing || {};
 
-      const pickupAddr = ord.pickup_address || {};
-      const dropoffAddr = ord.drop_off_address || ord.dropoff_address || {};
-      const cust = ord.customer || {};
-      const vendorObj = ord.vendor || {};
-      const detailObj = ord.detail || {};
-      const estObj = ord.estimations || {};
-      const timingObj = ord.timing || {};
-
-      const tags = Array.isArray(ord.tags) ? ord.tags : [];
+      const tags = Array.isArray(detailObj.tags) ? detailObj.tags : Array.isArray(orderFromRec.tags) ? orderFromRec.tags : [];
       const orderBadges = [];
-      if (ord.is_cash_collection || baseOrder.instructions?.includes("Cash")) orderBadges.push("Cash");
-      else if (ord.is_card_on_delivery || baseOrder.instructions?.includes("Card")) orderBadges.push("Card");
+      if (detailObj.is_cash_collection || orderFromRec.is_cash_collection) orderBadges.push("Cash");
       if (tags.includes("proof_of_pickup")) orderBadges.push("Proof of pickup");
       if (tags.includes("large_order")) orderBadges.push("Large order");
-      if (ord.is_pre_order || ord.is_preorder || baseOrder.isPreorder) orderBadges.push("Pre-order");
-      if (baseOrder.isSplit || tags.includes("split_order")) orderBadges.push("Split");
+      if (tags.includes("split_order")) orderBadges.push("Split order");
 
-      const apiDeliveries = Array.isArray(apiDetailDoc?.deliveries) ? apiDetailDoc.deliveries : [];
-      const rawDeliveries =
-        apiDeliveries.length > 0
-          ? apiDeliveries
-          : rawRec.id
-          ? [rawRec]
-          : rawRec.primary_delivery
-          ? [
-              {
-                id: ord.order_id || ord.id || baseOrder.id,
-                status: ord.status || baseOrder.status,
-                courier_id: rawRec.primary_delivery.courier_id,
-                courier_name: rawRec.primary_delivery.courier_name,
-                utilization: ord.utilization,
-                starting_points: dropoffAddr.starting_points || []
-              }
-            ]
-          : [];
+      const structuredDeliveries = deliveriesArr.map((del, dIdx) => {
+        const zList = Array.isArray(del.starting_points)
+          ? del.starting_points.map((s) => (typeof s === "string" ? s : s?.name)).filter(Boolean)
+          : baseOrder.zonesList || [];
+        const zStr = zList.length > 0 ? zList.join(", ") : baseOrder.zone || "-";
 
-      const structuredDeliveries = rawDeliveries.map((del, dIdx) => {
-        const sps = Array.isArray(del.starting_points) ? del.starting_points : [];
-        const zStr = sps.map((sp) => (typeof sp === "string" ? sp : sp?.name)).filter(Boolean).join(", ") || baseOrder.zone;
         const transitions = Array.isArray(del.transitions) ? del.transitions : [];
-
         const events = transitions.map((tr, tIdx) => {
-          const toState = String(tr.to_state || tr.event_type || "event").toLowerCase();
+          const toState = String(tr.to_state || tr.event_type || "event");
+          const evLabel = humanizeSnakeCase(toState);
           const meta = tr.metadata || {};
-          const loc = tr.courier_location || {};
-          const locUrl =
-            loc.latitude && loc.longitude
-              ? `https://www.google.com/maps?q=${encodeURIComponent(loc.latitude)},${encodeURIComponent(loc.longitude)}`
-              : "";
-
-          const estDropArr = meta.estimated_dropoff_arrival_at || tr.estimated_drop_off_arrival_at;
-          const estDropDep = meta.estimated_dropoff_departure_at || tr.estimated_drop_off_departure_at;
-          const schedDrop = tr.scheduled_drop_off_at || timingObj.scheduled_drop_off_at || ord.scheduled_dropoff_at;
-
           const subParts = [];
-          if (tr.dispatch_type) subParts.push(humanizeSnakeCase(tr.dispatch_type));
-          if (tr.un_dispatch_type) subParts.push(`Reason: ${humanizeSnakeCase(tr.un_dispatch_type)}`);
-          if (meta.reason) subParts.push(String(meta.reason));
+          if (meta.dispatch_type) subParts.push(humanizeSnakeCase(meta.dispatch_type));
+          if (tr.un_dispatch_type) subParts.push(humanizeSnakeCase(tr.un_dispatch_type));
+          if (meta.split_reason) subParts.push(meta.split_reason);
+
+          const loc = tr.courier_location || {};
+          const lat = loc.latitude ?? meta.courier_lat;
+          const lng = loc.longitude ?? meta.courier_long;
+          const locUrl = lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : "";
+
+          const schedDrop = tr.scheduled_drop_off_at || timingObj.scheduled_drop_off_at;
+          const estDropDep = tr.estimated_drop_off_departure_at || meta.estimated_dropoff_departure_at;
 
           return {
             key: tr.id || `${dIdx}-${tIdx}`,
-            timeSec: tr.created_at ? formatExactTimeSeconds(tr.created_at) : "-",
-            eventLabel: humanizeSnakeCase(toState),
+            timeSec: tr.created_at || formatExactTimeSeconds(meta.performed_at),
+            eventLabel: evLabel,
             subLabel: subParts.join(" • "),
             isRemoved: toState.includes("un_dispatch") || toState.includes("cancel") || toState.includes("reject"),
-            isAccepted: toState === "accepted" || toState === "completed" || toState === "picked_up",
-            courierName: normalizeText(tr.courier_name || (toState === "queued" ? "-" : del.courier_name || "-")),
-            courierId: tr.courier_id ? String(tr.courier_id) : del.courier_id ? String(del.courier_id) : "",
+            courierName: normalizeText(tr.courier_name || "-"),
             locUrl,
-            estAcceptTime: formatShortEstTime(meta.expected_accept_time || tr.expected_accept_time),
-            estPickupArrival: formatShortEstTime(meta.estimated_pickup_arrival_at || tr.estimated_pickup_arrival_at),
-            estPickupDeparture: formatShortEstTime(meta.estimated_pickup_departure_at || tr.estimated_pickup_departure_at),
-            estDropoffArrival: formatShortEstTime(estDropArr),
-            estDropoffDeparture: formatShortEstTime(estDropDep),
             estDropoffDelta: formatDiffBetweenIsos(schedDrop, estDropDep)
           };
         });
 
+        const delStatusLower = String(del.status || baseOrder.status || "").toLowerCase();
         return {
           id: del.id || `${baseOrder.id}-${dIdx + 1}`,
           status: humanizeSnakeCase(del.status || baseOrder.status),
+          isCancelledDelivery: delStatusLower.includes("cancel"),
           zones: zStr,
           courier: normalizeText(del.courier_name || baseOrder.courier || "-"),
           courierId: del.courier_id ? String(del.courier_id) : baseOrder.courierId || "",
@@ -759,117 +740,79 @@
         };
       });
 
-      const rawItems = Array.isArray(detailObj.order_items) ? detailObj.order_items : [];
-      let totalQty = 0;
-      const items = rawItems.map((it, idx) => {
-        const q = Number(it.quantity || 1);
-        totalQty += q;
-        return {
-          id: it.id || idx,
-          name: normalizeText(it.item || it.name || "Item"),
-          quantity: q,
-          volume: it.volume !== undefined && it.volume !== null ? Number(it.volume).toFixed(2) : "-",
-          weight: it.weight !== undefined && it.weight !== null ? Number(it.weight).toFixed(2) : "-",
-          priceFormatted: formatPiastersMoney(it.price)
-        };
+      structuredDeliveries.sort((a, b) => {
+        if (a.isCancelledDelivery === b.isCancelledDelivery) return 0;
+        return a.isCancelledDelivery ? 1 : -1;
       });
 
-      const itemsSummary = {
-        totalQty,
-        totalVolume: ord.total_volume !== undefined ? Number(ord.total_volume).toFixed(2) : "-",
-        totalWeight: ord.total_weight !== undefined ? Number(ord.total_weight).toFixed(2) : "-",
-        subtotal: formatPiastersMoney(ord.subtotal),
-        deliveryFee: formatPiastersMoney(ord.delivery_fee),
-        total: formatPiastersMoney(ord.order_value ?? ord.total),
-        payAtPickup: formatPiastersMoney(detailObj.cod_pay_at_pickup ?? 0),
-        collectAtDropoff: formatPiastersMoney(detailObj.cod_collect_at_drop_off ?? 0),
-        deliveryBags: ord.total_bags ?? "-"
-      };
-
-      const rawNotes = Array.isArray(apiDetailDoc?.dispatcher_notes) ? apiDetailDoc.dispatcher_notes : [];
-      const notes = rawNotes.map((n, idx) => ({
-        id: n.id || idx,
-        author: normalizeText(n.created_by || n.author || n.user_email || "Dispatcher"),
-        createdAt: formatReadableTimestamp(n.created_at),
-        text: String(n.note || n.text || n.content || "")
+      const rawItems = Array.isArray(detailObj.detail?.order_items)
+        ? detailObj.detail.order_items
+        : Array.isArray(detailObj.order_items)
+        ? detailObj.order_items
+        : [];
+      const items = rawItems.map((it, idx) => ({
+        id: it.id || idx,
+        name: normalizeText(it.item || it.name || "Item"),
+        quantity: it.quantity ?? 1,
+        priceFormatted: formatPiastersMoney(it.price)
       }));
 
       const timeChecks = [
-        { label: "Placed at", value: formatReadableTimestamp(ord.placed_at) },
-        { label: "Sent to vendor", value: formatReadableTimestamp(ord.send_to_restaurant_at || ord.sent_to_vendor_at) },
-        { label: "Confirmed by vendor", value: formatReadableTimestamp(ord.restaurant_confirmed_at || ord.accepted_by_vendor_at) },
-        { label: "Food is ready", value: formatReadableTimestamp(ord.food_is_ready_at) },
-        { label: "Scheduled pickup", value: formatReadableTimestamp(timingObj.scheduled_pickup_at || ord.scheduled_pickup_at) },
-        { label: "Promised delivery", value: formatReadableTimestamp(estObj.promised_delivery_time || ord.scheduled_dropoff_at) },
-        { label: "Completed / Transition", value: formatReadableTimestamp(ord.current_state_transition || ord.completed_at) }
+        { label: "Placed at", value: formatReadableTimestamp(detailObj.placed_at || orderFromRec.placed_at) },
+        { label: "Sent to vendor", value: formatReadableTimestamp(detailObj.send_to_restaurant_at || orderFromRec.sent_to_vendor_at) },
+        { label: "Vendor confirmed", value: formatReadableTimestamp(detailObj.restaurant_confirmed_at || orderFromRec.accepted_by_vendor_at) },
+        { label: "Food ready at", value: formatReadableTimestamp(detailObj.food_is_ready_at || orderFromRec.food_is_ready_at) },
+        { label: "Promised delivery", value: formatReadableTimestamp(timingObj.scheduled_drop_off_at || orderFromRec.scheduled_dropoff_at) },
+        { label: "Completed / Transition", value: formatReadableTimestamp(detailObj.current_state_transition || baseOrder.completedTimestamp) }
       ];
 
       return {
-        ...baseOrder,
-        isLoadedFromApi: Boolean(apiDetailDoc),
-        orderBadges,
-        statusSinceStr: formatSinceTimestamp(ord.current_state_transition),
-        platformName: ord.platform || "TB_OT",
-        globalEntityId: ord.global_entity_id || "HF_EG",
-        vendorCode: vendorObj.vendor_code || ord.vendor_code || "-",
-        vendorOrderNo: vendorObj.vendor_order_number || ord.vendor_order_number || baseOrder.vo || "-",
-        orderValue: formatPiastersMoney(ord.order_value ?? ord.total) !== "-" ? formatPiastersMoney(ord.order_value ?? ord.total) : baseOrder.orderValue,
-        prepDurationStr: detailObj.prep_duration ? formatDurationSecondsToMin(detailObj.prep_duration) : "-",
-        courierDelayStr:
-          ord.estimated_courier_delay !== undefined && ord.estimated_courier_delay !== null
-            ? `${ord.estimated_courier_delay}m`
-            : "-",
-        customerUpdatedStr: dropoffAddr.updated_at ? formatReadableTimestamp(dropoffAddr.updated_at) : "-",
-        vendorName: normalizeText(vendorObj.vendor_name || ord.vendor_name || ord.restaurant_name || baseOrder.vendor),
+        id: baseOrder.id,
+        orderCode: detailObj.order_code || baseOrder.orderCode,
+        status: humanizeSnakeCase(detailObj.status || baseOrder.status),
+        statusSinceStr: formatSinceTimestamp(detailObj.current_state_transition || detailObj.placed_at),
+        platformName: detailObj.platform === "TB_OT" ? "Talabat" : detailObj.platform || "Talabat",
+        vendorCode: String(vendorObj.vendor_code || detailObj.vendor_code || baseOrder.vendorCode || "-"),
+        vendorOrderNo: String(vendorObj.vendor_order_number || detailObj.vendor_order_number || baseOrder.vo || "-"),
+        vendorName: normalizeText(vendorObj.vendor_name || detailObj.restaurant_name || baseOrder.vendor || "-"),
         pickupAddress: normalizeText(pickupAddr.street_address || pickupAddr.address_line_1 || "-"),
-        pickupAreaBanner: normalizeText(pickupAddr.special_instructions || ""),
-        customerName: normalizeText(cust.customer_name || ord.customer_name || "Customer"),
-        customerPhone: normalizeText(cust.customer_phone_number || ord.customer_phone || ""),
-        dropoffAddress: normalizeText(dropoffAddr.street_address || dropoffAddr.address_line_1 || "-"),
-        building: normalizeText(dropoffAddr.building || "-"),
-        floor: normalizeText(dropoffAddr.floor || "-"),
-        apartment: normalizeText(dropoffAddr.apartment_number || "-"),
-        intercom: normalizeText(dropoffAddr.intercom || "-"),
-        entrance: normalizeText(dropoffAddr.entrance || "-"),
-        deliveryNote: normalizeText(dropoffAddr.special_instructions || ""),
+        customerName: normalizeText(customerObj.customer_name || baseOrder.customerName || "-"),
+        customerPhone: normalizeText(customerObj.customer_phone_number || ""),
+        dropoffAddress: normalizeText(
+          [dropoffAddr.street_address, dropoffAddr.district, dropoffAddr.special_instructions].filter(Boolean).join(" • ") || "-"
+        ),
+        orderValue: formatPiastersMoney(detailObj.order_value ?? detailObj.total ?? orderFromRec.total),
+        distance: baseOrder.distance,
+        orderBadges,
         structuredDeliveries,
-        orderIssues: Array.isArray(apiDetailDoc?.order_issues) ? apiDetailDoc.order_issues : [],
         items,
-        itemsSummary,
         timeChecks,
-        notes
+        isLoadedFromApi: Boolean(fetchedDetailEntry)
       };
     }
 
-    function buildFullCourierDetailsView(baseCourier, apiCourierDoc) {
-      if (!baseCourier) return null;
-      const c = apiCourierDoc?.courier || {};
-      const statusMeta = apiCourierDoc?.status_meta_data || c.status_meta_data || {};
-      const contractInfo = apiCourierDoc?.contract_info || c.contract_info || {};
-      const contractStr = [contractInfo.type, contractInfo.name].filter(Boolean).join(" • ");
+    function buildFullCourierView(courierReq, fetchedCourierEntry, knownMeta) {
+      const cid = String(courierReq?.id || "");
+      const name = normalizeText(courierReq?.name || knownMeta?.name || `Courier #${cid}`);
+      const cObj = fetchedCourierEntry?.courier || fetchedCourierEntry || {};
+      const userId = String(cObj.user_id || cObj.userId || knownMeta?.userId || cid || "");
+      const phone = normalizeText(cObj.phone_number || cObj.mobile || cObj.phone || knownMeta?.phone || "");
+      const statusLabel = humanizeSnakeCase(cObj.status || cObj.shift_status || "Working");
+      const vehicle = normalizeText(cObj.vehicle_type || cObj.vehicle?.name || cObj.vehicle || "Motorbike");
 
       return {
-        isLoadedFromApi: Boolean(apiCourierDoc?.fetchedFromApi),
-        courierId: String(apiCourierDoc?.courierId || c.id || baseCourier.courierId || "").trim(),
-        userId: String(apiCourierDoc?.userId || apiCourierDoc?.user_id || c.user_id || baseCourier.userId || "").trim(),
-        name: normalizeText(apiCourierDoc?.courierName || c.name || baseCourier.name || "Courier"),
-        statusLabel: humanizeSnakeCase(c.status || baseCourier.status || "Working"),
-        statusUntil: apiCourierDoc?.status_until ? formatReadableTimestamp(apiCourierDoc.status_until) : "",
-        performedBy: normalizeText(statusMeta.performed_by || ""),
-        statusReason: normalizeText(statusMeta.reason || statusMeta.comment || ""),
-        balanceStr:
-          apiCourierDoc?.balance !== null && apiCourierDoc?.balance !== undefined
-            ? formatPiastersMoney(apiCourierDoc.balance)
-            : "",
-        contract: contractStr || "-",
-        vehicle: normalizeText(c.vehicle || baseCourier.vehicle || "-"),
-        phone: normalizeText(c.phone_number || c.phone || c.mobile || baseCourier.phone || ""),
-        fleetId: String(c.fleet_id || baseCourier.fleetId || "-")
+        id: cid,
+        name,
+        userId,
+        phone,
+        statusLabel,
+        vehicle,
+        isLoadedFromApi: Boolean(fetchedCourierEntry)
       };
     }
 
     function App() {
-      const [firebaseApiKey, setFirebaseApiKey] = useState(getStoredFirebaseApiKey);
+      const [firebaseApiKey, setFirebaseApiKey] = useState(() => getStoredFirebaseApiKey());
       const [apiKeyDraft, setApiKeyDraft] = useState("");
       const [authState, setAuthState] = useState(() => (getStoredFirebaseApiKey() ? "checking" : "needs_api_key"));
       const [currentUser, setCurrentUser] = useState(null);
@@ -892,128 +835,127 @@
           return [];
         }
       });
-      const [isZoneSetupConfirmed, setIsZoneSetupConfirmed] = useState(() => {
-        try {
-          return window.localStorage.getItem("hurrier_zone_setup_confirmed") === "1";
-        } catch {
-          return false;
-        }
-      });
       const [employeeName, setEmployeeName] = useState(() => {
         try {
-          return window.localStorage.getItem("hurrier_employee_name") || "";
+          return String(window.localStorage.getItem("hurrier_employee_name") || "");
         } catch {
           return "";
         }
       });
+      const [isZoneSetupConfirmed, setIsZoneSetupConfirmed] = useState(() => {
+        try {
+          const savedIds = JSON.parse(window.localStorage.getItem("hurrier_selected_zone_ids") || "[]");
+          const confirmed = window.localStorage.getItem("hurrier_zone_setup_confirmed") === "1";
+          return confirmed && Array.isArray(savedIds) && savedIds.length > 0;
+        } catch {
+          return false;
+        }
+      });
       const [zoneSearchQuery, setZoneSearchQuery] = useState("");
-      const [discoveredZones, setDiscoveredZones] = useState([]);
-
-      const sessionIdRef = useRef(
-        `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-      );
 
       const [activeTab, setActiveTab] = useState("Active");
+      const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+      const [mobileViewMode, setMobileViewMode] = useState("cards");
       const [selectedCity, setSelectedCity] = useState("All Cities");
       const [searchQuery, setSearchQuery] = useState("");
       const [activeQuickFilter, setActiveQuickFilter] = useState("All");
       const [selectedMartBranch, setSelectedMartBranch] = useState("ALL");
       const [orderSortMode, setOrderSortMode] = useState("hurrier_order");
-      const [mobileViewMode, setMobileViewMode] = useState("cards");
-      const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-
       const [currentPage, setCurrentPage] = useState(1);
       const [jumpPageInput, setJumpPageInput] = useState("");
       const mainContainerRef = useRef(null);
 
-      const [connectionStatus, setConnectionStatus] = useState("waiting");
+      const [connectionStatus, setConnectionStatus] = useState("connecting");
       const [lastSyncTime, setLastSyncTime] = useState("-");
       const [deliveries, setDeliveries] = useState([]);
-      const [issuesList, setIssuesList] = useState([]);
-      const [hurrierStats, setHurrierStats] = useState(null);
-      const [dispatchersList, setDispatchersList] = useState([]);
-
-      // Completed Orders state — Rolling 2h / 1h based strictly on COMPLETED AT
       const [completedOrders, setCompletedOrders] = useState([]);
+      const [issuesList, setIssuesList] = useState([]);
+      const [activeCouriersList, setActiveCouriersList] = useState([]);
+      const [zoneStatsSnapshot, setZoneStatsSnapshot] = useState([]);
+      const [tabCounts, setTabCounts] = useState({});
+      const [knownCouriersMeta, setKnownCouriersMeta] = useState({});
+
       const [completedHoursWindow, setCompletedHoursWindow] = useState(2);
       const [completedSortAsc, setCompletedSortAsc] = useState(false);
       const [completedCityFilter, setCompletedCityFilter] = useState("All Cities");
       const [completedZoneFilter, setCompletedZoneFilter] = useState("SELECTED_ZONES");
       const [completedSearchQuery, setCompletedSearchQuery] = useState("");
+      const completedSearchAnchorRef = useRef(0);
       const [completedPage, setCompletedPage] = useState(1);
       const [completedJumpPage, setCompletedJumpPage] = useState("");
       const [isCompletedLoading, setIsCompletedLoading] = useState(false);
 
-      // Modals & Caches
       const [selectedOrder, setSelectedOrder] = useState(null);
       const [detailModalTab, setDetailModalTab] = useState("Deliveries");
-      const [orderDetailsMap, setOrderDetailsMap] = useState({});
-
+      const [orderDetailsCache, setOrderDetailsCache] = useState({});
       const [selectedCourier, setSelectedCourier] = useState(null);
-      const [courierDetailsMap, setCourierDetailsMap] = useState({});
-      const [knownCouriersMeta, setKnownCouriersMeta] = useState({});
+      const [courierDetailsCache, setCourierDetailsCache] = useState({});
 
-      // Live Rider Search
-      const [riderSearchReq, setRiderSearchReq] = useState(null);
-      const [riderSearchResults, setRiderSearchResults] = useState([]);
-      const [isRiderSearching, setIsRiderSearching] = useState(false);
-
-      // Bulk & Single Copy
       const [selectedOrderUids, setSelectedOrderUids] = useState(() => new Set());
       const [copyingFollowupState, setCopyingFollowupState] = useState("");
       const [copiedText, setCopiedText] = useState("");
 
-      const copyToClipboard = useCallback((key, text) => {
-        const val = String(text || "");
-        if (!val) return;
+      const [riderSearchReq, setRiderSearchReq] = useState(null);
+      const [riderSearchResults, setRiderSearchResults] = useState([]);
+      const [isRiderSearching, setIsRiderSearching] = useState(false);
+
+      const sessionIdRef = useRef(() => {
         try {
-          const ta = document.createElement("textarea");
-          ta.value = val;
-          ta.style.position = "fixed";
-          ta.style.opacity = "0";
-          document.body.appendChild(ta);
-          ta.select();
-          document.execCommand("copy");
-          document.body.removeChild(ta);
-          setCopiedText(key);
-          setTimeout(() => setCopiedText((prev) => (prev === key ? "" : prev)), 2000);
-        } catch {}
-      }, []);
+          let sid = window.sessionStorage.getItem("hurrier_session_id");
+          if (!sid) {
+            sid = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            window.sessionStorage.setItem("hurrier_session_id", sid);
+          }
+          return sid;
+        } catch {
+          return `sess_${Date.now()}`;
+        }
+      });
+      const sessionId = typeof sessionIdRef.current === "function" ? sessionIdRef.current() : sessionIdRef.current;
 
       const getFreshIdToken = useCallback(async () => {
         try {
-          if (window.firebase && firebase.apps.length > 0 && firebase.auth().currentUser) {
-            return await firebase.auth().currentUser.getIdToken(false);
+          if (window.firebase && window.firebase.apps.length > 0 && window.firebase.auth().currentUser) {
+            const tok = await window.firebase.auth().currentUser.getIdToken(false);
+            if (tok) {
+              try {
+                const rawBridge = JSON.parse(window.localStorage.getItem(AUTH_BRIDGE_STORAGE_KEY) || "{}");
+                window.localStorage.setItem(
+                  AUTH_BRIDGE_STORAGE_KEY,
+                  JSON.stringify({
+                    ...rawBridge,
+                    idToken: tok,
+                    email: window.firebase.auth().currentUser.email,
+                    apiKey: firebaseApiKey,
+                    updatedAt: Date.now()
+                  })
+                );
+              } catch {}
+              return tok;
+            }
           }
         } catch {}
         return "";
-      }, []);
+      }, [firebaseApiKey]);
 
-      const fbFetch = useCallback(
-        async (method, path, body = null) => {
-          const token = await getFreshIdToken();
-          const cleanPath = String(path || "").replace(/^\/+/, "");
-          const url = `${FIREBASE_DB_URL}/${cleanPath}.json${token ? `?auth=${encodeURIComponent(token)}` : ""}`;
-          const res = await fetch(url, {
-            method,
-            headers: body !== null ? { "Content-Type": "application/json" } : {},
-            body: body !== null ? JSON.stringify(body) : undefined
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          return res.json();
+      const dbFetch = useCallback(
+        async (path, options = {}) => {
+          const tok = await getFreshIdToken();
+          const sep = path.includes("?") ? "&" : "?";
+          const url = `${FIREBASE_DB_URL}${path}.json${tok ? `${sep}auth=${encodeURIComponent(tok)}` : ""}`;
+          return fetch(url, options);
         },
         [getFreshIdToken]
       );
 
-      // Initialize Firebase Auth & Check Whitelist
       useEffect(() => {
         if (!firebaseApiKey) {
           setAuthState("needs_api_key");
           return;
         }
         try {
-          if (!firebase.apps.length) {
-            firebase.initializeApp({
+          if (!window.firebase.apps.length) {
+            window.firebase.initializeApp({
               apiKey: firebaseApiKey,
               authDomain: FIREBASE_AUTH_DOMAIN,
               projectId: FIREBASE_PROJECT_ID,
@@ -1021,13 +963,11 @@
             });
           }
         } catch (err) {
-          setAuthErrorMsg(err?.message || "Firebase init error");
-          setAuthState("signed_out");
-          return;
+          console.error("Firebase init error:", err);
         }
 
-        const unsub = firebase.auth().onAuthStateChanged(async (user) => {
-          if (!user || !user.email) {
+        const unsubscribe = window.firebase.auth().onAuthStateChanged(async (user) => {
+          if (!user) {
             setCurrentUser(null);
             setAuthState("signed_out");
             try {
@@ -1040,59 +980,74 @@
           setAuthState("checking");
           try {
             const idToken = await user.getIdToken(true);
+            try {
+              window.localStorage.setItem(
+                AUTH_BRIDGE_STORAGE_KEY,
+                JSON.stringify({
+                  idToken,
+                  refreshToken: user.refreshToken || "",
+                  email: user.email,
+                  apiKey: firebaseApiKey,
+                  updatedAt: Date.now()
+                })
+              );
+            } catch {}
+
             const emailKey = emailToFirebaseKey(user.email);
-            const resp = await fetch(
+            const res = await fetch(
               `${FIREBASE_DB_URL}/allowed_emails/${encodeURIComponent(emailKey)}.json?auth=${encodeURIComponent(idToken)}`
             );
-            const allowedEntry = resp.ok ? await resp.json() : null;
+            const entry = res.ok ? await res.json() : null;
 
-            if (!allowedEntry || typeof allowedEntry !== "object") {
-              setAuthState("unauthorized");
-              try {
-                window.localStorage.removeItem(AUTH_BRIDGE_STORAGE_KEY);
-              } catch {}
+            if (entry && (entry.role === "admin" || entry.role === "employee" || entry.allowed === true)) {
+              setUserRole(entry.role === "admin" ? "admin" : "employee");
+              setAuthState("authorized");
               return;
             }
 
-            const role = allowedEntry.role === "admin" ? "admin" : "employee";
-            setUserRole(role);
-            setAuthState("authorized");
-
-            if (role === "admin") {
-              const bridgePayload = JSON.stringify({
-                email: user.email,
+            const allRes = await fetch(
+              `${FIREBASE_DB_URL}/allowed_emails.json?auth=${encodeURIComponent(idToken)}`
+            );
+            const allData = allRes.ok ? await allRes.json() : null;
+            if (!allData || Object.keys(allData).length === 0) {
+              const adminRecord = {
+                email: user.email.toLowerCase(),
+                label: user.displayName || "Primary Admin",
                 role: "admin",
-                idToken,
-                refreshToken: user.refreshToken || "",
-                apiKey: firebaseApiKey,
-                expiresAt: Date.now() + 55 * 60 * 1000
-              });
-              try {
-                window.localStorage.setItem(AUTH_BRIDGE_STORAGE_KEY, bridgePayload);
-              } catch {}
-            } else {
-              try {
-                window.localStorage.removeItem(AUTH_BRIDGE_STORAGE_KEY);
-              } catch {}
+                addedAt: Date.now()
+              };
+              await fetch(
+                `${FIREBASE_DB_URL}/allowed_emails/${encodeURIComponent(emailKey)}.json?auth=${encodeURIComponent(idToken)}`,
+                {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(adminRecord)
+                }
+              );
+              setUserRole("admin");
+              setAuthState("authorized");
+              return;
             }
+
+            setAuthState("unauthorized");
           } catch (err) {
-            setAuthErrorMsg(err?.message || "فشل التحقق من الصلاحيات");
-            setAuthState("signed_out");
+            console.error("Whitelist verify error:", err);
+            setAuthState("unauthorized");
           }
         });
 
-        return () => unsub();
+        return () => unsubscribe();
       }, [firebaseApiKey]);
 
       const handleGoogleSignIn = async () => {
-        setAuthErrorMsg("");
         setIsSigningIn(true);
+        setAuthErrorMsg("");
         try {
-          const provider = new firebase.auth.GoogleAuthProvider();
+          const provider = new window.firebase.auth.GoogleAuthProvider();
           provider.setCustomParameters({ prompt: "select_account" });
-          await firebase.auth().signInWithPopup(provider);
+          await window.firebase.auth().signInWithPopup(provider);
         } catch (err) {
-          setAuthErrorMsg(err?.message || "فشل تسجيل الدخول بـ Google");
+          setAuthErrorMsg(err?.message || "فشل تسجيل الدخول بحساب Google");
         } finally {
           setIsSigningIn(false);
         }
@@ -1100,29 +1055,26 @@
 
       const handleGoogleSignOut = async () => {
         try {
+          await window.firebase.auth().signOut();
           window.localStorage.removeItem(AUTH_BRIDGE_STORAGE_KEY);
-          await firebase.auth().signOut();
         } catch {}
       };
 
-      // Admin Allowed Emails Management
       const loadAllowedEmails = useCallback(async () => {
         if (userRole !== "admin") return;
         try {
-          const data = await fbFetch("GET", "allowed_emails");
-          if (data && typeof data === "object") {
-            const arr = Object.entries(data)
-              .filter(([, val]) => val && typeof val === "object")
-              .map(([key, val]) => ({
-                key,
-                email: val.email || key.replace(/,/g, "."),
-                label: val.label || "",
-                role: val.role === "admin" ? "admin" : "employee"
-              }));
-            setAllowedEmailsList(arr);
-          }
+          const res = await dbFetch("/allowed_emails");
+          if (!res.ok) return;
+          const data = (await res.json()) || {};
+          const list = Object.entries(data).map(([key, val]) => ({
+            key,
+            email: val?.email || key.replace(/,/g, "."),
+            label: val?.label || "",
+            role: val?.role === "admin" ? "admin" : "employee"
+          }));
+          setAllowedEmailsList(list);
         } catch {}
-      }, [userRole, fbFetch]);
+      }, [userRole, dbFetch]);
 
       useEffect(() => {
         if (isAdminModalOpen && userRole === "admin") {
@@ -1133,445 +1085,562 @@
       const handleAddOrUpdateAllowedEmail = async (e) => {
         e.preventDefault();
         const cleanEmail = newAllowedEmail.trim().toLowerCase();
-        if (!cleanEmail || !cleanEmail.includes("@")) return;
+        if (!cleanEmail) return;
         setAdminSaving(true);
         try {
           const key = emailToFirebaseKey(cleanEmail);
-          await fbFetch("PUT", `allowed_emails/${key}`, {
-            email: cleanEmail,
-            label: newAllowedLabel.trim(),
-            role: newAllowedRole,
-            addedBy: currentUser?.email || "admin",
-            updatedAt: new Date().toISOString()
+          await dbFetch(`/allowed_emails/${encodeURIComponent(key)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: cleanEmail,
+              label: newAllowedLabel.trim(),
+              role: newAllowedRole,
+              addedAt: Date.now()
+            })
           });
           setNewAllowedEmail("");
           setNewAllowedLabel("");
           await loadAllowedEmails();
-        } catch {} finally {
+        } finally {
           setAdminSaving(false);
         }
       };
 
       const handleToggleEmailRole = async (item) => {
-        if (!item || item.email === currentUser?.email) return;
         const nextRole = item.role === "admin" ? "employee" : "admin";
-        try {
-          await fbFetch("PATCH", `allowed_emails/${item.key}`, { role: nextRole });
-          await loadAllowedEmails();
-        } catch {}
+        await dbFetch(`/allowed_emails/${encodeURIComponent(item.key)}/role`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(nextRole)
+        });
+        await loadAllowedEmails();
       };
 
       const handleDeleteAllowedEmail = async (item) => {
-        if (!item || item.email === currentUser?.email) return;
-        try {
-          await fbFetch("DELETE", `allowed_emails/${item.key}`);
-          await loadAllowedEmails();
-        } catch {}
-      };
-
-      // Persist zone preferences
-      useEffect(() => {
-        try {
-          window.localStorage.setItem("hurrier_selected_zone_ids", JSON.stringify(selectedZoneIds));
-          window.localStorage.setItem("hurrier_zone_setup_confirmed", isZoneSetupConfirmed ? "1" : "0");
-          window.localStorage.setItem("hurrier_employee_name", employeeName);
-        } catch {}
-      }, [selectedZoneIds, isZoneSetupConfirmed, employeeName]);
-
-      const allAvailableZones = useMemo(() => {
-        const map = new Map();
-        ALL_ZONES_CATALOG.forEach((z) => map.set(Number(z.id), z));
-        discoveredZones.forEach((z) => {
-          if (isRealHurrierZoneId(z.id) && !map.has(Number(z.id))) {
-            map.set(Number(z.id), { id: Number(z.id), name: z.name, city: z.city || "Cairo" });
-          }
+        await dbFetch(`/allowed_emails/${encodeURIComponent(item.key)}`, {
+          method: "DELETE"
         });
-        return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-      }, [discoveredZones]);
+        await loadAllowedEmails();
+      };
 
       const filteredZonesForModal = useMemo(() => {
         const q = zoneSearchQuery.trim().toLowerCase();
-        if (!q) return allAvailableZones;
-        return allAvailableZones.filter(
-          (z) => z.name.toLowerCase().includes(q) || String(z.id).includes(q) || (z.city || "").toLowerCase().includes(q)
+        if (!q) return ALL_ZONES_CATALOG;
+        return ALL_ZONES_CATALOG.filter(
+          (z) => z.name.toLowerCase().includes(q) || String(z.id).includes(q) || z.city.toLowerCase().includes(q)
         );
-      }, [allAvailableZones, zoneSearchQuery]);
+      }, [zoneSearchQuery]);
 
       const selectedZoneNames = useMemo(() => {
         const idSet = new Set(selectedZoneIds.map(Number));
-        return allAvailableZones
-          .filter((z) => idSet.has(Number(z.id)))
-          .map((z) => normalizeText(z.name).toLowerCase());
-      }, [allAvailableZones, selectedZoneIds]);
+        return ALL_ZONES_CATALOG.filter((z) => idSet.has(Number(z.id))).map((z) =>
+          normalizeText(z.name).toLowerCase()
+        );
+      }, [selectedZoneIds]);
 
       const handleConfirmZoneSelection = () => {
         if (selectedZoneIds.length === 0) return;
+        try {
+          window.localStorage.setItem("hurrier_selected_zone_ids", JSON.stringify(selectedZoneIds));
+          window.localStorage.setItem("hurrier_employee_name", employeeName);
+          window.localStorage.setItem("hurrier_zone_setup_confirmed", "1");
+        } catch {}
         setIsZoneSetupConfirmed(true);
-        setConnectionStatus("connecting");
-        setIsCompletedLoading(true);
       };
 
       const handleChangeZones = () => {
         setIsZoneSetupConfirmed(false);
       };
 
-      // Session Heartbeat & Live Bundle Polling (every 2s)
-      const fetchMySessionBundleFromFirebase = useCallback(async () => {
-        if (authState !== "authorized" || !isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
-        const sid = sessionIdRef.current;
-        try {
-          const bundle = await fbFetch("GET", `session_bundles/${sid}`);
-          if (!bundle || typeof bundle !== "object") {
-            setConnectionStatus("connecting");
-            return;
-          }
-
-          if (Array.isArray(bundle.discoveredZonesList) && bundle.discoveredZonesList.length > 0) {
-            setDiscoveredZones(bundle.discoveredZonesList);
-          }
-          if (bundle.stats) setHurrierStats(bundle.stats);
-          if (Array.isArray(bundle.dispatchers)) setDispatchersList(bundle.dispatchers);
-
-          const rawIssues = Array.isArray(bundle.issues?.issues)
-            ? bundle.issues.issues
-            : Array.isArray(bundle.issues)
-            ? bundle.issues
-            : [];
-          setIssuesList(rawIssues.map((iss, idx) => mapHurrierIssueRecord(iss, idx)));
-
-          const mergedDeliveries = [];
-          const tabSources = [
-            { key: "active", tab: "Active" },
-            { key: "queued", tab: "Queued" },
-            { key: "dispatched", tab: "Dispatched" },
-            { key: "actionable", tab: "Actionable" },
-            { key: "preorder", tab: "Pre-order" },
-            { key: "waitingAssembly", tab: "Waiting for Assembly" }
-          ];
-
-          const newCouriersMeta = {};
-          tabSources.forEach(({ key, tab }) => {
-            const recs = Array.isArray(bundle[key]?.records) ? bundle[key].records : [];
-            recs.forEach((r, idx) => {
-              const mapped = mapHurrierDeliveryRecord(r, tab, idx);
-              mergedDeliveries.push(mapped);
-              if (mapped.courierId && mapped.courier && mapped.courier !== "-") {
-                newCouriersMeta[mapped.courierId] = {
-                  courierId: mapped.courierId,
-                  name: mapped.courier
-                };
-              }
-            });
-          });
-          setDeliveries(mergedDeliveries);
-
-          // Rolling 2-Hour Completed Orders Pool
-          const compRecs = Array.isArray(bundle.completed?.records) ? bundle.completed.records : [];
-          const mappedCompleted = compRecs.map((r) => {
-            const m = mapHurrierCompletedRecord(r);
-            if (m.courierId && m.courier && m.courier !== "-") {
-              newCouriersMeta[m.courierId] = {
-                courierId: m.courierId,
-                name: m.courier
-              };
-            }
-            return m;
-          });
-          setCompletedOrders(mappedCompleted);
-          setIsCompletedLoading(false);
-
-          if (Object.keys(newCouriersMeta).length > 0) {
-            setKnownCouriersMeta((prev) => ({ ...prev, ...newCouriersMeta }));
-          }
-
-          if (bundle.rider_search_result?.results) {
-            setRiderSearchResults(bundle.rider_search_result.results);
-            setIsRiderSearching(false);
-          }
-
-          setConnectionStatus("live");
-          setLastSyncTime(new Date().toLocaleTimeString("en-US", { hour12: true }));
-        } catch {
-          setConnectionStatus("error");
-        }
-      }, [authState, isZoneSetupConfirmed, selectedZoneIds, fbFetch]);
-
+      // Session Heartbeat to Firebase (/active_sessions/{sessionId})
       useEffect(() => {
         if (authState !== "authorized" || !isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
-        const sid = sessionIdRef.current;
+        let cancelled = false;
 
-        const sendHeartbeat = () => {
-          fbFetch("PATCH", `active_sessions/${sid}`, {
-            session_id: sid,
-            email: currentUser?.email || "",
-            employee_name: employeeName || currentUser?.email || "",
-            zone_ids: selectedZoneIds,
-            heartbeat_at: Date.now()
-          }).catch(() => {});
+        const sendHeartbeat = async () => {
+          if (cancelled) return;
+          try {
+            await dbFetch(`/active_sessions/${encodeURIComponent(sessionId)}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId,
+                email: currentUser?.email || "",
+                employeeName: employeeName || currentUser?.email || "",
+                zoneIds: selectedZoneIds,
+                activeTab,
+                lastSeen: Date.now()
+              })
+            });
+          } catch {}
         };
 
         sendHeartbeat();
-        fetchMySessionBundleFromFirebase();
-
-        const hbTimer = setInterval(sendHeartbeat, 10000);
-        const pollTimer = setInterval(fetchMySessionBundleFromFirebase, 2000);
-
+        const timer = setInterval(sendHeartbeat, 8000);
         return () => {
-          clearInterval(hbTimer);
-          clearInterval(pollTimer);
+          cancelled = true;
+          clearInterval(timer);
         };
-      }, [authState, isZoneSetupConfirmed, selectedZoneIds, currentUser, employeeName, fbFetch, fetchMySessionBundleFromFirebase]);
+      }, [authState, isZoneSetupConfirmed, selectedZoneIds, sessionId, currentUser, employeeName, activeTab, dbFetch]);
 
-      // Order & Courier Detail Requests via Firebase
-      const requestOrderDetailFromFirebase = useCallback(
+      // Fetch Session Bundle from Firebase (/session_bundles/{sessionId})
+      const fetchMySessionBundleFromFirebase = useCallback(async () => {
+        if (authState !== "authorized" || !isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
+        try {
+          const res = await dbFetch(`/session_bundles/${encodeURIComponent(sessionId)}`);
+          if (!res.ok) {
+            setConnectionStatus("error");
+            return;
+          }
+          const bundle = await res.json();
+          if (!bundle) {
+            setConnectionStatus("waiting");
+            return;
+          }
+
+          setConnectionStatus("live");
+          if (bundle.updatedAt) {
+            setLastSyncTime(formatExactTimeSeconds(bundle.updatedAt));
+          }
+
+          const mappedDeliveries = [];
+          const tabRecs = bundle.tabRecords || {};
+          Object.entries(tabRecs).forEach(([tName, recs]) => {
+            if (Array.isArray(recs)) {
+              recs.forEach((r, idx) => {
+                mappedDeliveries.push({
+                  ...mapHurrierDeliveryRecord(r, tName, idx),
+                  tabName: tName
+                });
+              });
+            }
+          });
+          setDeliveries(mappedDeliveries);
+
+          if (Array.isArray(bundle.completedRecords)) {
+            const mappedComp = bundle.completedRecords
+              .map(mapHurrierCompletedRecord)
+              .filter((item) => !item.orderStatus.includes("cancel"));
+            setCompletedOrders(mappedComp);
+          }
+
+          if (Array.isArray(bundle.issues)) {
+            setIssuesList(bundle.issues);
+          }
+
+          if (Array.isArray(bundle.couriers)) {
+            setActiveCouriersList(bundle.couriers);
+            setKnownCouriersMeta((prev) => {
+              const next = { ...prev };
+              bundle.couriers.forEach((c) => {
+                const cid = String(c.id || c.courier_id || "");
+                if (cid) {
+                  next[cid] = {
+                    name: normalizeText(c.name || c.courier_name || prev[cid]?.name || ""),
+                    userId: String(c.user_id || prev[cid]?.userId || cid),
+                    phone: normalizeText(c.phone_number || c.mobile || prev[cid]?.phone || "")
+                  };
+                }
+              });
+              return next;
+            });
+          }
+
+          if (Array.isArray(bundle.zoneStats)) {
+            setZoneStatsSnapshot(bundle.zoneStats);
+          }
+
+          if (bundle.counts && typeof bundle.counts === "object") {
+            setTabCounts(bundle.counts);
+          }
+        } catch (err) {
+          setConnectionStatus("error");
+        }
+      }, [authState, isZoneSetupConfirmed, selectedZoneIds, sessionId, dbFetch]);
+
+      useEffect(() => {
+        if (authState !== "authorized" || !isZoneSetupConfirmed) return;
+        fetchMySessionBundleFromFirebase();
+        const interval = setInterval(fetchMySessionBundleFromFirebase, 2000);
+        return () => clearInterval(interval);
+      }, [authState, isZoneSetupConfirmed, fetchMySessionBundleFromFirebase]);
+
+      // On-demand Order Detail Fetching
+      const requestOrderDetailsFromBridge = useCallback(
         async (orderItem) => {
           if (!orderItem?.id || orderItem.id === "-") return;
-          const cleanId = String(orderItem.id).trim();
-          if (orderDetailsMap[cleanId]) return;
+          const code = String(orderItem.id).trim();
+          if (orderDetailsCache[code]) return;
 
           try {
-            const cachedDoc = await fbFetch("GET", `order_details/${encodeURIComponent(cleanId)}`);
-            if (cachedDoc && typeof cachedDoc === "object") {
-              setOrderDetailsMap((prev) => ({ ...prev, [cleanId]: cachedDoc }));
-              return;
+            await dbFetch("/config/order_detail_req", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                code,
+                orderCode: orderItem.orderCode || `HF_EG${code}`,
+                requestedAt: Date.now()
+              })
+            });
+
+            for (let attempt = 0; attempt < 10; attempt++) {
+              await new Promise((r) => setTimeout(r, 700));
+              const res = await dbFetch(`/order_details/${encodeURIComponent(code)}`);
+              if (res.ok) {
+                const data = await res.json();
+                if (data && (data.detail || data.deliveries)) {
+                  setOrderDetailsCache((prev) => ({ ...prev, [code]: data }));
+                  break;
+                }
+              }
             }
           } catch {}
-
-          try {
-            const delId = orderItem.rawRecord?.id || "";
-            const token = `${cleanId}|${delId}`;
-            const cur = (await fbFetch("GET", "config/requested_order_details").catch(() => [])) || [];
-            const next = Array.from(new Set([...(Array.isArray(cur) ? cur : []), token]));
-            await fbFetch("PUT", "config/requested_order_details", next);
-
-            setTimeout(async () => {
-              const doc = await fbFetch("GET", `order_details/${encodeURIComponent(cleanId)}`).catch(() => null);
-              if (doc && typeof doc === "object") {
-                setOrderDetailsMap((prev) => ({ ...prev, [cleanId]: doc }));
-              }
-            }, 1400);
-          } catch {}
         },
-        [orderDetailsMap, fbFetch]
-      );
-
-      const handleOrderRowHover = useCallback(
-        (item) => {
-          if (item?.id) requestOrderDetailFromFirebase(item);
-        },
-        [requestOrderDetailFromFirebase]
+        [orderDetailsCache, dbFetch]
       );
 
       useEffect(() => {
-        if (selectedOrder?.id) {
-          requestOrderDetailFromFirebase(selectedOrder);
+        if (selectedOrder) {
+          setDetailModalTab("Deliveries");
+          requestOrderDetailsFromBridge(selectedOrder);
         }
-      }, [selectedOrder, requestOrderDetailFromFirebase]);
+      }, [selectedOrder, requestOrderDetailsFromBridge]);
 
-      const requestCourierDetailFromFirebase = useCallback(
+      const handleOrderRowHover = useCallback(
+        (item) => {
+          if (item?.id && !orderDetailsCache[item.id]) {
+            requestOrderDetailsFromBridge(item);
+          }
+        },
+        [orderDetailsCache, requestOrderDetailsFromBridge]
+      );
+
+      // On-demand Courier Detail Fetching
+      const fetchCourierDetailsOnDemand = useCallback(
         async (courierId, courierName) => {
-          const key = String(courierId || courierName || "").trim();
-          if (!key || key === "-") return;
-          if (courierDetailsMap[key]?.fetchedFromApi) return;
+          const cid = String(courierId || "").trim();
+          if (!cid) return null;
+          if (courierDetailsCache[cid]) return courierDetailsCache[cid];
 
           try {
-            const cachedDoc = await fbFetch("GET", `courier_details/${encodeURIComponent(key)}`);
-            if (cachedDoc && typeof cachedDoc === "object") {
-              setCourierDetailsMap((prev) => ({ ...prev, [key]: cachedDoc }));
-              const phone = cachedDoc.courier?.phone_number || cachedDoc.courier?.phone || "";
-              const uid = cachedDoc.userId || cachedDoc.user_id || "";
-              if (phone || uid) {
-                setKnownCouriersMeta((prev) => ({
-                  ...prev,
-                  [key]: { ...(prev[key] || {}), courierId: key, userId: uid, name: courierName, phone }
-                }));
+            await dbFetch("/config/courier_detail_req", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                courierId: cid,
+                courierName: courierName || "",
+                requestedAt: Date.now()
+              })
+            });
+
+            for (let attempt = 0; attempt < 10; attempt++) {
+              await new Promise((r) => setTimeout(r, 600));
+              const res = await dbFetch(`/courier_details/${encodeURIComponent(cid)}`);
+              if (res.ok) {
+                const data = await res.json();
+                if (data && (data.courier || data.phone_number || data.user_id)) {
+                  setCourierDetailsCache((prev) => ({ ...prev, [cid]: data }));
+                  const cObj = data.courier || data;
+                  setKnownCouriersMeta((prev) => ({
+                    ...prev,
+                    [cid]: {
+                      name: normalizeText(cObj.name || courierName || prev[cid]?.name || ""),
+                      userId: String(cObj.user_id || prev[cid]?.userId || cid),
+                      phone: normalizeText(cObj.phone_number || cObj.mobile || cObj.phone || prev[cid]?.phone || "")
+                    }
+                  }));
+                  return data;
+                }
               }
-              return;
             }
           } catch {}
-
-          try {
-            const token = `${courierId || ""}|${courierName || ""}`;
-            const cur = (await fbFetch("GET", "config/requested_courier_details").catch(() => [])) || [];
-            const next = Array.from(new Set([...(Array.isArray(cur) ? cur : []), token]));
-            await fbFetch("PUT", "config/requested_courier_details", next);
-
-            setTimeout(async () => {
-              const doc = await fbFetch("GET", `courier_details/${encodeURIComponent(key)}`).catch(() => null);
-              if (doc && typeof doc === "object") {
-                setCourierDetailsMap((prev) => ({ ...prev, [key]: doc }));
-              }
-            }, 1400);
-          } catch {}
+          return null;
         },
-        [courierDetailsMap, fbFetch]
+        [courierDetailsCache, dbFetch]
       );
 
       const handleCourierHover = useCallback(
         (courierId, courierName) => {
-          if (courierId || courierName) {
-            requestCourierDetailFromFirebase(courierId, courierName);
+          if (courierId && !courierDetailsCache[String(courierId)]) {
+            fetchCourierDetailsOnDemand(courierId, courierName);
           }
         },
-        [requestCourierDetailFromFirebase]
+        [courierDetailsCache, fetchCourierDetailsOnDemand]
       );
 
-      const openCourierModal = useCallback(
-        (e, courierId, courierName) => {
-          if (e) e.stopPropagation();
-          setSelectedCourier({
-            courierId: String(courierId || "").trim(),
-            name: normalizeText(courierName || "Courier")
-          });
-          requestCourierDetailFromFirebase(courierId, courierName);
-        },
-        [requestCourierDetailFromFirebase]
-      );
+      const openCourierModal = (e, courierId, courierName) => {
+        if (e) e.stopPropagation();
+        const cid = String(courierId || "").trim();
+        setSelectedCourier({ id: cid, name: courierName });
+        if (cid) {
+          fetchCourierDetailsOnDemand(cid, courierName);
+        }
+      };
 
+      // Live Rider Search
       const triggerLiveRiderSearch = useCallback(
-        async (rawQ) => {
-          const q = String(rawQ || "").trim();
+        async (rawQuery) => {
+          const q = String(rawQuery || "").trim();
           if (!q) return;
-          const sid = sessionIdRef.current;
-          setRiderSearchReq({ query: q, requested_at: Date.now() });
+          setRiderSearchReq({ query: q, requestedAt: Date.now() });
           setIsRiderSearching(true);
           try {
-            await fbFetch("PATCH", `active_sessions/${sid}`, {
-              rider_search_req: { query: q, requested_at: Date.now() }
+            const reqId = `rs_${Date.now()}`;
+            await dbFetch("/config/rider_search_req", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                reqId,
+                query: q,
+                requestedAt: Date.now()
+              })
             });
-          } catch {}
+
+            for (let attempt = 0; attempt < 10; attempt++) {
+              await new Promise((r) => setTimeout(r, 700));
+              const res = await dbFetch("/config/rider_search_res");
+              if (res.ok) {
+                const data = await res.json();
+                if (data && data.reqId === reqId) {
+                  setRiderSearchResults(Array.isArray(data.results) ? data.results : []);
+                  break;
+                }
+              }
+            }
+          } finally {
+            setIsRiderSearching(false);
+          }
         },
-        [fbFetch]
+        [dbFetch]
       );
 
-      // Auto-trigger live rider search when user types Phone or Rider ID
-      useEffect(() => {
-        const q = searchQuery.trim();
-        if (!q) return;
-        if (isPhoneLikeQuery(q) || isRiderIdLikeQuery(q)) {
-          const timer = setTimeout(() => {
-            triggerLiveRiderSearch(q);
-          }, 450);
-          return () => clearTimeout(timer);
-        }
-      }, [searchQuery, triggerLiveRiderSearch]);
+      // Clipboard helper (safe inside iframes)
+      const copyToClipboard = useCallback((key, text) => {
+        const str = String(text || "");
+        if (!str) return;
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = str;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          setCopiedText(key);
+          setTimeout(() => setCopiedText((prev) => (prev === key ? "" : prev)), 2000);
+        } catch {}
+      }, []);
 
-      const handleJumpToCompletedOrderSearch = useCallback((rawQ) => {
-        const clean = String(rawQ || "").trim();
+      const hasValidAssignedRider = useCallback((item) => {
+        if (!item) return false;
+        const c = String(item.courier || "").trim();
+        return Boolean(c && c !== "-" && c !== "Assigning..." && c !== "Pending Acceptance");
+      }, []);
+
+      const toggleOrderSelection = useCallback((e, item) => {
+        if (e) e.stopPropagation();
+        if (!item?.uid) return;
+        setSelectedOrderUids((prev) => {
+          const next = new Set(prev);
+          if (next.has(item.uid)) next.delete(item.uid);
+          else next.add(item.uid);
+          return next;
+        });
+      }, []);
+
+      const formatFollowupBlock = useCallback((item, phoneStr) => {
+        return [
+          `Order ID: ${item.id}`,
+          `Vendor: ${item.vendor} (VO #${item.vo})`,
+          `Rider: ${item.courier}`,
+          `Mob: ${phoneStr || "غير مسجل"}`,
+          `Delay: ${item.deadline} • Status: ${item.status}`
+        ].join("\n");
+      }, []);
+
+      const handleCopySingleFollowup = useCallback(
+        async (e, item) => {
+          if (e) e.stopPropagation();
+          if (!hasValidAssignedRider(item)) return;
+          setCopyingFollowupState(`single:${item.uid}`);
+          let phone = knownCouriersMeta[item.courierId]?.phone || "";
+          if (!phone && item.courierId) {
+            const fetched = await fetchCourierDetailsOnDemand(item.courierId, item.courier);
+            const cObj = fetched?.courier || fetched || {};
+            phone = normalizeText(cObj.phone_number || cObj.mobile || cObj.phone || "");
+          }
+          copyToClipboard(`followup:${item.uid}`, formatFollowupBlock(item, phone));
+          setCopyingFollowupState("");
+        },
+        [hasValidAssignedRider, knownCouriersMeta, fetchCourierDetailsOnDemand, copyToClipboard, formatFollowupBlock]
+      );
+
+      const handleCopyBulkFollowup = useCallback(
+        async (mode, itemsList) => {
+          if (!Array.isArray(itemsList) || itemsList.length === 0) return;
+          setCopyingFollowupState(`loading:${mode}`);
+          const blocks = [];
+          for (const item of itemsList) {
+            let phone = knownCouriersMeta[item.courierId]?.phone || "";
+            if (!phone && item.courierId) {
+              const fetched = await fetchCourierDetailsOnDemand(item.courierId, item.courier);
+              const cObj = fetched?.courier || fetched || {};
+              phone = normalizeText(cObj.phone_number || cObj.mobile || cObj.phone || "");
+            }
+            blocks.push(formatFollowupBlock(item, phone));
+          }
+          copyToClipboard(`bulk:${mode}`, blocks.join("\n\n--------------------\n\n"));
+          setCopyingFollowupState(`done:${mode}:${itemsList.length}`);
+          setTimeout(() => setCopyingFollowupState(""), 2500);
+        },
+        [knownCouriersMeta, fetchCourierDetailsOnDemand, copyToClipboard, formatFollowupBlock]
+      );
+
+      const handleJumpToCompletedOrderSearch = useCallback((q) => {
+        const clean = String(q || "").trim();
         setActiveTab("Completed");
+        setCompletedHoursWindow(2);
         setCompletedSearchQuery(clean);
         setCompletedPage(1);
       }, []);
 
-      // Zone & Filter Helpers
       const matchesZoneFilter = useCallback(
         (item) => {
           if (selectedZoneNames.length === 0) return true;
-          const itemZones = (item.zonesList || []).map((z) => normalizeText(z).toLowerCase());
-          if (itemZones.length === 0) return true;
-          return itemZones.some((iz) => selectedZoneNames.includes(iz));
+          const itemZones = Array.isArray(item.zonesList)
+            ? item.zonesList.map((z) => normalizeText(z).toLowerCase())
+            : [normalizeText(item.zone).toLowerCase()];
+          return itemZones.some((iz) => selectedZoneNames.some((sz) => iz === sz || iz.includes(sz)));
         },
         [selectedZoneNames]
       );
 
-      const effectiveTabCounts = useMemo(() => {
-        const counts = {
-          Issues: issuesList.length,
-          Actionable: 0,
-          "Pre-order": 0,
-          "Waiting for Assembly": 0,
-          Queued: 0,
-          Dispatched: 0,
-          Active: 0,
-          Upcoming: 0,
-          Cancelled: 0
-        };
-        deliveries.forEach((d) => {
-          if (matchesZoneFilter(d) && counts[d.tab] !== undefined) {
-            counts[d.tab] += 1;
-          }
-        });
-        return counts;
-      }, [deliveries, issuesList, matchesZoneFilter]);
-
+      // Base deliveries for active tab
       const baseTabDeliveries = useMemo(() => {
         return deliveries.filter((d) => {
-          if (d.tab !== activeTab) return false;
-          if (!matchesZoneFilter(d)) return false;
-          if (selectedCity !== "All Cities") {
-            const zInfo = allAvailableZones.find((z) =>
-              (d.zonesList || []).some((dz) => normalizeText(dz).toLowerCase() === normalizeText(z.name).toLowerCase())
-            );
-            if (zInfo && zInfo.city && zInfo.city !== selectedCity) return false;
-          }
-          return true;
+          if (d.tabName !== activeTab) return false;
+          if (selectedCity !== "All Cities" && d.city !== selectedCity) return false;
+          return matchesZoneFilter(d);
         });
-      }, [deliveries, activeTab, matchesZoneFilter, selectedCity, allAvailableZones]);
+      }, [deliveries, activeTab, selectedCity, matchesZoneFilter]);
 
       const martBranchesSummary = useMemo(() => {
-        const branchMap = new Map();
-        let totalMartCount = 0;
-        baseTabDeliveries.forEach((d) => {
-          if (!isTalabatMartVendor(d.vendor) && !d.instructions.includes("Darkstores")) return;
-          totalMartCount += 1;
+        const martOrders = baseTabDeliveries.filter(
+          (d) => isTalabatMartVendor(d.vendor) || d.instructions.includes("Darkstores")
+        );
+        const map = new Map();
+        martOrders.forEach((d) => {
           const label = extractMartBranchLabel(d.vendor);
-          const isLate = d.deadline.includes("-") || d.deadline === "Late";
-          const cur = branchMap.get(label) || { label, count: 0, late: 0 };
+          const cur = map.get(label) || { label, count: 0, late: 0 };
           cur.count += 1;
-          if (isLate) cur.late += 1;
-          branchMap.set(label, cur);
+          if (d.deadline.includes("-") || d.deadline === "Late") cur.late += 1;
+          map.set(label, cur);
         });
-        const branches = Array.from(branchMap.values()).sort((a, b) => b.count - a.count);
-        return { branches, totalMartCount };
+        const branches = Array.from(map.values()).sort((a, b) => b.count - a.count);
+        return { branches, totalMartCount: martOrders.length };
       }, [baseTabDeliveries]);
 
       const filteredDeliveries = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();
+        const qPhone = normalizePhoneDigits(searchQuery);
+
         const list = baseTabDeliveries.filter((d) => {
-          if (activeQuickFilter === "Delayed" && !d.deadline.includes("-") && d.deadline !== "Late") return false;
+          if (activeQuickFilter === "Delayed" && !(d.deadline.includes("-") || d.deadline === "Late")) return false;
           if (activeQuickFilter === "Cash" && !d.instructions.includes("Cash")) return false;
           if (activeQuickFilter === "Card" && !d.instructions.includes("Card")) return false;
-          if (activeQuickFilter === "Darkstores") {
-            if (!isTalabatMartVendor(d.vendor) && !d.instructions.includes("Darkstores")) return false;
-            if (
-              selectedMartBranch !== "ALL" &&
-              normalizeText(extractMartBranchLabel(d.vendor)) !== normalizeText(selectedMartBranch)
-            ) {
-              return false;
-            }
+          if (
+            activeQuickFilter === "Darkstores" &&
+            !(isTalabatMartVendor(d.vendor) || d.instructions.includes("Darkstores"))
+          ) {
+            return false;
           }
           if (activeQuickFilter === "Restaurants") {
             const isDs = isTalabatMartVendor(d.vendor) || d.instructions.includes("Darkstores");
-            if (isDs || (!d.instructions.includes("Restaurants") && !d.instructions.includes("Supermarket"))) {
+            if (isDs || !(d.instructions.includes("Restaurants") || d.instructions.includes("Supermarket"))) {
               return false;
             }
           }
           if (activeQuickFilter === "Split" && !d.isSplit) return false;
 
+          if (activeQuickFilter === "Darkstores" && selectedMartBranch !== "ALL") {
+            if (normalizeText(extractMartBranchLabel(d.vendor)) !== normalizeText(selectedMartBranch)) {
+              return false;
+            }
+          }
+
           if (!q) return true;
+          const riderMeta = knownCouriersMeta[d.courierId] || {};
+          const riderPhone = normalizePhoneDigits(riderMeta.phone || "");
+          const phoneMatch =
+            (qPhone.core10 && riderPhone.core10 === qPhone.core10) ||
+            (qPhone.rawDigits.length >= 7 && riderPhone.rawDigits.includes(qPhone.rawDigits));
+
           return (
             String(d.id).toLowerCase().includes(q) ||
             String(d.vo).toLowerCase().includes(q) ||
+            String(d.vendor).toLowerCase().includes(q) ||
             String(d.courier).toLowerCase().includes(q) ||
             String(d.courierId).toLowerCase().includes(q) ||
-            String(d.vendor).toLowerCase().includes(q) ||
-            String(d.zone).toLowerCase().includes(q)
+            String(riderMeta.userId || "").toLowerCase().includes(q) ||
+            phoneMatch
           );
         });
 
         if (orderSortMode === "live_first") {
-          return [...list].sort((a, b) => (b.placedTimestamp || 0) - (a.placedTimestamp || 0));
+          return [...list].sort((a, b) => (b.placedMs || 0) - (a.placedMs || 0));
         }
         return list;
-      }, [baseTabDeliveries, activeQuickFilter, selectedMartBranch, searchQuery, orderSortMode]);
+      }, [baseTabDeliveries, activeQuickFilter, selectedMartBranch, searchQuery, knownCouriersMeta, orderSortMode]);
+
+      const effectiveTabCounts = useMemo(() => {
+        const res = { ...tabCounts };
+        SIDEBAR_ITEMS.forEach((item) => {
+          if (["Dashboard", "Dispatcher Dashboard", "Completed"].includes(item.id)) return;
+          if (item.id === "Issues") {
+            res[item.id] = issuesList.length;
+            return;
+          }
+          if (item.id === "Active Couriers") {
+            res[item.id] = activeCouriersList.length;
+            return;
+          }
+          const localCount = deliveries.filter(
+            (d) =>
+              d.tabName === item.id &&
+              (selectedCity === "All Cities" || d.city === selectedCity) &&
+              matchesZoneFilter(d)
+          ).length;
+          res[item.id] = localCount;
+        });
+        return res;
+      }, [tabCounts, deliveries, issuesList, activeCouriersList, selectedCity, matchesZoneFilter]);
 
       // Completed Orders Filtering & Pagination (Strictly based on COMPLETED AT in last 1h or 2h)
+      useEffect(() => {
+        if (completedSearchQuery.trim()) {
+          if (!completedSearchAnchorRef.current) {
+            completedSearchAnchorRef.current = Date.now();
+          }
+        } else {
+          completedSearchAnchorRef.current = 0;
+        }
+      }, [completedSearchQuery]);
+
       const visibleCompletedOrders = useMemo(() => {
         const windowMs = Number(completedHoursWindow || 2) * 3600 * 1000;
-        const cutoffMs = Date.now() - windowMs;
         const q = completedSearchQuery.trim().toLowerCase();
+        const isSearching = q.length > 0;
+        const anchorNow =
+          isSearching && completedSearchAnchorRef.current > 0
+            ? completedSearchAnchorRef.current
+            : Date.now();
+        const graceMs = isSearching ? 15 * 60 * 1000 : 0;
+        const cutoffMs = anchorNow - windowMs - graceMs;
 
         const filtered = completedOrders.filter((item) => {
+          if (item.orderStatus && item.orderStatus.includes("cancel")) return false;
           if (!item.completedTimestamp || item.completedTimestamp < cutoffMs) return false;
 
           if (completedCityFilter !== "All Cities" && item.city !== completedCityFilter) {
@@ -1582,8 +1651,8 @@
             if (!matchesZoneFilter(item)) return false;
           } else if (completedZoneFilter !== "ALL") {
             const targetZ = normalizeText(completedZoneFilter).toLowerCase();
-            const hasZ = (item.zonesList || []).some((z) => normalizeText(z).toLowerCase() === targetZ);
-            if (!hasZ) return false;
+            const itemZs = (item.zonesList || []).map((z) => normalizeText(z).toLowerCase());
+            if (!itemZs.some((z) => z === targetZ || z.includes(targetZ))) return false;
           }
 
           if (!q) return true;
@@ -1591,16 +1660,14 @@
             String(item.id).toLowerCase().includes(q) ||
             String(item.vo).toLowerCase().includes(q) ||
             String(item.courier).toLowerCase().includes(q) ||
-            String(item.courierId).toLowerCase().includes(q) ||
-            String(item.vendor).toLowerCase().includes(q) ||
-            String(item.zone).toLowerCase().includes(q)
+            String(item.vendor).toLowerCase().includes(q)
           );
         });
 
         return filtered.sort((a, b) =>
           completedSortAsc
-            ? (a.completedTimestamp || 0) - (b.completedTimestamp || 0)
-            : (b.completedTimestamp || 0) - (a.completedTimestamp || 0)
+            ? a.completedTimestamp - b.completedTimestamp
+            : b.completedTimestamp - a.completedTimestamp
         );
       }, [
         completedOrders,
@@ -1612,11 +1679,11 @@
         matchesZoneFilter
       ]);
 
-      const completedTotalPages = Math.max(1, Math.ceil(visibleCompletedOrders.length / PAGE_SIZE));
+      const completedTotalPages = Math.max(1, Math.ceil(visibleCompletedOrders.length / 50));
       const paginatedCompletedOrders = useMemo(() => {
-        const safePage = Math.min(completedPage, completedTotalPages);
-        const start = (safePage - 1) * PAGE_SIZE;
-        return visibleCompletedOrders.slice(start, start + PAGE_SIZE);
+        const safeP = Math.min(completedPage, completedTotalPages);
+        const start = (safeP - 1) * 50;
+        return visibleCompletedOrders.slice(start, start + 50);
       }, [visibleCompletedOrders, completedPage, completedTotalPages]);
 
       const completedVisiblePages = useMemo(() => {
@@ -1628,177 +1695,217 @@
         return [1, "...", completedPage - 1, completedPage, completedPage + 1, "...", completedTotalPages];
       }, [completedPage, completedTotalPages]);
 
-      // Rider Follow-up Copy Helpers
-      const hasValidAssignedRider = useCallback((item) => {
-        const c = normalizeText(item?.courier || "");
-        return Boolean(c && c !== "-" && c !== "Assigning..." && c !== "Pending Acceptance");
-      }, []);
-
-      const toggleOrderSelection = useCallback((e, item) => {
-        if (e) e.stopPropagation();
-        setSelectedOrderUids((prev) => {
-          const next = new Set(prev);
-          if (next.has(item.uid)) next.delete(item.uid);
-          else next.add(item.uid);
-          return next;
-        });
-      }, []);
-
-      const resolveRiderPhoneForCopy = useCallback(
-        async (item) => {
-          const cid = String(item.courierId || "").trim();
-          const cname = String(item.courier || "").trim();
-          const key = cid || cname;
-          if (!key) return "N/A";
-
-          const localMeta = knownCouriersMeta[key];
-          if (localMeta?.phone) return localMeta.phone;
-
-          const cachedDoc = courierDetailsMap[key];
-          const cachedPhone = cachedDoc?.courier?.phone_number || cachedDoc?.courier?.phone;
-          if (cachedPhone) return cachedPhone;
-
-          try {
-            const fbDoc = await fbFetch("GET", `courier_details/${encodeURIComponent(key)}`);
-            const fbPhone = fbDoc?.courier?.phone_number || fbDoc?.courier?.phone;
-            if (fbPhone) return fbPhone;
-
-            const token = `${cid}|${cname}`;
-            const cur = (await fbFetch("GET", "config/requested_courier_details").catch(() => [])) || [];
-            const next = Array.from(new Set([...(Array.isArray(cur) ? cur : []), token]));
-            await fbFetch("PUT", "config/requested_courier_details", next);
-
-            await new Promise((r) => setTimeout(r, 1200));
-            const retryDoc = await fbFetch("GET", `courier_details/${encodeURIComponent(key)}`).catch(() => null);
-            return retryDoc?.courier?.phone_number || retryDoc?.courier?.phone || "N/A";
-          } catch {
-            return "N/A";
-          }
-        },
-        [knownCouriersMeta, courierDetailsMap, fbFetch]
-      );
-
-      const formatFollowupBlock = (item, phone) => {
-        return [
-          `Order ID: ${item.id}`,
-          `Vendor: ${item.vendor}`,
-          `Rider name: ${item.courier}`,
-          `Mob: ${phone}`,
-          `Delay: ${item.deadline} • Status: ${item.status}`
-        ].join("\n");
-      };
-
-      const handleCopySingleFollowup = useCallback(
-        async (e, item) => {
-          if (e) e.stopPropagation();
-          setCopyingFollowupState(`single:${item.uid}`);
-          const phone = await resolveRiderPhoneForCopy(item);
-          copyToClipboard(`followup:${item.uid}`, formatFollowupBlock(item, phone));
-          setCopyingFollowupState("");
-        },
-        [resolveRiderPhoneForCopy, copyToClipboard]
-      );
-
-      const handleCopyBulkFollowup = useCallback(
-        async (mode, itemsList) => {
-          if (!itemsList || itemsList.length === 0) return;
-          setCopyingFollowupState(`loading:${mode}`);
-          const blocks = await Promise.all(
-            itemsList.map(async (item) => {
-              const phone = await resolveRiderPhoneForCopy(item);
-              return formatFollowupBlock(item, phone);
-            })
-          );
-          copyToClipboard(`bulk:${mode}`, blocks.join("\n\n--------------------\n\n"));
-          setCopyingFollowupState(`done:${mode}:${itemsList.length}`);
-          setTimeout(() => setCopyingFollowupState(""), 2500);
-        },
-        [resolveRiderPhoneForCopy, copyToClipboard]
-      );
-
       const selectedOrderFullView = useMemo(() => {
         if (!selectedOrder) return null;
-        return buildFullOrderDetailsView(selectedOrder, orderDetailsMap[String(selectedOrder.id)]);
-      }, [selectedOrder, orderDetailsMap]);
+        return buildFullOrderView(selectedOrder, orderDetailsCache[selectedOrder.id]);
+      }, [selectedOrder, orderDetailsCache]);
 
       const selectedCourierFullView = useMemo(() => {
         if (!selectedCourier) return null;
-        const key = String(selectedCourier.courierId || selectedCourier.name || "");
-        return buildFullCourierDetailsView(selectedCourier, courierDetailsMap[key]);
-      }, [selectedCourier, courierDetailsMap]);
+        return buildFullCourierView(
+          selectedCourier,
+          courierDetailsCache[selectedCourier.id],
+          knownCouriersMeta[selectedCourier.id]
+        );
+      }, [selectedCourier, courierDetailsCache, knownCouriersMeta]);
 
-      // --- SUB-VIEWS ---
+      // --- RENDERERS FOR SPECIAL TABS ---
       const renderDashboardView = () => {
-        const cities = Array.isArray(hurrierStats?.cities) ? hurrierStats.cities : [];
-        const zoneRows = [];
-        cities.forEach((c) => {
-          (c.zones || []).forEach((z) => {
-            (z.starting_points || []).forEach((sp) => {
-              if (selectedZoneIds.includes(Number(sp.id))) {
-                zoneRows.push({
-                  id: sp.id,
-                  name: sp.name,
-                  city: c.city_name,
-                  stat: sp.stat || {}
-                });
-              }
-            });
-          });
+        const queuedCnt = effectiveTabCounts["Queued"] || 0;
+        const dispCnt = effectiveTabCounts["Dispatched"] || 0;
+        const activeCnt = effectiveTabCounts["Active"] || 0;
+        const delayedCnt = deliveries.filter(
+          (d) => matchesZoneFilter(d) && (d.deadline.includes("-") || d.deadline === "Late")
+        ).length;
+
+        const matchingZonesStats = zoneStatsSnapshot.filter((zs) => {
+          const zName = normalizeText(zs.name).toLowerCase();
+          return selectedZoneIds.includes(Number(zs.id)) || selectedZoneNames.includes(zName);
         });
 
         return (
-          <div className="mt-4 space-y-4">
+          <div className="mt-4 space-y-5">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="p-4 rounded-xl bg-blue-50 border border-blue-200">
-                <div className="text-xs font-bold text-blue-700">Active Deliveries</div>
-                <div className="text-2xl font-extrabold text-gray-900 mt-1">{effectiveTabCounts.Active || 0}</div>
+              <div
+                onClick={() => setActiveTab("Queued")}
+                className="p-4 rounded-xl bg-amber-50/70 border border-amber-200 cursor-pointer hover:shadow-sm"
+              >
+                <div className="text-xs font-bold text-amber-800 uppercase">Queued</div>
+                <div className="text-2xl font-extrabold text-amber-900 mt-1">{queuedCnt}</div>
               </div>
-              <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
-                <div className="text-xs font-bold text-amber-800">Dispatched</div>
-                <div className="text-2xl font-extrabold text-gray-900 mt-1">{effectiveTabCounts.Dispatched || 0}</div>
+              <div
+                onClick={() => setActiveTab("Dispatched")}
+                className="p-4 rounded-xl bg-blue-50/70 border border-blue-200 cursor-pointer hover:shadow-sm"
+              >
+                <div className="text-xs font-bold text-blue-800 uppercase">Dispatched</div>
+                <div className="text-2xl font-extrabold text-blue-900 mt-1">{dispCnt}</div>
               </div>
-              <div className="p-4 rounded-xl bg-purple-50 border border-purple-200">
-                <div className="text-xs font-bold text-purple-800">Queued</div>
-                <div className="text-2xl font-extrabold text-gray-900 mt-1">{effectiveTabCounts.Queued || 0}</div>
+              <div
+                onClick={() => setActiveTab("Active")}
+                className="p-4 rounded-xl bg-emerald-50/70 border border-emerald-200 cursor-pointer hover:shadow-sm"
+              >
+                <div className="text-xs font-bold text-emerald-800 uppercase">Active</div>
+                <div className="text-2xl font-extrabold text-emerald-900 mt-1">{activeCnt}</div>
               </div>
-              <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200">
-                <div className="text-xs font-bold text-emerald-800">Completed (Last 2h)</div>
-                <div className="text-2xl font-extrabold text-gray-900 mt-1">{visibleCompletedOrders.length}</div>
+              <div
+                onClick={() => {
+                  setActiveTab("Active");
+                  setActiveQuickFilter("Delayed");
+                }}
+                className="p-4 rounded-xl bg-red-50/70 border border-red-200 cursor-pointer hover:shadow-sm"
+              >
+                <div className="text-xs font-bold text-red-800 uppercase">Delayed Orders</div>
+                <div className="text-2xl font-extrabold text-red-900 mt-1">{delayedCnt}</div>
               </div>
             </div>
 
-            <div className="w-full overflow-x-auto bg-white border border-gray-200 rounded-xl shadow-sm">
+            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 font-bold text-sm text-gray-900">
+                Zone-by-Zone Live Breakdown ({matchingZonesStats.length} Zones)
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-gray-500 font-bold uppercase bg-gray-50/60">
+                      <th className="py-3 px-4">STARTING POINT / ZONE</th>
+                      <th className="py-3 px-3">QUEUED</th>
+                      <th className="py-3 px-3">DISP</th>
+                      <th className="py-3 px-3">ACTIVE</th>
+                      <th className="py-3 px-3">WORKING RIDERS</th>
+                      <th className="py-3 px-3">ENDING</th>
+                      <th className="py-3 px-3">BREAK</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {matchingZonesStats.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="py-8 text-center text-gray-500">
+                          جاري تحميل إحصائيات الزونات المختارة...
+                        </td>
+                      </tr>
+                    ) : (
+                      matchingZonesStats.map((zs) => {
+                        const st = zs.stat || {};
+                        return (
+                          <tr key={zs.id || zs.name} className="hover:bg-blue-50/30">
+                            <td className="py-3 px-4 font-bold text-gray-900">{zs.name}</td>
+                            <td className="py-3 px-3 font-mono">{st.queued_count ?? 0}</td>
+                            <td className="py-3 px-3 font-mono">{st.dispatched_count ?? 0}</td>
+                            <td className="py-3 px-3 font-mono font-bold text-blue-700">{st.active_count ?? 0}</td>
+                            <td className="py-3 px-3 font-mono font-bold text-emerald-700">{st.couriers_in_working ?? 0}</td>
+                            <td className="py-3 px-3 font-mono text-orange-700">{st.couriers_in_ending ?? 0}</td>
+                            <td className="py-3 px-3 font-mono text-gray-600">{st.couriers_in_break ?? 0}</td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      const renderActiveCouriersView = () => {
+        const q = searchQuery.trim().toLowerCase();
+        const filtered = activeCouriersList.filter((c) => {
+          const name = normalizeText(c.name || c.courier_name || "").toLowerCase();
+          const id = String(c.id || c.courier_id || "");
+          const uid = String(c.user_id || "");
+          if (!q) return true;
+          return name.includes(q) || id.includes(q) || uid.includes(q);
+        });
+
+        return (
+          <div className="mt-4 bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+            <div className="overflow-x-auto">
               <table className="w-full text-left text-xs whitespace-nowrap">
                 <thead>
-                  <tr className="bg-gray-50 border-b border-gray-200 text-gray-600 font-bold uppercase">
-                    <th className="py-3 px-4">STARTING POINT (ZONE)</th>
-                    <th className="py-3 px-3 text-center">QUEUED</th>
-                    <th className="py-3 px-3 text-center">DISP</th>
-                    <th className="py-3 px-3 text-center">ACTIVE</th>
-                    <th className="py-3 px-3 text-center">WORKING</th>
-                    <th className="py-3 px-3 text-center">ENDING</th>
-                    <th className="py-3 px-3 text-center">BREAK</th>
-                    <th className="py-3 px-3 text-center">0 DELIV</th>
+                  <tr className="border-b border-gray-200 text-gray-600 font-bold uppercase bg-gray-50">
+                    <th className="py-3 px-4">COURIER NAME</th>
+                    <th className="py-3 px-3">USER ID</th>
+                    <th className="py-3 px-3">STATUS</th>
+                    <th className="py-3 px-3">VEHICLE</th>
+                    <th className="py-3 px-3">ACTIVE ORDERS</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 text-sm">
-                  {zoneRows.length === 0 ? (
+                <tbody className="divide-y divide-gray-100 text-[13px]">
+                  {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="py-10 text-center text-gray-500 text-xs">
-                        جاري تحميل إحصائيات الزونات المختارة...
+                      <td colSpan={5} className="py-10 text-center text-gray-500">
+                        لا يوجد مناديب نشطون مطابقون للبحث في الزونات المختارة.
                       </td>
                     </tr>
                   ) : (
-                    zoneRows.map((zr) => (
-                      <tr key={zr.id} className="hover:bg-gray-50">
-                        <td className="py-3 px-4 font-bold text-gray-900">{zr.name}</td>
-                        <td className="py-3 px-3 text-center font-mono">{zr.stat.queued_count ?? 0}</td>
-                        <td className="py-3 px-3 text-center font-mono">{zr.stat.dispatched_count ?? 0}</td>
-                        <td className="py-3 px-3 text-center font-mono font-bold text-blue-600">{zr.stat.active_count ?? 0}</td>
-                        <td className="py-3 px-3 text-center font-mono text-emerald-700 font-bold">{zr.stat.couriers_in_working ?? 0}</td>
-                        <td className="py-3 px-3 text-center font-mono text-orange-600">{zr.stat.couriers_in_ending ?? 0}</td>
-                        <td className="py-3 px-3 text-center font-mono text-amber-600">{zr.stat.couriers_in_break ?? 0}</td>
-                        <td className="py-3 px-3 text-center font-mono text-gray-600">{zr.stat.zero_deliveries ?? 0}</td>
+                    filtered.slice(0, 100).map((c, idx) => {
+                      const cid = String(c.id || c.courier_id || idx);
+                      const cName = normalizeText(c.name || c.courier_name || `Courier #${cid}`);
+                      return (
+                        <tr
+                          key={cid}
+                          onClick={(e) => openCourierModal(e, cid, cName)}
+                          className="hover:bg-blue-50/40 cursor-pointer"
+                        >
+                          <td className="py-3 px-4 font-bold text-blue-600 hover:underline">{cName}</td>
+                          <td className="py-3 px-3 font-mono text-gray-700">{c.user_id || cid}</td>
+                          <td className="py-3 px-3">
+                            <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              {humanizeSnakeCase(c.status || "Working")}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-gray-700">{c.vehicle_type || "Motorbike"}</td>
+                          <td className="py-3 px-3 font-mono font-bold">{c.active_orders_count ?? 0}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      };
+
+      const renderDispatcherDashboardView = () => {
+        return (
+          <div className="mt-4 p-6 bg-white border border-gray-200 rounded-xl shadow-sm space-y-4">
+            <h3 className="text-base font-bold text-gray-900">Live Operations Summary</h3>
+            <p className="text-xs text-gray-600">
+              يتم تحديث البيانات تلقائياً كل ثانيتين للزونات المختارة ({selectedZoneIds.length} زون) بوضع العرض فقط (View-Only).
+            </p>
+            {renderDashboardView()}
+          </div>
+        );
+      };
+
+      const renderIssuesView = () => {
+        return (
+          <div className="mt-4 bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs whitespace-nowrap">
+                <thead>
+                  <tr className="border-b border-gray-200 text-gray-600 font-bold uppercase bg-gray-50">
+                    <th className="py-3 px-4">ISSUE TYPE</th>
+                    <th className="py-3 px-3">ORDER</th>
+                    <th className="py-3 px-3">COURIER</th>
+                    <th className="py-3 px-3">STATUS</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 text-[13px]">
+                  {issuesList.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="py-10 text-center text-gray-500">
+                        لا توجد بلاغات مفتوحة (Issues) في الزونات المختارة حالياً.
+                      </td>
+                    </tr>
+                  ) : (
+                    issuesList.map((iss, idx) => (
+                      <tr key={iss.id || idx} className="hover:bg-blue-50/30">
+                        <td className="py-3 px-4 font-bold text-red-700">{humanizeSnakeCase(iss.type || iss.category || "Issue")}</td>
+                        <td className="py-3 px-3 font-mono font-semibold text-blue-600">{iss.order_code || iss.order_id || "-"}</td>
+                        <td className="py-3 px-3 text-gray-800">{normalizeText(iss.courier_name || "-")}</td>
+                        <td className="py-3 px-3 font-semibold">{humanizeSnakeCase(iss.status || "Open")}</td>
                       </tr>
                     ))
                   )}
@@ -1809,151 +1916,20 @@
         );
       };
 
-      const renderActiveCouriersView = () => {
-        const riderMap = new Map();
-        deliveries.forEach((d) => {
-          if (!matchesZoneFilter(d) || !hasValidAssignedRider(d)) return;
-          const key = d.courierId || d.courier;
-          const cur = riderMap.get(key) || {
-            courierId: d.courierId,
-            name: d.courier,
-            orders: [],
-            zones: new Set()
-          };
-          cur.orders.push(d);
-          (d.zonesList || []).forEach((z) => cur.zones.add(z));
-          riderMap.set(key, cur);
-        });
-
-        const riders = Array.from(riderMap.values()).filter((r) => {
-          const q = searchQuery.trim().toLowerCase();
-          if (!q) return true;
-          return r.name.toLowerCase().includes(q) || String(r.courierId).includes(q);
-        });
-
-        return (
-          <div className="mt-4 bg-white border border-gray-200 rounded-xl overflow-x-auto shadow-sm">
-            <table className="w-full text-left text-xs whitespace-nowrap">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-200 text-gray-600 font-bold uppercase">
-                  <th className="py-3 px-4">COURIER</th>
-                  <th className="py-3 px-3">ID</th>
-                  <th className="py-3 px-3 text-center">ACTIVE ORDERS</th>
-                  <th className="py-3 px-3">ZONES</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 text-sm">
-                {riders.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="py-10 text-center text-gray-500 text-xs">
-                      لا يوجد مناديب بأوردرات نشطة حالياً في الزونات المختارة.
-                    </td>
-                  </tr>
-                ) : (
-                  riders.map((r) => (
-                    <tr key={r.courierId || r.name} className="hover:bg-blue-50/30">
-                      <td className="py-3 px-4">
-                        <button
-                          type="button"
-                          onClick={(e) => openCourierModal(e, r.courierId, r.name)}
-                          className="text-blue-600 hover:underline font-bold"
-                        >
-                          {r.name}
-                        </button>
-                      </td>
-                      <td className="py-3 px-3 font-mono text-gray-600">{r.courierId || "-"}</td>
-                      <td className="py-3 px-3 text-center font-bold text-gray-900">{r.orders.length}</td>
-                      <td className="py-3 px-3 text-gray-600 max-w-md truncate">{Array.from(r.zones).join(", ")}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        );
-      };
-
-      const renderDispatcherDashboardView = () => (
-        <div className="mt-4 bg-white border border-gray-200 rounded-xl overflow-x-auto shadow-sm">
-          <table className="w-full text-left text-xs whitespace-nowrap">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-200 text-gray-600 font-bold uppercase">
-                <th className="py-3 px-4">DISPATCHER EMAIL</th>
-                <th className="py-3 px-3 text-center">ISSUES PICKED</th>
-                <th className="py-3 px-3 text-center">PROCESSING</th>
-                <th className="py-3 px-3 text-center">MAX PICKED FOR</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 text-sm">
-              {dispatchersList.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="py-10 text-center text-gray-500 text-xs">
-                    No dispatchers found at the moment.
-                  </td>
-                </tr>
-              ) : (
-                dispatchersList.map((disp, idx) => (
-                  <tr key={disp.email || idx} className="hover:bg-gray-50">
-                    <td className="py-3 px-4 font-mono text-gray-800">{disp.email || "-"}</td>
-                    <td className="py-3 px-3 text-center font-bold">{disp.picked_issues_count ?? disp.picked ?? 0}</td>
-                    <td className="py-3 px-3 text-center">{disp.processing_issues_count ?? disp.processing ?? 0}</td>
-                    <td className="py-3 px-3 text-center text-gray-600">{disp.max_picked_for || "-"}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      );
-
-      const renderIssuesView = () => (
-        <div className="mt-4 bg-white border border-gray-200 rounded-xl overflow-x-auto shadow-sm">
-          <table className="w-full text-left text-xs whitespace-nowrap">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-200 text-gray-600 font-bold uppercase">
-                <th className="py-3 px-4">TYPE</th>
-                <th className="py-3 px-3">ISSUE</th>
-                <th className="py-3 px-3">ORDER</th>
-                <th className="py-3 px-3">COURIER</th>
-                <th className="py-3 px-3">STATUS</th>
-                <th className="py-3 px-3">PICKED BY</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 text-sm">
-              {issuesList.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="py-10 text-center text-gray-500 text-xs">
-                    لا توجد Issues مفتوحة في الزونات المختارة حالياً.
-                  </td>
-                </tr>
-              ) : (
-                issuesList.map((iss) => (
-                  <tr key={iss.uid} className="hover:bg-gray-50">
-                    <td className="py-3 px-4 font-bold text-gray-800">{iss.type}</td>
-                    <td className="py-3 px-3 text-gray-700">{iss.reason}</td>
-                    <td className="py-3 px-3 font-mono font-bold text-blue-600">{iss.orderId}</td>
-                    <td className="py-3 px-3 text-gray-800">{iss.courier}</td>
-                    <td className="py-3 px-3">{iss.status}</td>
-                    <td className="py-3 px-3 text-gray-600">{iss.pickedBy}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      );
-
       const renderCompletedOrdersView = () => {
-        const cutoffTimeLabel = formatShortTimeOnly(
-          new Date(Date.now() - Number(completedHoursWindow || 2) * 3600 * 1000).toISOString()
-        );
+        const anchorNow =
+          completedSearchQuery.trim() && completedSearchAnchorRef.current > 0
+            ? completedSearchAnchorRef.current
+            : Date.now();
+        const windowStartLabel = formatShortTimeOnly(anchorNow - Number(completedHoursWindow || 2) * 3600 * 1000);
 
         return (
           <div className="mt-4 space-y-4">
-            <div className="p-3.5 rounded-xl bg-gray-50 border border-gray-200 flex flex-wrap items-end justify-between gap-3">
-              <div className="flex flex-wrap items-end gap-3 flex-1">
-                <div className="space-y-1">
-                  <label className="block text-[11px] font-bold text-gray-600">
+            {/* Completed Orders Controls Bar (ONLY 1h / 2h based on Completed At) */}
+            <div className="p-4 rounded-xl bg-gray-50/80 border border-gray-200 flex flex-wrap items-end justify-between gap-3">
+              <div className="flex flex-wrap items-end gap-3 flex-1 min-w-[260px]">
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-600 mb-1">
                     Time Window (Completed At)
                   </label>
                   <select
@@ -1962,22 +1938,22 @@
                       setCompletedHoursWindow(Number(e.target.value));
                       setCompletedPage(1);
                     }}
-                    className="px-3 py-2 border border-gray-300 rounded-lg text-xs sm:text-sm font-bold bg-white text-gray-800 focus:outline-none focus:border-blue-500"
+                    className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-bold text-gray-800 focus:outline-none focus:border-blue-500"
                   >
-                    <option value={2}>آخر ساعتين (2h • وقت التقفيل)</option>
                     <option value={1}>آخر ساعة (1h • وقت التقفيل)</option>
+                    <option value={2}>آخر ساعتين (2h • وقت التقفيل)</option>
                   </select>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="block text-[11px] font-bold text-gray-600">City</label>
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-600 mb-1">City</label>
                   <select
                     value={completedCityFilter}
                     onChange={(e) => {
                       setCompletedCityFilter(e.target.value);
                       setCompletedPage(1);
                     }}
-                    className="px-3 py-2 border border-gray-300 rounded-lg text-xs sm:text-sm font-semibold bg-white text-gray-800 focus:outline-none focus:border-blue-500"
+                    className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-semibold text-gray-700 focus:outline-none focus:border-blue-500"
                   >
                     <option value="All Cities">All Cities</option>
                     <option value="Cairo">Cairo</option>
@@ -1985,30 +1961,27 @@
                   </select>
                 </div>
 
-                <div className="space-y-1">
-                  <label className="block text-[11px] font-bold text-gray-600">Zone</label>
+                <div className="min-w-[200px]">
+                  <label className="block text-[11px] font-bold text-gray-600 mb-1">Zone</label>
                   <select
                     value={completedZoneFilter}
                     onChange={(e) => {
                       setCompletedZoneFilter(e.target.value);
                       setCompletedPage(1);
                     }}
-                    className="px-3 py-2 border border-gray-300 rounded-lg text-xs sm:text-sm font-semibold bg-white text-gray-800 max-w-[240px] focus:outline-none focus:border-blue-500"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-semibold text-gray-700 focus:outline-none focus:border-blue-500"
                   >
                     <option value="SELECTED_ZONES">زونات الداشبورد المختارة ({selectedZoneIds.length})</option>
-                    <option value="ALL">كل الزونات المحفوظة</option>
-                    {allAvailableZones
-                      .filter((z) => selectedZoneIds.includes(Number(z.id)))
-                      .map((z) => (
-                        <option key={z.id} value={z.name}>
-                          {z.name}
-                        </option>
-                      ))}
+                    {ALL_ZONES_CATALOG.filter((z) => selectedZoneIds.includes(Number(z.id))).map((z) => (
+                      <option key={z.id} value={z.name}>
+                        {z.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
-                <div className="space-y-1 flex-1 min-w-[220px]">
-                  <label className="block text-[11px] font-bold text-gray-600">
+                <div className="flex-1 min-w-[220px]">
+                  <label className="block text-[11px] font-bold text-gray-600 mb-1">
                     Search (بحث لحظي في آخر {completedHoursWindow} ساعة)
                   </label>
                   <div className="relative">
@@ -2020,7 +1993,7 @@
                         setCompletedPage(1);
                       }}
                       placeholder="اكتب رقم الأوردر أو VO أو اسم الرايدر..."
-                      className="w-full pl-3 pr-7 py-2 border border-gray-300 rounded-lg text-xs sm:text-sm bg-white focus:outline-none focus:border-blue-500"
+                      className="w-full pl-3 pr-8 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm focus:outline-none focus:border-blue-500"
                     />
                     {completedSearchQuery && (
                       <button
@@ -2029,7 +2002,7 @@
                           setCompletedSearchQuery("");
                           setCompletedPage(1);
                         }}
-                        className="absolute right-2 top-2 text-xs text-gray-400 hover:text-gray-700"
+                        className="absolute right-2.5 top-2 text-gray-400 hover:text-gray-700 text-xs font-bold"
                       >
                         ✕
                       </button>
@@ -2039,18 +2012,19 @@
               </div>
 
               <div className="flex flex-col items-end gap-1 text-xs">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  LIVE • مقفول من {cutoffTimeLabel} حتى الآن ({completedHoursWindow}h)
+                  LIVE • مقفول من {windowStartLabel} حتى الآن ({completedHoursWindow}h)
                 </span>
-                <span className="text-gray-500">
-                  Page <strong>{completedPage}</strong> of <strong>{completedTotalPages}</strong> •{" "}
-                  <strong>{visibleCompletedOrders.length}</strong> orders in window
-                </span>
+                <div className="text-gray-500">
+                  Page <strong className="text-gray-800">{completedPage}</strong> of{" "}
+                  <strong className="text-gray-800">{completedTotalPages}</strong> •{" "}
+                  <strong className="text-gray-800">{visibleCompletedOrders.length}</strong> orders in window
+                </div>
               </div>
             </div>
 
-            {/* Mobile Smart Cards for Completed Orders (< 768px) */}
+            {/* Mobile Completed Cards (< 768px) */}
             <div className={`${mobileViewMode === "cards" ? "block md:hidden" : "hidden"} space-y-2.5`}>
               {paginatedCompletedOrders.length === 0 ? (
                 <div className="p-8 text-center bg-white border border-gray-200 rounded-xl text-gray-500 text-xs">
@@ -2059,13 +2033,13 @@
               ) : (
                 paginatedCompletedOrders.map((item) => (
                   <div
-                    key={`comp-m-${item.uid}`}
+                    key={`m-comp-${item.uid}`}
                     onClick={() => setSelectedOrder(item)}
-                    className="p-3.5 rounded-xl border border-gray-200 bg-white shadow-sm space-y-2 text-xs"
+                    className="p-3.5 rounded-xl bg-white border border-gray-200 shadow-sm space-y-2 text-xs active:bg-gray-50"
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-indigo-600 text-sm">{item.id}</span>
-                      <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-mono font-bold border border-emerald-200">
+                      <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                         ✓ {item.completedAtFormatted}
                       </span>
                     </div>
@@ -3056,7 +3030,7 @@
                   <span className="text-2xl">🚴‍♂️</span>
                   <div>
                     <h1 className="text-lg font-bold tracking-tight">Hurrier Live Operations</h1>
-                    <p className="text-xs text-slate-300">v8.1 • Secured Google Access</p>
+                    <p className="text-xs text-slate-300">v8.2 • Secured Google Access</p>
                   </div>
                 </div>
                 <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
@@ -3195,7 +3169,7 @@
                         تحديد الزونات قبل بدء المتابعة
                       </h1>
                       <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v8.1 • {userRole === "admin" ? "Admin" : "Employee"}
+                        ★ v8.2 • {userRole === "admin" ? "Admin" : "Employee"}
                       </span>
                     </div>
                     <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5 truncate">
@@ -3504,7 +3478,7 @@
 
                 <div className="px-4 py-3 bg-slate-50 border-b border-gray-200 text-xs space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-700">★ v8.1 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                    <span className="font-bold text-emerald-700">★ v8.2 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                     <button
                       type="button"
                       onClick={handleGoogleSignOut}
@@ -3562,7 +3536,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v8.1 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                <span className="font-bold text-emerald-700">★ v8.2 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                 <button
                   type="button"
                   onClick={handleGoogleSignOut}
@@ -4281,10 +4255,22 @@
                           <div className="space-y-4">
                             {selectedOrderFullView.structuredDeliveries.map((del) => (
                               <div key={del.id} className="border border-gray-200 rounded-lg overflow-hidden">
-                                <div className="px-4 py-2.5 bg-[#eef3fc] border-b border-blue-100 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                                <div
+                                  className={`px-4 py-2.5 border-b grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs ${
+                                    del.isCancelledDelivery
+                                      ? "bg-red-50/70 border-red-100"
+                                      : "bg-[#eef3fc] border-blue-100"
+                                  }`}
+                                >
                                   <div>
                                     <div className="text-gray-500 text-[11px]">Status</div>
-                                    <div className="font-bold text-gray-900">{del.status}</div>
+                                    <div
+                                      className={`font-bold ${
+                                        del.isCancelledDelivery ? "text-red-700" : "text-emerald-700"
+                                      }`}
+                                    >
+                                      {del.status}
+                                    </div>
                                   </div>
                                   <div>
                                     <div className="text-gray-500 text-[11px]">Zones</div>
