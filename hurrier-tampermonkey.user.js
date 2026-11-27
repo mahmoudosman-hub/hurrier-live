@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      7.9
-// @description  [v7.9] Permanent Auto-Update + Rolling 2h Completed At (Cairo Date Tail Fetch + Cross-Midnight) + Live Rider Search
+// @version      8.0
+// @description  [v8.0] Permanent Auto-Update + Binary-Search Rolling 2h Completed At + Real Hurrier Order Detail APIs
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "7.9";
+  const SCRIPT_VERSION = "8.0";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
@@ -74,6 +74,7 @@
   let cachedZoneRosterFetchedAt = 0;
   let remoteAvailableVersion = "";
   let lastRollingCompletedSyncAt = 0;
+  let initialCompletedBackfillDone = false;
   let capturedCompletedApiBaseUrl = "";
 
   const CAPTURED_AUTH_HEADERS = {};
@@ -97,6 +98,7 @@
       timings.completed_at,
       timings.delivered_at,
       timings.dropped_off_at,
+      order.current_state_transition,
       order.completed_at,
       order.delivered_at,
       order.dropped_off_at,
@@ -113,11 +115,12 @@
       }
     }
 
-    // Exact calculation from Hurrier's placed_at + total_time (seconds)
+    // Exact calculation from Hurrier's placed_at + total_time (Hurrier returns minutes when < 240, seconds when >= 240)
     const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
-    const totalSec = Number(timings.total_time);
-    if (placedMs > 0 && !Number.isNaN(totalSec) && totalSec > 0) {
-      return placedMs + totalSec * 1000;
+    const rawTotalTime = Number(timings.total_time);
+    if (placedMs > 0 && !Number.isNaN(rawTotalTime) && rawTotalTime > 0) {
+      const durationMs = rawTotalTime < 240 ? rawTotalTime * 60 * 1000 : rawTotalTime * 1000;
+      return placedMs + durationMs;
     }
 
     if (order.updated_at) {
@@ -1118,56 +1121,42 @@
       return cached.data;
     }
 
-    const endpoints = [
-      `${BASE_API}/dispatcher-dashboard/orders/${encodeURIComponent(cleanOrderId)}`,
-      `${BASE_API}/dispatcher-dashboard/orders/HF_EG${encodeURIComponent(cleanOrderId)}`,
-      `${BASE_API}/orders/${encodeURIComponent(cleanOrderId)}`
-    ];
-    if (cleanDelId && cleanDelId !== cleanOrderId) {
-      endpoints.push(`${BASE_API}/dispatcher-dashboard/deliveries/${encodeURIComponent(cleanDelId)}`);
-    }
-
-    let mainDetail = null;
-    for (const ep of endpoints) {
-      const res = await safeFetchJson(ep, opts);
-      if (res && typeof res === "object" && (res.order || res.deliveries || res.id || res.code)) {
-        mainDetail = res;
-        break;
-      }
-    }
-
-    if (!mainDetail) return cached?.data || null;
-
-    const [notesRes, issuesRes] = await Promise.all([
-      safeFetchJson(`${BASE_API}/dispatcher-dashboard/orders/${encodeURIComponent(cleanOrderId)}/notes`, opts),
+    const codeWithPrefix = `HF_EG${cleanOrderId}`;
+    const [detailRes, deliveriesRes, notesRes, issuesRes] = await Promise.all([
+      safeFetchJson(`${BASE_API}/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(cleanOrderId)}`, opts),
+      safeFetchJson(`${BASE_API}/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(codeWithPrefix)}`, opts),
+      safeFetchJson(`${BASE_API}/dispatcher-dashboard/orders/dispatcher_notes?code=${encodeURIComponent(codeWithPrefix)}`, opts),
       safeFetchJson(`${BASE_API}/issue-service/orders/${encodeURIComponent(cleanOrderId)}/issues`, opts)
     ]);
 
-    const deliveriesList = Array.isArray(mainDetail.deliveries)
-      ? mainDetail.deliveries
-      : mainDetail.delivery
-      ? [mainDetail.delivery]
-      : mainDetail.transitions
-      ? [mainDetail]
+    const mainOrder = detailRes?.order || detailRes;
+    const deliveriesList = Array.isArray(deliveriesRes?.deliveries)
+      ? deliveriesRes.deliveries
+      : Array.isArray(deliveriesRes?.records)
+      ? deliveriesRes.records
+      : Array.isArray(deliveriesRes)
+      ? deliveriesRes
       : [];
+
+    if (!mainOrder && deliveriesList.length === 0) {
+      return cached?.data || null;
+    }
 
     const doc = {
       orderId: cleanOrderId,
-      order: mainDetail.order || mainDetail,
+      order: mainOrder || {},
       deliveries: deliveriesList,
-      dispatcher_notes: Array.isArray(notesRes?.notes)
+      dispatcher_notes: Array.isArray(notesRes?.dispatcher_notes)
+        ? notesRes.dispatcher_notes
+        : Array.isArray(notesRes?.notes)
         ? notesRes.notes
         : Array.isArray(notesRes)
         ? notesRes
-        : Array.isArray(mainDetail.dispatcher_notes)
-        ? mainDetail.dispatcher_notes
         : [],
       order_issues: Array.isArray(issuesRes?.issues)
         ? issuesRes.issues
         : Array.isArray(issuesRes)
         ? issuesRes
-        : Array.isArray(mainDetail.order_issues)
-        ? mainDetail.order_issues
         : [],
       updatedAt: new Date().toISOString()
     };
@@ -1189,69 +1178,62 @@
           order.confirmation_number ||
           String(order.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
           ""
-      ).trim();
-      if (!orderKey) continue;
-
-      const completedAtMs = extractCompletedTimestamp(rec);
-      if (completedAtMs >= cutoffMs) {
-        freshCount += 1;
-        const zoneIds = new Set();
-        const sps = Array.isArray(order.drop_off_address?.starting_points)
-          ? order.drop_off_address.starting_points
-          : Array.isArray(rec?.starting_points)
-          ? rec.starting_points
-          : [];
-        sps.forEach((sp) => {
-          const zid = Number(typeof sp === "object" ? sp?.id || sp?.starting_point_id : sp);
-          if (!Number.isNaN(zid) && zid > 0) zoneIds.add(zid);
-        });
-
-        rollingCompletedPool.set(orderKey, {
-          completedAtMs,
-          zoneIds: Array.from(zoneIds),
-          record: {
-            ...rec,
-            __completed_at_ms: completedAtMs
-          }
-        });
-      }
-    }
-    return freshCount;
-  }
-
-  function getCairoDateStringsForCompleted() {
-    const now = new Date();
-    const fmtDate = new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Africa/Cairo",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit"
-    });
-    const fmtHour = new Intl.DateTimeFormat("en-GB", {
-      timeZone: "Africa/Cairo",
-      hour: "2-digit",
-      hour12: false
-    });
-    const todayStr = fmtDate.format(now);
-    const yesterdayStr = fmtDate.format(new Date(now.getTime() - 24 * 3600 * 1000));
-    const cairoHour = Number(fmtHour.format(now)) || 0;
-    return { todayStr, yesterdayStr, cairoHour };
-  }
-
-  async function fetchCompletedPageForDate(dateStr, unionZoneIds, pageNum, opts) {
+  async function fetchCompletedPageForDate(dateStr, pageNum, opts) {
     const params = new URLSearchParams();
     params.set("date", dateStr);
     params.set("page", String(pageNum));
     params.set("per_page", "50");
-    (Array.isArray(unionZoneIds) ? unionZoneIds : []).forEach((zid) => {
-      params.append("starting_point_id[]", String(zid));
-    });
     const url = `${BASE_API}/dispatcher-dashboard/orders/completed?${params.toString()}`;
     return safeFetchJson(url, opts);
   }
 
-  async function pullNewestCompletedTailForDate(dateStr, unionZoneIds, maxTailPages, opts) {
-    const page1Res = await fetchCompletedPageForDate(dateStr, unionZoneIds, 1, opts);
+  function getPageFirstPlacedMs(pageRes) {
+    const recs = Array.isArray(pageRes?.records)
+      ? pageRes.records
+      : Array.isArray(pageRes?.orders)
+      ? pageRes.orders
+      : [];
+    for (const r of recs) {
+      const p = r?.order?.placed_at;
+      if (p) {
+        const ms = new Date(p).getTime();
+        if (!Number.isNaN(ms) && ms > 0) return ms;
+      }
+    }
+    return 0;
+  }
+
+  async function findFirstCompletedPageAfterCutoff(dateStr, totalPages, minPlacedMs, opts) {
+    if (totalPages <= 1) return 1;
+    let low = 1;
+    let high = totalPages;
+    let bestPage = totalPages;
+    let steps = 0;
+
+    while (low <= high && steps < 9) {
+      steps += 1;
+      const mid = Math.floor((low + high) / 2);
+      const midRes = await fetchCompletedPageForDate(dateStr, mid, opts);
+      const recs = Array.isArray(midRes?.records) ? midRes.records : [];
+      ingestCompletedRecordsBatch(recs);
+
+      const firstMs = getPageFirstPlacedMs(midRes);
+      if (!firstMs) {
+        high = mid - 1;
+        continue;
+      }
+      if (firstMs >= minPlacedMs) {
+        bestPage = mid;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return Math.max(1, bestPage - 1);
+  }
+
+  async function pullCompletedWindowForDate(dateStr, minPlacedMs, isIncremental, opts) {
+    const page1Res = await fetchCompletedPageForDate(dateStr, 1, opts);
     if (!page1Res) return;
     const p1Recs = Array.isArray(page1Res?.records)
       ? page1Res.records
@@ -1264,25 +1246,28 @@
     const totalPages = Math.max(1, Math.ceil(totalCount / 50));
     if (totalPages <= 1) return;
 
-    // Hurrier orders Completed Orders ascending by placed_at, so newest orders sit at the last pages
-    const startPage = totalPages;
-    const endPage = Math.max(2, totalPages - maxTailPages + 1);
+    const p1FirstMs = getPageFirstPlacedMs(page1Res);
+    let startPage = 1;
+    if (p1FirstMs > 0 && p1FirstMs < minPlacedMs) {
+      startPage = await findFirstCompletedPageAfterCutoff(dateStr, totalPages, minPlacedMs, opts);
+    }
+
+    // On incremental cycles after initial backfill, scan the newest 30 pages from totalPages downward
+    const effectiveStart = isIncremental ? Math.max(startPage, totalPages - 30) : Math.max(startPage, totalPages - 90);
     const pagesToPull = [];
-    for (let p = startPage; p >= endPage; p--) {
+    for (let p = totalPages; p >= effectiveStart; p--) {
       pagesToPull.push(p);
     }
 
-    const batches = chunkArray(pagesToPull, 4);
+    const batches = chunkArray(pagesToPull, 6);
     for (const batch of batches) {
-      let batchFreshTotal = 0;
       await Promise.all(
         batch.map(async (p) => {
-          const res = await fetchCompletedPageForDate(dateStr, unionZoneIds, p, opts);
+          const res = await fetchCompletedPageForDate(dateStr, p, opts);
           const recs = Array.isArray(res?.records) ? res.records : Array.isArray(res?.orders) ? res.orders : [];
-          batchFreshTotal += ingestCompletedRecordsBatch(recs);
+          ingestCompletedRecordsBatch(recs);
         })
       );
-      if (batchFreshTotal === 0) break;
     }
   }
 
@@ -1303,14 +1288,18 @@
     lastRollingCompletedSyncAt = now;
 
     const { todayStr, yesterdayStr, cairoHour } = getCairoDateStringsForCompleted();
+    const minPlacedCutoffMs = now - 3.5 * 3600 * 1000;
+    const isIncremental = initialCompletedBackfillDone && rollingCompletedPool.size > 0;
 
-    // Pull newest pages for today in Cairo
-    await pullNewestCompletedTailForDate(todayStr, unionZoneIds, 16, opts);
+    // Pull orders placed in the last 3.5h for today in Cairo (using Binary Search to skip early pages)
+    await pullCompletedWindowForDate(todayStr, minPlacedCutoffMs, isIncremental, opts);
 
-    // If between 12:00 AM and 4:00 AM Cairo time, also pull the tail of yesterday for cross-midnight completed orders
+    // If between 12:00 AM and 4:00 AM Cairo time, also pull cross-midnight orders from yesterday's tail
     if (cairoHour < 4) {
-      await pullNewestCompletedTailForDate(yesterdayStr, unionZoneIds, 8, opts);
+      await pullCompletedWindowForDate(yesterdayStr, minPlacedCutoffMs, isIncremental, opts);
     }
+
+    initialCompletedBackfillDone = true;
 
     // Final cleanup pass after ingestion
     const afterCutoff = Date.now() - ROLLING_COMPLETED_WINDOW_MS;
