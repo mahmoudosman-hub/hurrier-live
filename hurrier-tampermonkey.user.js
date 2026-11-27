@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      8.0
-// @description  [v8.0] Permanent Auto-Update + Binary-Search Rolling 2h Completed At + Real Hurrier Order Detail APIs
+// @version      8.1
+// @description  [v8.1] Clean Auto-Update + Binary-Search Rolling 2h Completed At + Real Hurrier Order Detail APIs
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "8.0";
+  const SCRIPT_VERSION = "8.1";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
@@ -49,8 +49,8 @@
   const SYNC_INTERVAL_MS = 2000;
   const LEADER_LEASE_MS = 6000;
   const SESSION_STALE_MS = 45000;
-  const LOCAL_CHANNEL_NAME = "hurrier_live_sync_pc_channel_v80";
-  const LOCAL_TAB_STORAGE_KEY = "hurrier_live_sync_local_tab_leader_v80";
+  const LOCAL_CHANNEL_NAME = "hurrier_live_sync_pc_channel_v81";
+  const LOCAL_TAB_STORAGE_KEY = "hurrier_live_sync_local_tab_leader_v81";
   const LOCAL_TAB_HEARTBEAT_MS = 1000;
   const LOCAL_TAB_TIMEOUT_MS = 3500;
 
@@ -780,7 +780,7 @@
       balance: detailPayload.balance ?? cObj.balance ?? null,
       status_until: detailPayload.status_until ?? null,
       contract_info: detailPayload.contract_info ?? null,
-      status_meta_data: detailPayload.status_meta_data ?? null,
+      status_meta_data: payloadStatusMeta(detailPayload),
       updatedAt: new Date().toISOString()
     };
 
@@ -791,6 +791,10 @@
     if (cname) courierDetailCache.set(sanitizeCourierStorageKey(cname.toLowerCase()), record);
 
     return record;
+  }
+
+  function payloadStatusMeta(detailPayload) {
+    return detailPayload?.status_meta_data ?? null;
   }
 
   function formatCachedDocToSearchResult(d) {
@@ -1216,13 +1220,16 @@
       startPage = await findFirstCompletedPageAfterCutoff(dateStr, totalPages, minPlacedMs, opts);
     }
 
-    const effectiveStart = isIncremental ? Math.max(startPage, totalPages - 30) : Math.max(startPage, totalPages - 90);
+    const effectiveStart = isIncremental
+      ? Math.max(startPage, totalPages - 35)
+      : Math.max(startPage, totalPages - 220);
+
     const pagesToPull = [];
     for (let p = totalPages; p >= effectiveStart; p--) {
       pagesToPull.push(p);
     }
 
-    const batches = chunkArray(pagesToPull, 6);
+    const batches = chunkArray(pagesToPull, 8);
     for (const batch of batches) {
       await Promise.all(
         batch.map(async (p) => {
