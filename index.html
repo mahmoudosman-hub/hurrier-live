@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v8.9 — Live Rider Status & Lock Fix</title>
+  <title>Hurrier Live Operations Dashboard v9.0 — Live Rider Status & Lock Fix</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -37,7 +37,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v8.9...
+      Loading Hurrier Live Operations Dashboard v9.0...
     </div>
   </div>
 
@@ -679,6 +679,8 @@
       const isPreorder = Boolean(order.is_pre_order || order.is_preorder || tabName === "Pre-order");
       const deadlineIso =
         order.scheduled_dropoff_at || order.scheduled_drop_off_at || order.scheduled_pickup_at || "";
+      const parsedDeadlineMs = deadlineIso ? new Date(deadlineIso).getTime() : NaN;
+      const deadlineMs = Number.isNaN(parsedDeadlineMs) ? Number.MAX_SAFE_INTEGER : parsedDeadlineMs;
       const deadline = formatRelativeDeadline(deadlineIso, isPreorder);
 
       const rawStatus = String(rec?.status || order.status || tabName || "").toLowerCase();
@@ -709,7 +711,11 @@
 
       const distMeters = Number(rec?.distance || 0);
       const placedIso =
-        order.placed_at || order.send_to_restaurant_at || order.restaurant_confirmed_at || "";
+        order.placed_at ||
+        order.send_to_restaurant_at ||
+        order.restaurant_confirmed_at ||
+        deadlineIso ||
+        "";
       const placedMs = placedIso ? new Date(placedIso).getTime() : 0;
 
       const dropAddr = order.dropoff_address || order.drop_off_address || {};
@@ -728,6 +734,7 @@
         courierId: rec?.courier_id ? String(rec.courier_id) : "",
         status: humanizeSnakeCase(rec?.status || order.status || tabName),
         deadline,
+        deadlineMs,
         time_in: order.scheduled_pickup_at ? formatShortTimeOnly(order.scheduled_pickup_at) : "-",
         time_at: deadlineIso ? formatShortTimeOnly(deadlineIso) : "-",
         distance: distMeters > 0 ? `${(distMeters / 1000).toFixed(2)} km` : "-",
@@ -2088,10 +2095,25 @@
           );
         });
 
+        const liveCutoffMs = Date.now() - 18 * 3600 * 1000;
+        const isLiveShiftOrder = (item) => {
+          const refMs =
+            item.placedMs || (item.deadlineMs < Number.MAX_SAFE_INTEGER ? item.deadlineMs : 0);
+          return refMs >= liveCutoffMs;
+        };
+
         if (orderSortMode === "live_first") {
-          return [...list].sort((a, b) => (b.placedMs || 0) - (a.placedMs || 0));
+          return [...list].sort((a, b) => {
+            const aLive = isLiveShiftOrder(a) ? 0 : 1;
+            const bLive = isLiveShiftOrder(b) ? 0 : 1;
+            if (aLive !== bLive) return aLive - bLive;
+            return (a.deadlineMs ?? Number.MAX_SAFE_INTEGER) - (b.deadlineMs ?? Number.MAX_SAFE_INTEGER);
+          });
         }
-        return list;
+
+        return [...list].sort(
+          (a, b) => (a.deadlineMs ?? Number.MAX_SAFE_INTEGER) - (b.deadlineMs ?? Number.MAX_SAFE_INTEGER)
+        );
       }, [baseTabDeliveries, activeQuickFilter, selectedMartBranch, searchQuery, knownCouriersMeta, orderSortMode]);
 
       const effectiveTabCounts = useMemo(() => {
@@ -3547,7 +3569,7 @@
                   <span className="text-2xl">🚴‍♂️</span>
                   <div>
                     <h1 className="text-lg font-bold tracking-tight">Hurrier Live Operations</h1>
-                    <p className="text-xs text-slate-300">v8.9 • Secured Google Access</p>
+                    <p className="text-xs text-slate-300">v9.0 • Secured Google Access</p>
                   </div>
                 </div>
                 <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
@@ -3686,7 +3708,7 @@
                         تحديد الزونات قبل بدء المتابعة
                       </h1>
                       <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v8.9 • {userRole === "admin" ? "Admin" : "Employee"}
+                        ★ v9.0 • {userRole === "admin" ? "Admin" : "Employee"}
                       </span>
                     </div>
                     <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5 truncate">
@@ -3995,7 +4017,7 @@
 
                 <div className="px-4 py-3 bg-slate-50 border-b border-gray-200 text-xs space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-700">★ v8.9 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                    <span className="font-bold text-emerald-700">★ v9.0 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                     <button
                       type="button"
                       onClick={handleGoogleSignOut}
@@ -4053,7 +4075,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v8.9 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                <span className="font-bold text-emerald-700">★ v9.0 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                 <button
                   type="button"
                   onClick={handleGoogleSignOut}
