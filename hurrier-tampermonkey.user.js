@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      9.3
-// @description  [v9.3] Instant Green Badge (<1s) + Selected-Zones Completed At (1h/2h) + Live Rider Status
+// @version      9.4
+// @description  [v9.4] Light Sync (Dashboard + Active Couriers + Queued + Dispatched + Active + Completed + Dispatcher)
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "9.3";
+  const SCRIPT_VERSION = "9.4";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -32,579 +32,17 @@
   const IS_HURRIER_HOST = location.hostname === "eg.me.logisticsbackoffice.com";
 
   // ============================================================================
-  // 1) DASHBOARD HOST MODE: Bridge Firebase Auth Token to Tampermonkey Storage
-  // ============================================================================
-  if (!IS_HURRIER_HOST) {
-    const syncDashboardAuthToGM = () => {
-      try {
-        const raw = window.localStorage.getItem(AUTH_BRIDGE_STORAGE_KEY);
-        if (!raw) return;
-        const parsed = JSON.parse(raw);
-        if (parsed && (parsed.idToken || parsed.refreshToken)) {
-          GM_setValue(GM_AUTH_BRIDGE_KEY, raw);
-          GM_setValue(AUTH_BRIDGE_STORAGE_KEY, raw);
-        }
-      } catch {}
-    };
-    syncDashboardAuthToGM();
-    setInterval(syncDashboardAuthToGM, 2000);
-    return;
-  }
-
-  // ============================================================================
-  // 2) HURRIER HOST MODE: Instant Status Badge (< 0.1s) + Live Sync Engine
-  // ============================================================================
-  const BASE_API = "https://eg.me.logisticsbackoffice.com/api";
-  const SAME_PC_LOCK_KEY = "hurrier_same_pc_tab_lock_v9";
-  const PC_ID_STORAGE_KEY = "hurrier_sync_pc_id";
-  const MANIAL_FAMILY_IDS = [10004, 10162, 10282, 10284, 10214, 10267];
-  const ROLLING_COMPLETED_WINDOW_MS = 2 * 3600 * 1000;
-  const ROLLING_COMPLETED_GRACE_MS = 15 * 60 * 1000;
-
-  const MY_TAB_ID = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const MY_PC_ID = (function () {
-    try {
-      let pid = window.localStorage.getItem(PC_ID_STORAGE_KEY);
-      if (!pid) {
-        pid = `pc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        window.localStorage.setItem(PC_ID_STORAGE_KEY, pid);
-      }
-      return pid;
-    } catch {
-      return `pc_${MY_TAB_ID}`;
-    }
-  })();
-
-  let badgeEl = null;
-  let updateBannerEl = null;
-
-  function ensureBadge() {
-    if (badgeEl && document.body && document.body.contains(badgeEl)) return badgeEl;
-    if (!document.body) return null;
-
-    let wrapper = document.getElementById("hurrier-live-sync-root");
-    if (!wrapper) {
-      wrapper = document.createElement("div");
-      wrapper.id = "hurrier-live-sync-root";
-      wrapper.style.cssText = [
-        "position:fixed",
-        "bottom:14px",
-        "right:18px",
-        "z-index:2147483647",
-        "display:flex",
-        "flex-direction:column",
-        "align-items:flex-end",
-        "gap:6px",
-        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
-        "pointer-events:none"
-      ].join(";");
-      document.body.appendChild(wrapper);
-    }
-
-    updateBannerEl = document.getElementById("hurrier-live-update-pill");
-    if (!updateBannerEl) {
-      updateBannerEl = document.createElement("a");
-      updateBannerEl.id = "hurrier-live-update-pill";
-      updateBannerEl.href = GITHUB_SCRIPT_RAW_URL;
-      updateBannerEl.target = "_blank";
-      updateBannerEl.rel = "noopener noreferrer";
-      updateBannerEl.style.cssText = [
-        "display:none",
-        "pointer-events:auto",
-        "background:#1d4ed8",
-        "color:#ffffff",
-        "padding:5px 12px",
-        "border-radius:9999px",
-        "font-size:11px",
-        "font-weight:700",
-        "text-decoration:none",
-        "box-shadow:0 4px 12px rgba(0,0,0,0.22)",
-        "cursor:pointer"
-      ].join(";");
-      wrapper.appendChild(updateBannerEl);
-    }
-
-    badgeEl = document.getElementById("hurrier-live-sync-badge");
-    if (!badgeEl) {
-      badgeEl = document.createElement("div");
-      badgeEl.id = "hurrier-live-sync-badge";
-      badgeEl.style.cssText = [
-        "pointer-events:auto",
-        "background:#15803d",
-        "color:#ffffff",
-        "padding:6px 14px",
-        "border-radius:9999px",
-        "font-size:12px",
-        "font-weight:700",
-        "letter-spacing:0.2px",
-        "box-shadow:0 4px 14px rgba(0,0,0,0.22)",
-        "transition:background-color 0.2s ease",
-        "user-select:none"
-      ].join(";");
-      wrapper.appendChild(badgeEl);
-    }
-    return badgeEl;
-  }
-
-  function setBadge(bgColor, text) {
-    const el = ensureBadge();
-    if (!el) return;
-    el.style.backgroundColor = bgColor;
-    el.textContent = text;
-  }
-
-  // Mount badge immediately (< 0.1s)
-  if (document.body) {
-    setBadge("#15803d", `v${SCRIPT_VERSION} Starting Live Sync...`);
-  } else {
-    window.addEventListener("DOMContentLoaded", () => {
-      setBadge("#15803d", `v${SCRIPT_VERSION} Starting Live Sync...`);
-    });
-  }
-
-  // ============================================================================
-  // 3) AUTO-UPDATE CHECKER FROM GITHUB (Non-Intrusive Pill Above Green Badge)
-  // ============================================================================
-  function checkGitHubForScriptUpdate() {
-    try {
-      GM_xmlhttpRequest({
-        method: "GET",
-        url: `${GITHUB_SCRIPT_RAW_URL}?t=${Date.now()}`,
-        onload: (res) => {
-          if (res.status !== 200 || !res.responseText) return;
-          const m = res.responseText.match(/\/\/\s*@version\s+([0-9.]+)/);
-          if (!m) return;
-          const remoteVer = m[1].trim();
-          if (parseFloat(remoteVer) > parseFloat(SCRIPT_VERSION)) {
-            ensureBadge();
-            if (updateBannerEl) {
-              updateBannerEl.style.display = "inline-block";
-              updateBannerEl.textContent = `⬆ Update v${remoteVer} Ready (Click to Update)`;
-            }
-          } else if (updateBannerEl) {
-            updateBannerEl.style.display = "none";
-          }
-        }
-      });
-    } catch {}
-  }
-  setTimeout(checkGitHubForScriptUpdate, 4000);
-  setInterval(checkGitHubForScriptUpdate, 180000);
-
-  // ============================================================================
-  // 4) FIREBASE AUTH BRIDGE + AUTOMATIC TOKEN REFRESH
-  // ============================================================================
-  let cachedFbAuth = null;
-
-  function readStoredBridgeAuth() {
-    try {
-      const raw =
-        GM_getValue(GM_AUTH_BRIDGE_KEY, "") ||
-        GM_getValue(AUTH_BRIDGE_STORAGE_KEY, "");
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === "object") {
-        cachedFbAuth = parsed;
-        return parsed;
-      }
-    } catch {}
-    return cachedFbAuth;
-  }
-
-  function getBridgedLeaderEmail() {
-    const auth = readStoredBridgeAuth();
-    return String(auth?.email || "admin").trim().toLowerCase();
-  }
-
-  function gmRequestJson(method, url, headersObj, bodyStr, timeoutMs = 10000) {
-    return new Promise((resolve, reject) => {
-      GM_xmlhttpRequest({
-        method,
-        url,
-        headers: headersObj || {},
-        data: bodyStr,
-        timeout: timeoutMs,
-        onload: (res) => {
-          let json = null;
-          try {
-            json = res.responseText ? JSON.parse(res.responseText) : null;
-          } catch {}
-          resolve({ status: res.status, ok: res.status >= 200 && res.status < 300, json, text: res.responseText });
-        },
-        onerror: () => reject(new Error("Network error")),
-        ontimeout: () => reject(new Error("Request timeout"))
-      });
-    });
-  }
-
-  async function getValidFirebaseIdToken(forceRefresh = false) {
-    const auth = readStoredBridgeAuth();
-    if (!auth) return "";
-
-    const ageMs = Date.now() - Number(auth.updatedAt || 0);
-    if (!forceRefresh && auth.idToken && ageMs < 45 * 60 * 1000) {
-      return auth.idToken;
-    }
-
-    if (auth.refreshToken && auth.apiKey) {
-      try {
-        const formBody = `grant_type=refresh_token&refresh_token=${encodeURIComponent(auth.refreshToken)}`;
-        const resp = await gmRequestJson(
-          "POST",
-          `https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(auth.apiKey)}`,
-          { "Content-Type": "application/x-www-form-urlencoded" },
-          formBody,
-          8000
-        );
-        if (resp.ok && resp.json?.id_token) {
-          const updated = {
-            ...auth,
-            idToken: resp.json.id_token,
-            refreshToken: resp.json.refresh_token || auth.refreshToken,
-            updatedAt: Date.now()
-          };
-          cachedFbAuth = updated;
-          const serialized = JSON.stringify(updated);
-          GM_setValue(GM_AUTH_BRIDGE_KEY, serialized);
-          GM_setValue(AUTH_BRIDGE_STORAGE_KEY, serialized);
-          return updated.idToken;
-        }
-      } catch {}
-    }
-
-    return auth.idToken || "";
-  }
-
-  async function firebaseReq(method, path, bodyObj) {
-    let token = await getValidFirebaseIdToken(false);
-    const makeUrl = (tok) => {
-      const sep = path.includes("?") ? "&" : "?";
-      return `${FIREBASE_DB_URL}${path}.json${tok ? `${sep}auth=${encodeURIComponent(tok)}` : ""}`;
-    };
-
-    const payload = bodyObj !== undefined ? JSON.stringify(bodyObj) : undefined;
-    const headers = payload !== undefined ? { "Content-Type": "application/json" } : {};
-
-    let res = await gmRequestJson(method, makeUrl(token), headers, payload, 10000);
-    if (res.status === 401) {
-      token = await getValidFirebaseIdToken(true);
-      if (token) {
-        res = await gmRequestJson(method, makeUrl(token), headers, payload, 10000);
-      }
-    }
-    if (!res.ok) {
-      throw new Error(`Firebase ${res.status}`);
-    }
-    return res.json;
-  }
-
-  // ============================================================================
-  // 5) SAME-PC TAB LOCK & MULTI-PC LEADER LOCK (Zero Flicker + Instant F5)
-  // ============================================================================
-  let isCurrentLeader = false;
-  let lastLeaderCheckAt = 0;
-
-  function acquireSamePcTabLock() {
-    const now = Date.now();
-    try {
-      const raw = window.localStorage.getItem(SAME_PC_LOCK_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        const isAlive = parsed && now - Number(parsed.ts || 0) < 7000;
-        const isSameTab = parsed && parsed.tabId === MY_TAB_ID;
-        const isOlderVersion =
-          parsed && parseFloat(parsed.version || "0") < parseFloat(SCRIPT_VERSION);
-        if (isAlive && !isSameTab && !isOlderVersion) {
-          return false;
-        }
-      }
-      window.localStorage.setItem(
-        SAME_PC_LOCK_KEY,
-        JSON.stringify({
-          tabId: MY_TAB_ID,
-          pcId: MY_PC_ID,
-          version: SCRIPT_VERSION,
-          ts: now
-        })
-      );
-      return true;
-    } catch {
-      return true;
-    }
-  }
-
-  window.addEventListener("beforeunload", () => {
-    try {
-      const raw = window.localStorage.getItem(SAME_PC_LOCK_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && parsed.tabId === MY_TAB_ID) {
-          window.localStorage.removeItem(SAME_PC_LOCK_KEY);
-        }
-      }
-    } catch {}
-  });
-
-  async function ensureMultiPcLeadership() {
-    const now = Date.now();
-    if (isCurrentLeader && now - lastLeaderCheckAt < 4000) {
-      return true;
-    }
-    lastLeaderCheckAt = now;
-
-    try {
-      const lock = await firebaseReq("GET", "/feeder_lock");
-      const lockAge = lock && lock.ts ? now - Number(lock.ts) : Infinity;
-      const isMine = lock && lock.leaderId === MY_TAB_ID;
-      const isSamePcAfterRefresh = lock && lock.pcId === MY_PC_ID;
-      const isOlderRemoteVer =
-        lock && parseFloat(lock.version || "0") < parseFloat(SCRIPT_VERSION);
-
-      if (!lock || lockAge > 12000 || isMine || isSamePcAfterRefresh || isOlderRemoteVer) {
-        await firebaseReq("PUT", "/feeder_lock", {
-          leaderId: MY_TAB_ID,
-          pcId: MY_PC_ID,
-          email: getBridgedLeaderEmail(),
-          version: SCRIPT_VERSION,
-          ts: now
-        });
-        isCurrentLeader = true;
-        return true;
-      }
-
-      isCurrentLeader = false;
-      return false;
-    } catch {
-      // Allow working if feeder_lock node doesn't exist yet
-      isCurrentLeader = true;
-      return true;
-    }
-  }
-
-  // Independent Heartbeat every 2.5s so long sync cycles NEVER lose Primary Leader lock
-  setInterval(async () => {
-    if (!acquireSamePcTabLock()) {
-      isCurrentLeader = false;
-      return;
-    }
-    if (isCurrentLeader) {
-      try {
-        await firebaseReq("PUT", "/feeder_lock", {
-          leaderId: MY_TAB_ID,
-          pcId: MY_PC_ID,
-          email: getBridgedLeaderEmail(),
-          version: SCRIPT_VERSION,
-          ts: Date.now()
-        });
-      } catch {}
-    }
-  }, 2500);
-
-  // ============================================================================
-  // 6) HURRIER AUTH HEADERS & READ-ONLY API CLIENT
-  // ============================================================================
-  function findHurrierBearerToken() {
-    const stores = [window.localStorage, window.sessionStorage];
-    for (const st of stores) {
-      if (!st) continue;
-      try {
-        for (let i = 0; i < st.length; i++) {
-          const k = st.key(i);
-          if (!k) continue;
-          const v = String(st.getItem(k) || "").trim();
-          if (/^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(v)) {
-            return v;
-          }
-          if (v.startsWith("{") && (v.includes("dhhToken") || v.includes("access_token") || v.includes("token"))) {
-            try {
-              const obj = JSON.parse(v);
-              const cand = obj.dhhToken || obj.access_token || obj.token;
-              if (typeof cand === "string" && cand.startsWith("eyJ")) return cand;
-            } catch {}
-          }
-        }
-      } catch {}
-    }
-    try {
-      const m = document.cookie.match(/(?:dhhToken|token|access_token)=([^;]+)/);
-      if (m && m[1] && m[1].startsWith("eyJ")) return decodeURIComponent(m[1]);
-    } catch {}
-    return "";
-  }
-
-  function getHurrierAuthHeaders() {
-    const headers = { Accept: "application/json" };
-    const bearer = findHurrierBearerToken();
-    if (bearer) {
-      headers.Authorization = `Bearer ${bearer}`;
-    }
-    return headers;
-  }
-
-  async function hurrierGet(apiPath) {
-    const url = apiPath.startsWith("http") ? apiPath : `${BASE_API}${apiPath}`;
-    const res = await fetch(url, {
-      method: "GET",
-      credentials: "include",
-      headers: getHurrierAuthHeaders()
-    });
-    if (!res.ok) {
-      throw new Error(`Hurrier HTTP ${res.status}`);
-    }
-    return res.json();
-  }
-
-  // ============================================================================
-  // 7) ZONES CATALOG & ACCURATE ZONE MATCHING (Including All Manial Zones)
-  // ============================================================================
-  const zoneIdToNameMap = new Map([
-    [1, "heliopolis"],
-    [2, "mohandiseen"],
-    [10004, "manial"],
-    [10162, "manial nesting"],
-    [10282, "manial nesting p"],
-    [10284, "manial p"],
-    [10214, "hybrid fleet al manial"],
-    [10267, "hybrid al-manial bc"],
-    [10022, "tahrir"],
-    [10163, "tahrir nesting"],
-    [10189, "hybrid fleet el sayeda"],
-    [10277, "hybrid el sayeda zeinab bc"],
-    [10018, "haram sp"],
-    [10139, "haram sp 2"],
-    [10125, "haram nesting sp"],
-    [10181, "haram nesting pt"],
-    [10182, "haram pt"],
-    [10183, "haram pt 2"],
-    [10190, "hybrid fleet talbya"],
-    [10278, "hybrid talbyia bc"],
-    [10197, "hybrid fleet tersa"],
-    [10211, "hybrid fleet maryoteya"],
-    [10252, "hybrid fleet mohafzet el giza"],
-    [10272, "hybrid mohafzet el giza bc"],
-    [10074, "hadayek el ahram sp"],
-    [10210, "hybrid fleet hadayek el ahram"],
-    [10262, "hybrid fleet hadayek el ahram - area d"]
-  ]);
-  const zoneNameToIdMap = new Map();
-  zoneIdToNameMap.forEach((name, id) => zoneNameToIdMap.set(name, id));
-
-  let lastCitiesCatalogSyncAt = 0;
-
-  function normZoneStr(s) {
-    return String(s || "")
-      .replace(/&#39;/g, "'")
-      .replace(/&amp;/g, "&")
-      .replace(/\s+/g, " ")
-      .trim()
-      .toLowerCase();
-  }
-
-  function stripTrailingSp(s) {
-    return normZoneStr(s).replace(/\s+sp$/i, "").trim();
-  }
-
-  async function refreshDynamicZonesCatalogIfNeeded() {
-    if (Date.now() - lastCitiesCatalogSyncAt < 10 * 60 * 1000) return;
-    try {
-      const data = await hurrierGet("/dispatcher-dashboard/cities");
-      const cities = Array.isArray(data?.cities) ? data.cities : [];
-      const catalogToPublish = [];
-      for (const city of cities) {
-        const cityName = String(city?.name || "Cairo").trim();
-        const zones = Array.isArray(city?.zones) ? city.zones : [];
-        for (const z of zones) {
-          const zid = Number(z?.id);
-          const zname = String(z?.name || "").trim();
-          if (zid > 0 && zname) {
-            const lower = normZoneStr(zname);
-            zoneIdToNameMap.set(zid, lower);
-            zoneNameToIdMap.set(lower, zid);
-            zoneNameToIdMap.set(stripTrailingSp(lower), zid);
-            catalogToPublish.push({ id: zid, name: zname, city: cityName });
-          }
-        }
-      }
-      lastCitiesCatalogSyncAt = Date.now();
-      if (catalogToPublish.length > 0) {
-        firebaseReq("PUT", "/config/dynamic_zones_catalog", catalogToPublish).catch(() => {});
-      }
-    } catch {}
-  }
-
-  function extractRecordZones(rec) {
-    const order = rec?.order || {};
-    const rawSps = Array.isArray(rec?.starting_points)
-      ? rec.starting_points
-      : Array.isArray(order?.drop_off_address?.starting_points)
-      ? order.drop_off_address.starting_points
-      : Array.isArray(order?.dropoff_address?.starting_points)
-      ? order.dropoff_address.starting_points
-      : [];
-
-    const ids = [];
-    const names = [];
-    for (const sp of rawSps) {
-      if (sp && typeof sp === "object") {
-        if (sp.id) ids.push(Number(sp.id));
-        if (sp.name) {
-          const nl = normZoneStr(sp.name);
-          names.push(nl);
-          const mappedId = zoneNameToIdMap.get(nl) || zoneNameToIdMap.get(stripTrailingSp(nl));
-          if (mappedId) ids.push(mappedId);
-        }
-      } else if (typeof sp === "string") {
-        const nl = normZoneStr(sp);
-        if (nl) {
-          names.push(nl);
-          const mappedId = zoneNameToIdMap.get(nl) || zoneNameToIdMap.get(stripTrailingSp(nl));
-          if (mappedId) ids.push(mappedId);
-        }
-      }
-    }
-    return { ids, names };
-  }
-
-  function doesRecordMatchSessionZones(rec, zoneIdSet, hasManialSelected, hasTahrirSelected) {
-    if (!zoneIdSet || zoneIdSet.size === 0) return false;
-    const { ids, names } = extractRecordZones(rec);
-
-    for (const id of ids) {
-      if (zoneIdSet.has(id)) return true;
-    }
-
-    if (names.length === 0) return false;
-
-    const selectedNames = [];
-    zoneIdSet.forEach((zid) => {
-      const zn = zoneIdToNameMap.get(zid);
-      if (zn) selectedNames.push(zn);
-    });
-
-    for (const nm of names) {
-      if (hasManialSelected && nm.includes("manial")) return true;
-      if (hasTahrirSelected && nm.startsWith("tahrir")) return true;
-      const nmBase = stripTrailingSp(nm);
-      for (const selNm of selectedNames) {
-        if (nm === selNm || nmBase === stripTrailingSp(selNm)) return true;
-      }
-    }
-    return false;
-  }
-
-  // ============================================================================
-  // 8) COMPLETE ACTIVE & DELIVERY TABS FETCHING (Zero Dropped Active Orders)
+  // 8) FOCUSED DELIVERY TABS FETCHING (ONLY Active, Dispatched, Queued)
   // ============================================================================
   const DELIVERY_ENDPOINTS = [
     { tab: "Active", path: "/dispatcher-dashboard/deliveries/active" },
     { tab: "Dispatched", path: "/dispatcher-dashboard/deliveries/dispatched" },
-    { tab: "Queued", path: "/dispatcher-dashboard/deliveries/queued" },
-    { tab: "Actionable", path: "/dispatcher-dashboard/deliveries/actionable" },
-    { tab: "Pre-order", path: "/dispatcher-dashboard/deliveries/preorder" },
-    { tab: "Waiting for Assembly", path: "/dispatcher-dashboard/deliveries/wait_for_assembled" }
+    { tab: "Queued", path: "/dispatcher-dashboard/deliveries/queued" }
   ];
 
   const cachedTabRecordsMap = new Map();
+  let cachedDispatchersList = [];
+  let lastDispatchersSyncAt = 0;
   let lastFullActiveSweepAt = 0;
   let lastKnownActivePageCount = 1;
   const previousWatchedLiveOrders = new Map();
@@ -728,8 +166,8 @@
   async function resolveExactCompletedMetaForOrders(candidates) {
     if (!Array.isArray(candidates) || candidates.length === 0) return;
 
-    for (let i = 0; i < candidates.length; i += 6) {
-      const batch = candidates.slice(i, i + 6);
+    for (let i = 0; i < candidates.length; i += 10) {
+      const batch = candidates.slice(i, i + 10);
       await Promise.allSettled(
         batch.map(async ({ orderKey, orderCode }) => {
           if (exactCompletedMetaCache.has(orderKey)) return;
@@ -1407,16 +845,27 @@
       const hasManialUnion = MANIAL_FAMILY_IDS.some((id) => unionZoneIds.has(id));
       const hasTahrirUnion = unionZoneIds.has(10022) || unionZoneIds.has(10163);
 
-      // Fetch Stats & Issues in parallel with Deliveries
+      // Lightweight Dispatcher Dashboard refresh only when needed (or every 20s)
+      const anyoneViewingDispatcherTab = activeSessions.some(
+        (s) => s.activeTab === "Dispatcher Dashboard"
+      );
+      if (anyoneViewingDispatcherTab || now - lastDispatchersSyncAt >= 20000) {
+        lastDispatchersSyncAt = now;
+        hurrierGet("/issue-service/dispatcher_dashboard")
+          .then((list) => {
+            if (Array.isArray(list)) cachedDispatchersList = list;
+          })
+          .catch(() => {});
+      }
+
+      // Fetch ONLY /stats + Active + Dispatched + Queued
       const doFullActiveSweep =
         !cachedTabRecordsMap.has("Active") || now - lastFullActiveSweepAt >= 6000;
 
-      const [statsRes, issuesRes, ...tabFetchResults] = await Promise.allSettled([
+      const [statsRes, ...tabFetchResults] = await Promise.allSettled([
         hurrierGet("/dispatcher-dashboard/stats"),
-        hurrierGet("/issue-service/dispatcher_dashboard"),
         ...DELIVERY_ENDPOINTS.map(async (ep) => {
           if (ep.tab === "Active" && !doFullActiveSweep) {
-            // Fast 2s refresh of head & tail pages merged into full Active list
             const prevAll = cachedTabRecordsMap.get("Active") || [];
             const pagesToRefresh = new Set([1, 2]);
             for (
@@ -1458,24 +907,30 @@
         })
       ]);
 
-      // Extract Zone Stats from /stats
+      // Extract Zone Stats + Delay from /stats (for Dashboard & Active Couriers)
       const allZoneStats = [];
       if (statsRes.status === "fulfilled" && Array.isArray(statsRes.value?.cities)) {
         for (const c of statsRes.value.cities) {
+          const cityName = String(c?.city_name || "Cairo").trim();
           for (const z of c.zones || []) {
+            const parentDelay = Number(z?.stat?.delay || 0);
             for (const sp of z.starting_points || []) {
               if (sp && sp.id) {
-                allZoneStats.push({ id: Number(sp.id), name: sp.name, stat: sp.stat || {} });
+                const spStat = sp.stat || {};
+                const rawDelay = Number(spStat.delay || 0) > 0 ? Number(spStat.delay) : parentDelay;
+                allZoneStats.push({
+                  id: Number(sp.id),
+                  name: sp.name,
+                  city: cityName,
+                  zoneName: z.zone_name || "",
+                  delay: Math.round(rawDelay * 10) / 10,
+                  stat: spStat
+                });
               }
             }
           }
         }
       }
-
-      const rawIssues =
-        issuesRes.status === "fulfilled" && Array.isArray(issuesRes.value)
-          ? issuesRes.value
-          : [];
 
       const latestTabRecords = {};
       for (const r of tabFetchResults) {
@@ -1531,15 +986,26 @@
               matched.forEach((rec) => {
                 const cid = rec?.courier_id ? String(rec.courier_id) : "";
                 if (!cid) return;
+                const { ids: recZIds, names: recZNames } = extractRecordZones(rec);
                 const prev = activeCouriersMap.get(cid) || {
                   id: cid,
                   courier_id: cid,
                   name: rec.courier_name || `Courier #${cid}`,
                   status: "Working",
                   vehicle_type: "Motorbike",
-                  active_orders_count: 0
+                  active_orders_count: 0,
+                  dispatched_orders_count: 0,
+                  zoneIds: [],
+                  zoneNames: []
                 };
                 if (ep.tab === "Active") prev.active_orders_count += 1;
+                if (ep.tab === "Dispatched") prev.dispatched_orders_count += 1;
+                recZIds.forEach((zid) => {
+                  if (!prev.zoneIds.includes(zid)) prev.zoneIds.push(zid);
+                });
+                recZNames.forEach((zn) => {
+                  if (!prev.zoneNames.includes(zn)) prev.zoneNames.push(zn);
+                });
                 activeCouriersMap.set(cid, prev);
               });
             }
@@ -1553,10 +1019,14 @@
             )
             .sort((a, b) => Number(b.__completed_at_ms || 0) - Number(a.__completed_at_ms || 0));
 
-          const sessZoneStats = allZoneStats.filter((zs) => sessZoneSet.has(Number(zs.id)));
+          const sessZoneStats = allZoneStats.filter((zs) => {
+            if (sessZoneSet.has(Number(zs.id))) return true;
+            const nl = normZoneStr(zs.name);
+            if (sessHasManial && nl.includes("manial")) return true;
+            if (sessHasTahrir && nl.startsWith("tahrir")) return true;
+            return false;
+          });
           const sessCouriers = Array.from(activeCouriersMap.values());
-          sessCounts["Active Couriers"] = sessCouriers.length;
-          sessCounts["Issues"] = rawIssues.length;
 
           await firebaseReq("PUT", `/session_bundles/${encodeURIComponent(sess.sessionId)}`, {
             updatedAt: Date.now(),
@@ -1566,7 +1036,7 @@
             completedSyncing: isCompletedSyncInProgress,
             zoneStats: sessZoneStats,
             couriers: sessCouriers,
-            issues: rawIssues,
+            dispatchers: cachedDispatchersList,
             counts: sessCounts,
             activeViewers: activeViewersSummary
           });
