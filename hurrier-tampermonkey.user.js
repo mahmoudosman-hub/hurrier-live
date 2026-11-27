@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      8.2
-// @description  [v8.2] Exclude Cancelled Orders + Graceful Rolling 2h Completed At + Auto-Update
+// @version      8.3
+// @description  [v8.3] Fix String Starting Points Matching + Auto-Discover Completed Pages + Live Viewers Count
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "8.2";
+  const SCRIPT_VERSION = "8.3";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
@@ -31,48 +31,61 @@
   const ROLLING_COMPLETED_GRACE_MS = 15 * 60 * 1000;
   const ROLLING_COMPLETED_SYNC_MS = 10000;
 
-  const isDashboardHost =
-    window.location.hostname.endsWith("github.io") ||
-    window.location.hostname === "localhost" ||
-    window.location.hostname === "127.0.0.1";
+  const ZONE_CATALOG_PAIRS = [
+    [10231, "Hybrid fleet mokattam easy sports"], [10002, "New maadi"], [10003, "Old maadi"],
+    [10130, "Maadi nesting sp"], [10020, "Helwan SP"], [10009, "Zahraa maadi and meraag"],
+    [10001, "Mokattam sp"], [10143, "Shobra 2 sp"], [10064, "Mokkatam asmarat sp"],
+    [10094, "Sheikh zayed 2 sp"], [10251, "Hybrid fleet imbabah"], [10179, "Obour golf pt"],
+    [10167, "Mohandiseen nesting p"], [10181, "Haram nesting pt"], [10138, "October hosary"],
+    [10012, "Tagammoa 1 sp"], [10089, "Rehab 2 sp"], [10069, "Shorouk city sp 1"],
+    [10090, "Tagamo3 5 south"], [10100, "Madinaty 3 sp south park"], [10235, "Ain shams nesting sp"],
+    [10180, "Obour hay awal pt"], [10011, "Tagamoa 5 north"], [10074, "Hadayek el ahram sp"],
+    [10091, "Mohamed naguib sp"], [10063, "Hadayek el qobba 1 sp"], [10102, "Madinaty 4 sp craft zone"],
+    [10182, "Haram pt"], [10129, "Mohandiseen nesting sp"], [10183, "Haram pt 2"],
+    [10115, "Ain shams (abdelhamed badawi) 2"], [10024, "Hay 10 and nasr city"], [10127, "Heliopolis nesting sp"],
+    [10163, "Tahrir nesting"], [10160, "Rock vera"], [10166, "Mohandiseen p"],
+    [10128, "Naser city nesting sp"], [10033, "Hegaz"], [10125, "Haram nesting sp"],
+    [10000, "Nasr city sp"], [10165, "Madienty central park ebikes"], [10006, "Merryland"],
+    [10139, "Haram sp 2"], [10022, "Tahrir"], [10162, "Manial nesting"],
+    [10005, "Sheraton"], [10004, "Manial sp"], [10045, "Shobra sp"],
+    [10013, "Rehab 1 sp"], [10096, "Palm hills sp"], [10150, "Golden square"],
+    [10047, "October hosary 2"], [10018, "Haram sp"], [10099, "Madinaty 2 sp central park"],
+    [10067, "Obour hay awal sp"], [10092, "Hadayek el qobba 2 sp"], [10164, "Shobra nesting"],
+    [10101, "Shorouk city sp 2"], [10126, "October nesting"], [10010, "Auc sp"],
+    [10070, "Madinaty 1 sp air mall & arabesque"], [10141, "Wahat fardous sp"], [10113, "Ains shams (ahmed essmat) 1"],
+    [10159, "Obour golf sp"], [10131, "Sheraton nesting sp"], [10161, "Zahraa maadi nesting"],
+    [10151, "Wahat sp 2"], [10032, "Sheikh zayed 1 sp"], [10104, "Abasseya sp"],
+    [10217, "Hybrid fleet mokattam mafarik"], [10193, "Hybrid fleet el zaitoun"], [10186, "Hybrid fleet ard el golf"],
+    [10216, "Hybrid fleet sheraton"], [10229, "Hybrid fleet heliopolis rabwa"], [10266, "Hybrid ard el golf bc"],
+    [10223, "Hybrid fleet shorouk 1st area"], [10234, "Hybrid fleet wahat beta gardens"], [10209, "Hybrid fleet tagmmoa hay 1"],
+    [10207, "Obour industrial area hybrid fleet"], [10248, "Hybrid fleet sheikh zayed hay 4"], [10249, "Hybrid fleet west somed"],
+    [10219, "Hybrid fleet ain shams"], [10261, "Hybrid fleet - mountain view park wahat"], [10226, "Hybrid fleet sheikh zayed hay 9"],
+    [10189, "Hybrid fleet el sayeda"], [10214, "Hybrid fleet al manial"], [10029, "Beverly hills sp"],
+    [10238, "Hybrid fleet el daher"], [10230, "Hybrid fleet nasrcity hay 8"], [10142, "Palm hills 2 sp"],
+    [10195, "Hybrid fleet lebanon square"], [10222, "Hybrid fleet shobra"], [10185, "Hybrid fleet banafseg"],
+    [10275, "Hybrid fleet toya mall"], [10174, "Hybrid fleet maadi"], [10184, "Hybrid fleet zayed"],
+    [10212, "Hybrid fleet palm hills 1"], [10232, "Hybrid fleet maadi old"], [10136, "Motamyez sp"],
+    [10218, "Hybrid fleet el hadeeka el dawlya"], [10196, "Hybrid fleet tayaran"], [10224, "Hybrid fleet tagmmoa auc"],
+    [10225, "Hybrid fleet golden lotus"], [10188, "Hybrid fleet rock vera"], [10173, "Hybrid fleet rehab"],
+    [10208, "Hybrid fleet banks center"], [10191, "Hybrid fleet october 4th"], [10210, "Hybrid fleet hadayek el ahram"],
+    [10211, "Hybrid fleet maryoteya"], [10264, "Hybrid lebanon bc"], [10252, "Hybrid fleet mohafzet el giza"],
+    [10256, "Hybrid fleet mosaddak"], [10262, "Hybrid fleet hadayek el ahram - area d"], [10227, "Hybrid fleet mokattam nafora"],
+    [10241, "Hybrid fleet helwan"], [10215, "Hybrid fleet maadi meraag"], [10194, "Hybrid fleet october 6th"],
+    [10237, "Hybrid fleet agouza"], [10114, "Ain shams (zatoun) 3"], [10198, "Hybrid fleet taqa"],
+    [10221, "Hybrid fleet palm hills 360"], [10228, "Hybrid fleet maadi laselky"], [10250, "Hybrid fleet el nadi el gedid"],
+    [10233, "Hybrid fleet shorouk 8th district"], [10177, "Hybrid fleet obour"], [10213, "Hybrid fleet el montazah"],
+    [10265, "Hybrid taqseem laselky bc"], [10220, "Hybrid fleet october wahet el mohandseen"], [10260, "Obour golf hybrid fleet"],
+    [10197, "Hybrid fleet tersa"], [10190, "Hybrid fleet talbya"], [10271, "Hybrid wahet el mohandsen bc"],
+    [10269, "Hybrid maadi old bc"], [10192, "Shobra nesting 2"], [10273, "Hybrid fleet gardenia"],
+    [10267, "Hybrid al-manial bc"], [10270, "Hybrid shobra bc"], [10277, "Hybrid el sayeda zeinab bc"],
+    [10068, "Smart village dandy mall sp 1"], [10278, "Hybrid talbyia bc"], [10272, "Hybrid mohafzet el giza bc"],
+    [10276, "Hybrid agouza bc"], [10281, "Hybrid fleet shorouk 4"], [10187, "Hybrid fleet shorouk 3rd"],
+    [10027, "Gleem sp"], [10028, "Raml station sp"]
+  ];
 
-  // 1) Dashboard Auth Bridge (captures Google Sign-In Firebase token for Tampermonkey on Hurrier tab)
-  if (isDashboardHost) {
-    const syncBridgeAuth = () => {
-      try {
-        const raw = window.localStorage.getItem(AUTH_BRIDGE_STORAGE_KEY);
-        if (raw) {
-          GM_setValue(AUTH_BRIDGE_STORAGE_KEY, raw);
-        }
-      } catch {}
-    };
-    syncBridgeAuth();
-    setInterval(syncBridgeAuth, 3000);
-    return;
-  }
-
-  // 2) Hurrier Tab Feeder Logic
-  const TAB_INSTANCE_ID = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  const LOCAL_TAB_LOCK_KEY = "hurrier_local_tab_lock";
-  let remoteAvailableVersion = null;
-  let lastOrderDetailReqAt = 0;
-  let lastCourierDetailReqAt = 0;
-  let lastRiderSearchReqId = "";
-
-  const rollingCompletedPool = new Map();
-  let lastRollingCompletedSyncAt = 0;
-  let initialCompletedBackfillDone = false;
-
-  // Floating Status Pill
-  const badge = document.createElement("div");
-  badge.style.cssText =
-    "position:fixed;bottom:14px;right:14px;z-index:999999;padding:7px 14px;border-radius:999px;font-family:sans-serif;font-size:12px;font-weight:700;color:#fff;background:#78350f;box-shadow:0 4px 12px rgba(0,0,0,0.22);cursor:pointer;user-select:none;transition:all 0.2s;";
-  badge.textContent = `v${SCRIPT_VERSION} Standby...`;
-  badge.title = "Hurrier Live Sync Status";
-  badge.addEventListener("click", () => {
-    if (remoteAvailableVersion) {
-      window.open(GITHUB_SCRIPT_RAW_URL, "_blank");
-    }
+  const ZONE_NAME_TO_ID = new Map();
+  ZONE_CATALOG_PAIRS.forEach(([id, name]) => {
+    ZONE_NAME_TO_ID.set(String(name).trim().toLowerCase(), Number(id));
   });
   document.body.appendChild(badge);
 
@@ -279,7 +292,17 @@
     const collect = (arr) => {
       if (!Array.isArray(arr)) return;
       arr.forEach((sp) => {
-        if (sp && typeof sp === "object" && sp.id) ids.add(Number(sp.id));
+        if (!sp) return;
+        if (typeof sp === "string") {
+          const mappedId = ZONE_NAME_TO_ID.get(sp.trim().toLowerCase());
+          if (mappedId) ids.add(mappedId);
+        } else if (typeof sp === "object") {
+          if (sp.id) ids.add(Number(sp.id));
+          if (sp.name) {
+            const mappedId = ZONE_NAME_TO_ID.get(String(sp.name).trim().toLowerCase());
+            if (mappedId) ids.add(mappedId);
+          }
+        }
       });
     };
     collect(rec?.starting_points);
@@ -332,8 +355,44 @@
       if (p1Records.length === 0) return;
 
       ingestCompletedRecordsBatch(p1Records);
-      const totalRecords = Number(p1?.total_records || p1?.total || p1Records.length);
-      const totalPages = Math.max(1, Math.ceil(totalRecords / 50));
+      const explicitTotal = Number(
+        p1?.total_records ?? p1?.total_count ?? p1?.total ?? p1?.meta?.total ?? p1?.pagination?.total ?? 0
+      );
+      let totalPages = explicitTotal > 0 ? Math.max(1, Math.ceil(explicitTotal / 50)) : 1;
+
+      // Exponential discovery when API omits total_records but returns full 50-row page
+      if (totalPages <= 1 && p1Records.length >= 50) {
+        let probeLow = 1;
+        let probeHigh = 2;
+        while (probeHigh <= 512) {
+          const probeRes = await hurrierGet(
+            `/dispatcher-dashboard/orders/completed?date=${dateStr}&page=${probeHigh}&per_page=50`
+          );
+          const probeRecs = Array.isArray(probeRes?.records) ? probeRes.records : [];
+          if (probeRecs.length === 0) break;
+          ingestCompletedRecordsBatch(probeRecs);
+          probeLow = probeHigh;
+          if (probeRecs.length < 50) break;
+          probeHigh *= 2;
+        }
+        let bLow = probeLow;
+        let bHigh = probeHigh;
+        while (bLow < bHigh) {
+          const bMid = Math.ceil((bLow + bHigh) / 2);
+          const midRes = await hurrierGet(
+            `/dispatcher-dashboard/orders/completed?date=${dateStr}&page=${bMid}&per_page=50`
+          );
+          const midRecs = Array.isArray(midRes?.records) ? midRes.records : [];
+          if (midRecs.length > 0) {
+            ingestCompletedRecordsBatch(midRecs);
+            bLow = bMid;
+          } else {
+            bHigh = bMid - 1;
+          }
+        }
+        totalPages = Math.max(1, bLow);
+      }
+
       if (totalPages <= 1) return;
 
       // Binary search to locate first page where placed_at >= minPlacedCutoffMs
@@ -546,17 +605,30 @@
       await syncRollingCompletedOrdersPool(false);
 
       // Fetch Live Deliveries & Stats from Hurrier
-      const [statsRes, queuedRes, dispRes, activeRes, preorderRes, actionableRes, waitRes, issuesRes] =
-        await Promise.allSettled([
-          hurrierGet("/dispatcher-dashboard/stats"),
-          hurrierGet("/dispatcher-dashboard/deliveries/queued?page=1&per_page=100"),
-          hurrierGet("/dispatcher-dashboard/deliveries/dispatched?page=1&per_page=100"),
-          hurrierGet("/dispatcher-dashboard/deliveries/active?page=1&per_page=100"),
-          hurrierGet("/dispatcher-dashboard/deliveries/preorder?page=1&per_page=100"),
-          hurrierGet("/dispatcher-dashboard/deliveries/actionable?page=1&per_page=100"),
-          hurrierGet("/dispatcher-dashboard/deliveries/wait_for_assembled?page=1&per_page=100"),
-          hurrierGet("/issue-service/dispatcher_dashboard")
-        ]);
+      const { todayStr } = getCairoDateStringsForCompleted();
+      const [
+        statsRes,
+        queuedRes,
+        dispRes,
+        activeRes,
+        preorderRes,
+        actionableRes,
+        waitRes,
+        upcomingRes,
+        cancelledRes,
+        issuesRes
+      ] = await Promise.allSettled([
+        hurrierGet("/dispatcher-dashboard/stats"),
+        hurrierGet("/dispatcher-dashboard/deliveries/queued?page=1&per_page=100"),
+        hurrierGet("/dispatcher-dashboard/deliveries/dispatched?page=1&per_page=100"),
+        hurrierGet("/dispatcher-dashboard/deliveries/active?page=1&per_page=100"),
+        hurrierGet("/dispatcher-dashboard/deliveries/preorder?page=1&per_page=100"),
+        hurrierGet("/dispatcher-dashboard/deliveries/actionable?page=1&per_page=100"),
+        hurrierGet("/dispatcher-dashboard/deliveries/wait_for_assembled?page=1&per_page=100"),
+        hurrierGet("/dispatcher-dashboard/deliveries/pre_orders_next_days?page=1&per_page=100"),
+        hurrierGet(`/dispatcher-dashboard/orders/cancelled?date=${todayStr}&page=1&per_page=100`),
+        hurrierGet("/issue-service/dispatcher_dashboard")
+      ]);
 
       const tabAllRecords = {
         Queued: queuedRes.status === "fulfilled" ? queuedRes.value?.records || [] : [],
@@ -564,31 +636,18 @@
         Active: activeRes.status === "fulfilled" ? activeRes.value?.records || [] : [],
         "Pre-order": preorderRes.status === "fulfilled" ? preorderRes.value?.records || [] : [],
         Actionable: actionableRes.status === "fulfilled" ? actionableRes.value?.records || [] : [],
-        "Waiting for Assembly": waitRes.status === "fulfilled" ? waitRes.value?.records || [] : []
+        "Waiting for Assembly": waitRes.status === "fulfilled" ? waitRes.value?.records || [] : [],
+        Upcoming: upcomingRes.status === "fulfilled" ? upcomingRes.value?.records || [] : [],
+        Cancelled: cancelledRes.status === "fulfilled" ? cancelledRes.value?.records || [] : []
       };
 
-      const allIssues = issuesRes.status === "fulfilled" && Array.isArray(issuesRes.value) ? issuesRes.value : [];
-      const allZoneStats = [];
-      if (statsRes.status === "fulfilled" && Array.isArray(statsRes.value?.cities)) {
-        statsRes.value.cities.forEach((c) => {
-          (c.zones || []).forEach((z) => {
-            (z.starting_points || []).forEach((sp) => {
-              allZoneStats.push(sp);
-            });
-          });
-        });
-      }
-
-      // Build and Push Session Bundles for each active viewer
-      for (const sess of activeSessions) {
-        const targetSet = new Set(sess.zoneIds.map(Number));
-        const filterBySessionZones = (arr) =>
-          arr.filter((rec) => {
-            const spIds = extractRecordStartingPointIds(rec);
-            if (spIds.size === 0) return false;
-            for (const id of spIds) {
-              if (targetSet.has(id)) return true;
-            }
+      const activeViewersSummary = activeSessions.map((s) => ({
+        sessionId: s.sessionId,
+        email: s.email || "",
+        employeeName: s.employeeName || s.email || "User",
+        zoneCount: Array.isArray(s.zoneIds) ? s.zoneIds.length : 0,
+        activeTab: s.activeTab || "Active"
+      }));
             return false;
           });
 
@@ -627,11 +686,15 @@
           issues: allIssues,
           couriers: Array.from(courierMap.values()),
           zoneStats: filteredZoneStats,
+          activeViewers: activeViewersSummary,
           counts
         });
       }
 
-      setBadge("#15803d", `v${SCRIPT_VERSION} [Primary Leader] Live (2s) • ${rollingCompletedPool.size} Comp`);
+      setBadge(
+        "#15803d",
+        `v${SCRIPT_VERSION} [Primary Leader] Live (2s) • ${activeSessions.length} Viewer • ${rollingCompletedPool.size} Comp`
+      );
     } catch (err) {
       setBadge("#b91c1c", `v${SCRIPT_VERSION} Sync Retry: ${err?.message || "Error"}`);
     }
