@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      9.5
-// @description  [v9.5] Light Sync (Dashboard + Active Couriers + Queued + Dispatched + Active + Completed + Dispatcher)
+// @version      9.6
+// @description  [v9.6] Full Zone Couriers + Exact Courier Status & Balance + Fast Sync
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "9.5";
+  const SCRIPT_VERSION = "9.6";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -683,11 +683,136 @@
   ];
 
   const cachedTabRecordsMap = new Map();
-  let cachedDispatchersList = [];
-  let lastDispatchersSyncAt = 0;
   let lastFullActiveSweepAt = 0;
   let lastKnownActivePageCount = 1;
   const previousWatchedLiveOrders = new Map();
+
+  // ============================================================================
+  // 8.B) SELECTED ZONES COURIERS ENGINE (/dispatcher-dashboard/couriers?starting_point_id=...)
+  // ============================================================================
+  const zoneCouriersCacheMap = new Map();
+  const couriersByCourierIdMap = new Map();
+  const couriersByUserIdMap = new Map();
+  let isCouriersSyncInProgress = false;
+  let lastZoneCouriersSweepAt = 0;
+
+  function formatCairo24hTime(isoVal) {
+    if (!isoVal) return "";
+    const s = String(isoVal).trim();
+    if (!s || s.startsWith("0001-01-01")) return "";
+    const d = typeof isoVal === "number" ? new Date(isoVal > 1e12 ? isoVal : isoVal * 1000) : new Date(s);
+    if (Number.isNaN(d.getTime()) || d.getTime() <= 946684800000) return "";
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Africa/Cairo",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    }).format(d);
+  }
+
+  function mapZoneCourierItem(entry, fallbackZoneId) {
+    const c = entry?.courier || {};
+    const v = entry?.vehicle || {};
+    const meta = entry?.current_state_metadata || {};
+    const spId = Number(meta.starting_point_id || fallbackZoneId || 0);
+    const spName = zoneIdToNameMap.get(spId) || "";
+    const rawSt = String(c.status || "working").toLowerCase();
+
+    let stateTime24h = "";
+    if (rawSt === "break" || rawSt.includes("temp") || rawSt === "not_working") {
+      stateTime24h = formatCairo24hTime(meta.ended_at || entry?.active_shift_ended_at);
+    } else if (rawSt === "late" || rawSt === "ready" || rawSt === "starting") {
+      stateTime24h = formatCairo24hTime(entry?.active_shift_started_at || meta.shift_started_at);
+    } else if (rawSt === "ending") {
+      stateTime24h = formatCairo24hTime(entry?.active_shift_ended_at || meta.shift_ended_at);
+    }
+
+    const vType = String(v.vehicle_type_name || "Bike").trim();
+    const vBag = String(v.vehicle_bag_type_name || "").trim();
+
+    const mapped = {
+      id: String(c.id || ""),
+      courier_id: String(c.id || ""),
+      user_id: String(c.user_id || ""),
+      name: String(c.name || "").trim(),
+      phone_number: String(c.phone_number || "").trim(),
+      status: rawSt,
+      has_ending_shift: Boolean(entry?.has_ending_shift),
+      vehicle_type: vType,
+      vehicle_full: vBag ? `${vType}-${vBag}` : vType,
+      contract_type: String(c.contract_type || "").trim(),
+      contract_name: String(c.contract_name || "").trim(),
+      active_orders_count: Number(entry?.active_delivery_count ?? 0),
+      state_time_24h: stateTime24h,
+      status_until: String(meta.ended_at || ""),
+      performed_by: String(meta.performed_by || ""),
+      status_reason: String(meta.reason || ""),
+      starting_point_id: spId,
+      zoneIds: spId ? [spId] : [],
+      zoneNames: spName ? [spName] : []
+    };
+
+    if (mapped.id) couriersByCourierIdMap.set(mapped.id, mapped);
+    if (mapped.user_id) couriersByUserIdMap.set(mapped.user_id, mapped);
+    return mapped;
+  }
+
+  async function fetchZoneCouriersBatch(zoneIdsList) {
+    for (let i = 0; i < zoneIdsList.length; i += 8) {
+      const batch = zoneIdsList.slice(i, i + 8);
+      await Promise.allSettled(
+        batch.map(async (zid) => {
+          try {
+            const data = await hurrierGet(
+              `/dispatcher-dashboard/couriers?starting_point_id=${encodeURIComponent(zid)}`
+            );
+            const rawList = Array.isArray(data?.couriers) ? data.couriers : [];
+            const mappedList = rawList
+              .map((item) => mapZoneCourierItem(item, zid))
+              .filter((m) => m.id);
+            zoneCouriersCacheMap.set(Number(zid), {
+              updatedAt: Date.now(),
+              couriers: mappedList
+            });
+          } catch {}
+        })
+      );
+    }
+  }
+
+  async function syncSelectedZonesCouriers(unionZoneIds, hasManialUnion, hasTahrirUnion) {
+    const expandedIds = new Set(Array.from(unionZoneIds).map(Number).filter((n) => n > 0));
+    if (hasManialUnion) MANIAL_FAMILY_IDS.forEach((id) => expandedIds.add(id));
+    if (hasTahrirUnion) {
+      expandedIds.add(10022);
+      expandedIds.add(10163);
+    }
+
+    const allTargetIds = Array.from(expandedIds);
+    const uncachedIds = allTargetIds.filter((id) => !zoneCouriersCacheMap.has(id));
+
+    if (uncachedIds.length > 0 && !isCouriersSyncInProgress) {
+      isCouriersSyncInProgress = true;
+      try {
+        await fetchZoneCouriersBatch(uncachedIds);
+        lastZoneCouriersSweepAt = Date.now();
+      } finally {
+        isCouriersSyncInProgress = false;
+      }
+      return;
+    }
+
+    const now = Date.now();
+    if (!isCouriersSyncInProgress && now - lastZoneCouriersSweepAt >= 5000) {
+      isCouriersSyncInProgress = true;
+      lastZoneCouriersSweepAt = now;
+      fetchZoneCouriersBatch(allTargetIds)
+        .catch(() => {})
+        .finally(() => {
+          isCouriersSyncInProgress = false;
+        });
+    }
+  }
 
   async function fetchSingleDeliveryPage(path, page) {
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -750,29 +875,16 @@
   }
 
   // ============================================================================
-  // 9) SELECTED-ZONES COMPLETED ORDERS ENGINE (Exact Completed At • 1h / 2h)
+  // 9) ROLLING COMPLETED ORDERS ENGINE (Selected Zones Only + Exact Completed Time)
   // ============================================================================
   const rollingCompletedPool = new Map();
-  const exactCompletedMetaCache = new Map();
-  const lastKnownCompletedPage = {};
-  const backfilledZoneIds = new Set();
-
-  let currentSyncZoneSig = "";
-  let completedSyncGeneration = 0;
+  const completedExactTimeCache = new Map();
   let isCompletedSyncInProgress = false;
-  let lastRollingCompletedSyncAt = 0;
-  let lastMidWindowSweepAt = 0;
-  let yesterdayCompletedBackfilledForSig = "";
+  let lastCompletedSweepAt = 0;
+  let lastCompletedZonesSignature = "";
+  let cachedLastCompletedPage = { dateStr: "", page: 1, ts: 0 };
 
-  function parseValidTimestampMs(val) {
-    if (!val) return 0;
-    const s = String(val).trim();
-    if (!s || s.startsWith("0001-01-01")) return 0;
-    const ms = typeof val === "number" ? (val > 1e12 ? val : val * 1000) : new Date(s).getTime();
-    return !Number.isNaN(ms) && ms > 946684800000 ? ms : 0;
-  }
-
-  function getCairoDateStringsForCompleted() {
+  function getCairoDateStringsForWindow() {
     const now = new Date();
     const fmt = new Intl.DateTimeFormat("en-CA", {
       timeZone: "Africa/Cairo",
@@ -780,452 +892,301 @@
       month: "2-digit",
       day: "2-digit"
     });
-    const hrFmt = new Intl.DateTimeFormat("en-US", {
+    const hourFmt = new Intl.DateTimeFormat("en-GB", {
       timeZone: "Africa/Cairo",
-      hour: "numeric",
+      hour: "2-digit",
       hour12: false
     });
     const todayStr = fmt.format(now);
-    const yesterdayStr = fmt.format(new Date(now.getTime() - 24 * 3600 * 1000));
-    const cairoHour = Number(hrFmt.format(now)) % 24;
-    return { todayStr, yesterdayStr, cairoHour };
+    const cairoHour = parseInt(hourFmt.format(now), 10) || 0;
+    const dates = [todayStr];
+    if (cairoHour < 3) {
+      const yest = new Date(now.getTime() - 24 * 3600 * 1000);
+      dates.push(fmt.format(yest));
+    }
+    return dates;
   }
 
-  function pruneRollingCompletedPool(unionZoneSet, hasManialUnion, hasTahrirUnion) {
-    const cutoffMs = Date.now() - ROLLING_COMPLETED_WINDOW_MS - ROLLING_COMPLETED_GRACE_MS;
-    for (const [key, rec] of rollingCompletedPool.entries()) {
-      const compMs = Number(rec?.__completed_at_ms || 0);
-      if (
-        !compMs ||
-        compMs < cutoffMs ||
-        !doesRecordMatchSessionZones(rec, unionZoneSet, hasManialUnion, hasTahrirUnion)
-      ) {
-        rollingCompletedPool.delete(key);
-      }
+  async function fetchCompletedPage(dateStr, page) {
+    try {
+      const data = await hurrierGet(
+        `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${page}&per_page=50`
+      );
+      return Array.isArray(data?.records) ? data.records : [];
+    } catch {
+      return [];
     }
   }
 
-  async function resolveExactCompletedMetaForOrders(candidates) {
-    if (!Array.isArray(candidates) || candidates.length === 0) return;
+  async function findLastCompletedPageForDate(dateStr) {
+    const now = Date.now();
+    let low =
+      cachedLastCompletedPage.dateStr === dateStr && now - cachedLastCompletedPage.ts < 60000
+        ? Math.max(1, cachedLastCompletedPage.page - 2)
+        : 1;
 
-    for (let i = 0; i < candidates.length; i += 10) {
-      const batch = candidates.slice(i, i + 10);
+    const lowRecs = await fetchCompletedPage(dateStr, low);
+    if (lowRecs.length === 0) {
+      low = 1;
+      const p1 = await fetchCompletedPage(dateStr, 1);
+      if (p1.length === 0) return 0;
+      if (p1.length < 50) return 1;
+    } else if (lowRecs.length < 50) {
+      cachedLastCompletedPage = { dateStr, page: low, ts: now };
+      return low;
+    }
+
+    let step = 4;
+    let high = low + step;
+    while (high <= 60000) {
+      const recs = await fetchCompletedPage(dateStr, high);
+      if (recs.length === 0) break;
+      low = high;
+      if (recs.length < 50) {
+        cachedLastCompletedPage = { dateStr, page: high, ts: now };
+        return high;
+      }
+      step *= 2;
+      high = Math.min(60000, low + step);
+      if (high === low) break;
+    }
+
+    let left = low;
+    let right = high;
+    while (left < right) {
+      const mid = Math.ceil((left + right) / 2);
+      const recs = await fetchCompletedPage(dateStr, mid);
+      if (recs.length > 0) {
+        left = mid;
+        if (recs.length < 50) break;
+      } else {
+        right = mid - 1;
+      }
+    }
+
+    cachedLastCompletedPage = { dateStr, page: left, ts: now };
+    return left;
+  }
+
+  function getCompletedRecordCode(rec) {
+    const o = rec?.order || {};
+    return String(
+      o.confirmation_number ||
+        o.code ||
+        String(o.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+        o.id ||
+        ""
+    ).trim();
+  }
+
+  async function resolveExactCompletedTimeMs(rec) {
+    const code = getCompletedRecordCode(rec);
+    if (!code) return null;
+    if (completedExactTimeCache.has(code)) {
+      return completedExactTimeCache.get(code);
+    }
+
+    try {
+      const det = await hurrierGet(`/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(code)}`);
+      const dOrder = det?.order || det;
+      const st = String(dOrder?.status || "").toLowerCase();
+      if (st.includes("cancel")) {
+        completedExactTimeCache.set(code, { cancelled: true, ms: 0 });
+        return { cancelled: true, ms: 0 };
+      }
+      const trIso = dOrder?.current_state_transition || dOrder?.event_timestamp || "";
+      const trMs = trIso ? new Date(trIso).getTime() : 0;
+      if (trMs > 946684800000) {
+        const resObj = { cancelled: false, ms: trMs };
+        completedExactTimeCache.set(code, resObj);
+        return resObj;
+      }
+    } catch {}
+
+    const placedIso = rec?.order?.placed_at || "";
+    const fallbackMs = placedIso ? new Date(placedIso).getTime() : 0;
+    return fallbackMs > 946684800000 ? { cancelled: false, ms: fallbackMs } : null;
+  }
+
+  async function ingestCompletedRecordsBatch(recs, unionZoneIds, hasManialUnion, hasTahrirUnion) {
+    const cutoffMs = Date.now() - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
+    const zoneMatched = recs.filter((rec) => {
+      const st = String(rec?.order?.status || rec?.status || "completed").toLowerCase();
+      if (st.includes("cancel")) return false;
+      return doesRecordMatchSessionZones(rec, unionZoneIds, hasManialUnion, hasTahrirUnion);
+    });
+
+    for (let i = 0; i < zoneMatched.length; i += 8) {
+      const chunk = zoneMatched.slice(i, i + 8);
       await Promise.allSettled(
-        batch.map(async ({ orderKey, orderCode }) => {
-          if (exactCompletedMetaCache.has(orderKey)) return;
-          for (let attempt = 0; attempt < 2; attempt++) {
-            try {
-              const detailData = await hurrierGet(
-                `/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(orderKey)}`
-              );
-              const dOrder = detailData?.order || detailData || {};
-              const stLower = String(dOrder.status || "").toLowerCase();
-
-              if (stLower.includes("cancel")) {
-                exactCompletedMetaCache.set(orderKey, {
-                  completedAtMs: 0,
-                  cancelled: true,
-                  cachedAt: Date.now()
-                });
-                return;
-              }
-
-              if (stLower && stLower !== "completed") {
-                return;
-              }
-
-              let exactMs =
-                parseValidTimestampMs(dOrder.current_state_transition) ||
-                parseValidTimestampMs(dOrder.event_timestamp) ||
-                parseValidTimestampMs(dOrder.completed_at) ||
-                parseValidTimestampMs(dOrder.delivered_at);
-
-              if (!exactMs) {
-                try {
-                  const delivData = await hurrierGet(
-                    `/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(orderCode)}`
-                  );
-                  const deliveries = Array.isArray(delivData?.deliveries) ? delivData.deliveries : [];
-                  for (const del of deliveries) {
-                    const transitions = Array.isArray(del?.transitions) ? del.transitions : [];
-                    for (let t = transitions.length - 1; t >= 0; t--) {
-                      const tr = transitions[t];
-                      if (String(tr?.to_state || "").toLowerCase() === "completed") {
-                        exactMs = parseValidTimestampMs(tr?.metadata?.performed_at);
-                        if (exactMs) break;
-                      }
-                    }
-                    if (exactMs) break;
-                  }
-                } catch {}
-              }
-
-              if (exactMs > 0) {
-                exactCompletedMetaCache.set(orderKey, {
-                  completedAtMs: exactMs,
-                  cancelled: false,
-                  cachedAt: Date.now(),
-                  detailOrder: dOrder
-                });
-                return;
-              }
-            } catch {
-              await new Promise((r) => setTimeout(r, 200));
-            }
+        chunk.map(async (rec) => {
+          const code = getCompletedRecordCode(rec);
+          if (!code) return;
+          const exact = await resolveExactCompletedTimeMs(rec);
+          if (!exact || exact.cancelled || !exact.ms) {
+            rollingCompletedPool.delete(code);
+            return;
+          }
+          if (exact.ms >= cutoffMs) {
+            rollingCompletedPool.set(code, {
+              ...rec,
+              __completed_at_ms: exact.ms
+            });
           }
         })
       );
     }
   }
 
-  async function ingestCompletedRecordsBatch(records, unionZoneSet, hasManialUnion, hasTahrirUnion) {
-    if (!Array.isArray(records) || records.length === 0) return 0;
-
-    const candidates = [];
-    for (const rec of records) {
-      const order = rec?.order || {};
-      const stLower = String(order.status || rec?.status || "").toLowerCase();
-      if (stLower.includes("cancel")) continue;
-      if (!doesRecordMatchSessionZones(rec, unionZoneSet, hasManialUnion, hasTahrirUnion)) continue;
-
-      const orderKey = String(
-        order.confirmation_number ||
-          order.code ||
-          String(order.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
-          order.id ||
-          ""
-      ).trim();
-      if (!orderKey) continue;
-      const orderCode = String(order.order_code || `HF_EG${orderKey}`).trim();
-      candidates.push({ orderKey, orderCode, rec });
-    }
-
-    if (candidates.length === 0) return 0;
-
-    const uncached = candidates.filter((c) => !exactCompletedMetaCache.has(c.orderKey));
-    if (uncached.length > 0) {
-      await resolveExactCompletedMetaForOrders(uncached);
-    }
-
-    const cutoffMs = Date.now() - ROLLING_COMPLETED_WINDOW_MS - ROLLING_COMPLETED_GRACE_MS;
-    let added = 0;
-
-    for (const { orderKey, rec } of candidates) {
-      const meta = exactCompletedMetaCache.get(orderKey);
-      if (!meta) continue;
-      if (meta.cancelled) {
-        rollingCompletedPool.delete(orderKey);
-        continue;
-      }
-      if (meta.completedAtMs >= cutoffMs) {
-        rollingCompletedPool.set(orderKey, {
-          ...rec,
-          __completed_at_ms: meta.completedAtMs
-        });
-        added++;
-      }
-    }
-    return added;
-  }
-
-  async function safeFetchCompletedPage(dateStr, page) {
-    const url = `${BASE_API}/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${page}&per_page=50`;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const res = await fetch(url, {
-          method: "GET",
-          credentials: "include",
-          headers: getHurrierAuthHeaders()
-        });
-        if (res.status === 400 || res.status === 404) {
-          return { ok: true, records: [] };
-        }
-        if (res.status === 429 || res.status >= 500) {
-          await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
-          continue;
-        }
-        if (!res.ok) return { ok: false, records: null };
-        const data = await res.json();
-        return { ok: true, records: Array.isArray(data?.records) ? data.records : [] };
-      } catch {
-        await new Promise((r) => setTimeout(r, 200));
-      }
-    }
-    return { ok: false, records: null };
-  }
-
-  async function discoverLastCompletedPage(dateStr) {
-    let low = 1;
-    let high = Math.max(1, lastKnownCompletedPage[dateStr] || 24);
-    let lastNonEmptyRecords = [];
-
-    const startRes = await safeFetchCompletedPage(dateStr, high);
-    if (!startRes.ok) {
-      return { ok: false, lastPage: lastKnownCompletedPage[dateStr] || 0, tailRecords: [] };
-    }
-
-    const startRecs = startRes.records || [];
-    if (startRecs.length === 0) {
-      high = Math.max(1, high - 1);
-      const p1 = await safeFetchCompletedPage(dateStr, 1);
-      const r1 = p1.ok && Array.isArray(p1.records) ? p1.records : [];
-      if (r1.length === 0) {
-        return { ok: p1.ok, lastPage: 0, tailRecords: [] };
-      }
-      lastNonEmptyRecords = r1;
-      if (r1.length < 50) {
-        lastKnownCompletedPage[dateStr] = 1;
-        return { ok: true, lastPage: 1, tailRecords: r1 };
-      }
-    } else {
-      low = high;
-      lastNonEmptyRecords = startRecs;
-      if (startRecs.length < 50) {
-        lastKnownCompletedPage[dateStr] = high;
-        return { ok: true, lastPage: high, tailRecords: startRecs };
-      }
-      let step = 48;
-      while (high < 60000) {
-        const nextProbe = Math.min(60000, high + step);
-        const pRes = await safeFetchCompletedPage(dateStr, nextProbe);
-        if (!pRes.ok) {
-          high = nextProbe - 1;
-          break;
-        }
-        const pRecs = pRes.records || [];
-        if (pRecs.length > 0) {
-          low = nextProbe;
-          lastNonEmptyRecords = pRecs;
-          if (pRecs.length < 50) {
-            lastKnownCompletedPage[dateStr] = nextProbe;
-            return { ok: true, lastPage: nextProbe, tailRecords: pRecs };
-          }
-          high = nextProbe;
-          step = Math.min(2048, step * 2);
-        } else {
-          high = nextProbe - 1;
-          break;
-        }
-      }
-    }
-
-    let best = low;
-    while (low <= high) {
-      const mid = Math.floor((low + high) / 2);
-      const mRes = await safeFetchCompletedPage(dateStr, mid);
-      if (!mRes.ok) {
-        high = mid - 1;
-        continue;
-      }
-      const mRecs = mRes.records || [];
-      if (mRecs.length > 0) {
-        best = mid;
-        lastNonEmptyRecords = mRecs;
-        if (mRecs.length < 50) break;
-        low = mid + 1;
-      } else {
-        high = mid - 1;
-      }
-    }
-
-    if (best >= 1) lastKnownCompletedPage[dateStr] = best;
-    return { ok: true, lastPage: Math.max(1, best), tailRecords: lastNonEmptyRecords };
-  }
-
-  async function checkTransitionedLiveOrdersForCompletion(currentActiveAndDispRecords, unionZoneIds, hasManialUnion, hasTahrirUnion) {
+  async function checkTransitionedLiveOrdersForCompletion(
+    liveRecs,
+    unionZoneIds,
+    hasManialUnion,
+    hasTahrirUnion
+  ) {
     const currentCodes = new Set();
-    for (const rec of currentActiveAndDispRecords) {
+    const nextWatched = new Map();
+
+    for (const rec of liveRecs) {
       if (!doesRecordMatchSessionZones(rec, unionZoneIds, hasManialUnion, hasTahrirUnion)) continue;
-      const order = rec?.order || {};
-      const code = String(
-        order.code ||
-          order.confirmation_number ||
-          String(order.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
-          ""
-      ).trim();
+      const code = getCompletedRecordCode(rec);
       if (code) {
         currentCodes.add(code);
-        previousWatchedLiveOrders.set(code, rec);
+        nextWatched.set(code, rec);
       }
     }
 
-    const vanished = [];
+    const disappeared = [];
     for (const [code, prevRec] of previousWatchedLiveOrders.entries()) {
-      if (!currentCodes.has(code)) {
-        previousWatchedLiveOrders.delete(code);
-        if (!rollingCompletedPool.has(code)) {
-          vanished.push({ code, prevRec });
-        }
+      if (!currentCodes.has(code) && !rollingCompletedPool.has(code)) {
+        disappeared.push({ code, prevRec });
       }
     }
 
-    if (vanished.length === 0) return;
+    previousWatchedLiveOrders.clear();
+    for (const [k, v] of nextWatched.entries()) {
+      previousWatchedLiveOrders.set(k, v);
+    }
+
+    if (disappeared.length === 0) return;
 
     await Promise.allSettled(
-      vanished.slice(0, 8).map(async ({ code, prevRec }) => {
+      disappeared.slice(0, 8).map(async ({ code, prevRec }) => {
         try {
-          const detailData = await hurrierGet(
-            `/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(code)}`
-          );
-          const dOrder = detailData?.order || detailData || {};
-          if (String(dOrder.status || "").toLowerCase() === "completed") {
-            const exactMs =
-              parseValidTimestampMs(dOrder.current_state_transition) ||
-              parseValidTimestampMs(dOrder.event_timestamp) ||
-              Date.now();
-            exactCompletedMetaCache.set(code, {
-              completedAtMs: exactMs,
-              cancelled: false,
-              cachedAt: Date.now()
-            });
-            const prevOrder = prevRec?.order || {};
-            rollingCompletedPool.set(code, {
-              order: {
-                ...prevOrder,
-                ...dOrder,
-                confirmation_number: code,
-                status: "completed",
-                drop_off_address: {
-                  ...(prevOrder.dropoff_address || prevOrder.drop_off_address || {}),
-                  ...(dOrder.drop_off_address || {}),
-                  starting_points: prevRec.starting_points || []
-                }
-              },
-              primary_delivery: {
-                courier_name: prevRec.courier_name || "-",
-                courier_id: prevRec.courier_id || null,
-                delivery_distance: prevRec.distance || 0
-              },
-              primary_delivery_timings: {},
-              __completed_at_ms: exactMs
-            });
-          }
+          const det = await hurrierGet(`/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(code)}`);
+          const dOrder = det?.order || det;
+          const st = String(dOrder?.status || "").toLowerCase();
+          if (st !== "completed") return;
+          const trIso = dOrder?.current_state_transition || dOrder?.event_timestamp || "";
+          const trMs = trIso ? new Date(trIso).getTime() : Date.now();
+          completedExactTimeCache.set(code, { cancelled: false, ms: trMs });
+          const synthRec = {
+            order: {
+              ...(prevRec?.order || {}),
+              ...dOrder,
+              confirmation_number: code,
+              status: "completed",
+              drop_off_address: {
+                ...(dOrder?.drop_off_address || prevRec?.order?.dropoff_address || {}),
+                starting_points: prevRec?.starting_points || []
+              }
+            },
+            primary_delivery: {
+              courier_name: prevRec?.courier_name || "",
+              courier_id: prevRec?.courier_id || null,
+              delivery_distance: prevRec?.distance || 0
+            },
+            primary_delivery_timings: {},
+            __completed_at_ms: trMs
+          };
+          rollingCompletedPool.set(code, synthRec);
         } catch {}
       })
     );
   }
 
-  function triggerRollingCompletedSyncIfNeeded(unionZoneIds, hasManialUnion, hasTahrirUnion) {
-    const sortedIds = Array.from(unionZoneIds).sort((a, b) => a - b);
-    const zoneSig = sortedIds.join(",");
+  async function syncRollingCompletedOrdersPool(
+    unionZoneIds,
+    hasManialUnion,
+    hasTahrirUnion,
+    isFullSweep
+  ) {
+    const dates = getCairoDateStringsForWindow();
+    const placedStopCutoffMs = Date.now() - 4.5 * 3600 * 1000;
 
-    pruneRollingCompletedPool(unionZoneIds, hasManialUnion, hasTahrirUnion);
+    for (const dateStr of dates) {
+      const lastPage = await findLastCompletedPageForDate(dateStr);
+      if (lastPage <= 0) continue;
 
-    const hasNewZonesToCalculate = sortedIds.some((id) => !backfilledZoneIds.has(id));
-    if (zoneSig !== currentSyncZoneSig) {
-      currentSyncZoneSig = zoneSig;
-      if (hasNewZonesToCalculate) {
-        completedSyncGeneration++;
-        isCompletedSyncInProgress = false;
+      const maxPagesToScan = isFullSweep ? 45 : 8;
+      const minPage = Math.max(1, lastPage - maxPagesToScan + 1);
+
+      for (let p = lastPage; p >= minPage; p -= 5) {
+        const batchPages = [];
+        for (let k = 0; k < 5 && p - k >= minPage; k++) {
+          batchPages.push(p - k);
+        }
+        const pageArrays = await Promise.all(
+          batchPages.map((pg) => fetchCompletedPage(dateStr, pg))
+        );
+        const flatRecs = pageArrays.flat();
+        if (flatRecs.length === 0) break;
+
+        await ingestCompletedRecordsBatch(
+          flatRecs,
+          unionZoneIds,
+          hasManialUnion,
+          hasTahrirUnion
+        );
+
+        let oldestPlacedInBatch = Infinity;
+        for (const r of flatRecs) {
+          const pMs = r?.order?.placed_at ? new Date(r.order.placed_at).getTime() : 0;
+          if (pMs > 0 && pMs < oldestPlacedInBatch) oldestPlacedInBatch = pMs;
+        }
+        if (oldestPlacedInBatch < placedStopCutoffMs) {
+          break;
+        }
       }
     }
 
-    const now = Date.now();
-    if (isCompletedSyncInProgress) return;
-    if (!hasNewZonesToCalculate && now - lastRollingCompletedSyncAt < 12000) return;
-
-    isCompletedSyncInProgress = true;
-    lastRollingCompletedSyncAt = now;
-    const myGen = ++completedSyncGeneration;
-
-    (async () => {
-      try {
-        const { todayStr, yesterdayStr, cairoHour } = getCairoDateStringsForCompleted();
-        const placedCutoffMs = Date.now() - 4 * 3600 * 1000;
-
-        const scanSelectedZonesForDate = async (dateStr, maxPagesToWalk) => {
-          const disc = await discoverLastCompletedPage(dateStr);
-          if (myGen !== completedSyncGeneration) return false;
-          if (!disc.ok || disc.lastPage <= 0) return false;
-
-          if (disc.tailRecords.length > 0) {
-            await ingestCompletedRecordsBatch(
-              disc.tailRecords,
-              unionZoneIds,
-              hasManialUnion,
-              hasTahrirUnion
-            );
-          }
-
-          let curPage = disc.lastPage - 1;
-          let walked = 1;
-          while (curPage >= 1 && walked < maxPagesToWalk && myGen === completedSyncGeneration) {
-            const batchPages = [];
-            for (
-              let p = curPage;
-              p >= 1 && batchPages.length < 6 && walked < maxPagesToWalk;
-              p--, walked++
-            ) {
-              batchPages.push(p);
-              curPage = p - 1;
-            }
-            const pageResults = await Promise.all(
-              batchPages.map((pg) => safeFetchCompletedPage(dateStr, pg))
-            );
-            if (myGen !== completedSyncGeneration) return false;
-
-            let oldestPageTooOld = false;
-            for (let i = 0; i < pageResults.length; i++) {
-              const pRes = pageResults[i];
-              if (pRes.ok && Array.isArray(pRes.records) && pRes.records.length > 0) {
-                await ingestCompletedRecordsBatch(
-                  pRes.records,
-                  unionZoneIds,
-                  hasManialUnion,
-                  hasTahrirUnion
-                );
-                if (i === pageResults.length - 1) {
-                  const newestPlacedMs = parseValidTimestampMs(
-                    pRes.records[pRes.records.length - 1]?.order?.placed_at
-                  );
-                  if (newestPlacedMs > 0 && newestPlacedMs < placedCutoffMs) {
-                    oldestPageTooOld = true;
-                  }
-                }
-              }
-            }
-            if (oldestPageTooOld) break;
-          }
-          return true;
-        };
-
-        const doMidWindowSweep = Date.now() - lastMidWindowSweepAt >= 60000;
-        if (doMidWindowSweep) lastMidWindowSweepAt = Date.now();
-        const pagesLimit = hasNewZonesToCalculate ? 2500 : doMidWindowSweep ? 30 : 8;
-
-        const okToday = await scanSelectedZonesForDate(todayStr, pagesLimit);
-
-        if (
-          myGen === completedSyncGeneration &&
-          cairoHour < 4 &&
-          (hasNewZonesToCalculate || yesterdayCompletedBackfilledForSig !== `${yesterdayStr}|${zoneSig}`)
-        ) {
-          const okYest = await scanSelectedZonesForDate(yesterdayStr, 400);
-          if (okYest && myGen === completedSyncGeneration) {
-            yesterdayCompletedBackfilledForSig = `${yesterdayStr}|${zoneSig}`;
-          }
-        }
-
-        if (okToday && myGen === completedSyncGeneration) {
-          sortedIds.forEach((id) => backfilledZoneIds.add(id));
-        }
-      } catch {} finally {
-        if (myGen === completedSyncGeneration) {
-          isCompletedSyncInProgress = false;
-        }
+    const pruneCutoffMs = Date.now() - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
+    for (const [code, rec] of rollingCompletedPool.entries()) {
+      if (Number(rec?.__completed_at_ms || 0) < pruneCutoffMs) {
+        rollingCompletedPool.delete(code);
       }
-    })();
+    }
+  }
+
+  function triggerRollingCompletedSyncIfNeeded(unionZoneIds, hasManialUnion, hasTahrirUnion) {
+    if (isCompletedSyncInProgress) return;
+    const sig = Array.from(unionZoneIds).sort((a, b) => a - b).join(",");
+    const zonesChanged = sig !== lastCompletedZonesSignature;
+    const now = Date.now();
+
+    if (!zonesChanged && now - lastCompletedSweepAt < 15000) return;
+
+    const isFullSweep = zonesChanged || rollingCompletedPool.size === 0;
+    lastCompletedZonesSignature = sig;
+    lastCompletedSweepAt = now;
+    isCompletedSyncInProgress = true;
+
+    syncRollingCompletedOrdersPool(unionZoneIds, hasManialUnion, hasTahrirUnion, isFullSweep)
+      .catch(() => {})
+      .finally(() => {
+        isCompletedSyncInProgress = false;
+      });
   }
 
   // ============================================================================
-  // 10) FAST ON-DEMAND WATCHER (Order Details, Live Rider Status, Rider Search)
+  // 10) FAST ON-DEMAND WATCHER (Order Details, Exact Courier Detail + Balance, Rider Search)
   // ============================================================================
   let lastOrderReqHandledAt = 0;
   let lastCourierReqHandledAt = 0;
   let lastRiderSearchReqId = "";
   let isOnDemandBusy = false;
 
-  function normalizeCourierObjectForDashboard(rawObj, fallbackId, fallbackName) {
+  function normalizeCourierObjectForDashboard(rawObj, balanceVal, fallbackId, fallbackName) {
     let c = rawObj;
     let guard = 0;
     while (c && typeof c === "object" && (c.courier || c.data) && guard < 4) {
@@ -1234,114 +1195,130 @@
     }
     c = c && typeof c === "object" ? c : {};
 
-    const tnw =
-      c.temp_not_working ||
-      c.temporary_not_working ||
-      c.temp_break ||
-      c.not_working ||
-      c.current_shift?.temp_not_working ||
-      null;
+    const meta = c.status_meta_data || c.current_state_metadata || {};
+    const rawSt = String(
+      typeof c.status === "string" ? c.status : c.status?.state || c.status?.name || ""
+    )
+      .trim()
+      .toLowerCase();
 
-    const statusUntil =
-      (tnw && typeof tnw === "object" ? tnw.until || tnw.end_at || tnw.ends_at || tnw.expires_at : "") ||
-      c.temp_not_working_until ||
-      c.not_working_until ||
-      c.status_until ||
-      "";
-
-    const performedBy =
-      (tnw && typeof tnw === "object" ? tnw.performed_by || tnw.created_by || tnw.actor : "") ||
-      c.temp_not_working_performed_by ||
-      c.performed_by ||
-      "";
-
-    const statusReason =
-      (tnw && typeof tnw === "object" ? tnw.reason || tnw.reason_text : "") ||
-      c.temp_not_working_reason ||
-      c.not_working_reason ||
-      c.reason ||
-      "";
-
-    const isTnwActive =
-      c.is_temp_not_working === true ||
-      c.is_temporary_not_working === true ||
-      c.temp_not_working === true ||
-      (tnw &&
-        typeof tnw === "object" &&
-        tnw.active !== false &&
-        tnw.is_active !== false &&
-        (tnw.active === true || tnw.is_active === true || Boolean(statusUntil) || Boolean(statusReason)));
-
-    let statusStr = "";
-    if (isTnwActive) {
+    let statusStr = "Working";
+    if (
+      rawSt === "break" ||
+      rawSt.includes("temp_not_working") ||
+      rawSt.includes("temporary_not_working") ||
+      rawSt.includes("temp_break") ||
+      rawSt.includes("temp_offline")
+    ) {
       statusStr = "Temporary not working";
-    } else {
-      statusStr = String(
-        (typeof c.status === "string" ? c.status : c.status?.state || c.status?.name) ||
-          (typeof c.state === "string" ? c.state : c.state?.name) ||
-          c.working_status ||
-          c.courier_status ||
-          c.current_shift?.status ||
-          "Working"
-      );
+    } else if (rawSt === "ending") {
+      statusStr = "Ending";
+    } else if (rawSt === "ready" || rawSt === "starting") {
+      statusStr = "Starting";
+    } else if (rawSt === "late") {
+      statusStr = "Late";
+    } else if (rawSt === "not_working" || rawSt === "offline") {
+      statusStr = "Not working";
+    } else if (rawSt === "working") {
+      statusStr = "Working";
+    } else if (rawSt) {
+      statusStr = rawSt;
     }
+
+    const isBreakOrOffline =
+      statusStr === "Temporary not working" || statusStr === "Not working";
+
+    const vehicleStr =
+      typeof c.vehicle === "string" && c.vehicle.trim()
+        ? c.vehicle.trim()
+        : c.vehicle?.vehicle_type_name
+        ? [c.vehicle.vehicle_type_name, c.vehicle.vehicle_bag_type_name].filter(Boolean).join("-")
+        : String(c.vehicle_full || c.vehicle_type || "Bike-Standard box");
 
     return {
       courierId: String(c.id || c.courier_id || fallbackId || ""),
-      userId: String(c.user_id || c.userId || c.id || fallbackId || ""),
+      userId: String(c.user_id || c.userId || ""),
       name: String(c.name || c.courier_name || fallbackName || "").trim(),
       phone: String(c.phone_number || c.mobile || c.phone || "").trim(),
-      vehicle: String(
-        c.vehicle_type || c.vehicle?.name || (typeof c.vehicle === "string" ? c.vehicle : "") || "Motorbike"
-      ),
-      contract: String(
-        c.contract_type || c.contract?.name || (typeof c.contract === "string" ? c.contract : "") || ""
-      ),
-      balance: c.balance ?? c.wallet_balance ?? c.cash_balance ?? null,
+      vehicle: vehicleStr,
+      contract: String(c.contract_info?.type || c.contract_type || "").trim(),
+      contractName: String(c.contract_info?.name || c.contract_name || "").trim(),
+      balance: balanceVal ?? c.balance ?? null,
+      rawStatus: rawSt,
       status: statusStr,
-      statusUntil: String(statusUntil || ""),
-      performedBy: String(performedBy || ""),
-      statusReason: String(statusReason || "")
+      statusUntil: isBreakOrOffline ? String(c.status_until || meta.ended_at || "") : "",
+      performedBy: isBreakOrOffline ? String(meta.performed_by || "") : "",
+      statusReason: isBreakOrOffline ? String(meta.reason || "") : ""
     };
   }
 
-  async function fetchLiveCourierDetailFromHurrier(cid, cname) {
-    const endpointsToTry = [
-      `/dispatcher-dashboard/couriers/${encodeURIComponent(cid)}`,
-      `/dispatcher-dashboard/couriers/detail?id=${encodeURIComponent(cid)}`,
-      `/hurrier/v1/couriers/${encodeURIComponent(cid)}`
-    ];
+  async function fetchLiveCourierDetailAndBalance(idOrUserId, cname) {
+    const cleanKey = String(idOrUserId || "").trim();
+    let realCourierId = cleanKey;
 
-    for (const ep of endpointsToTry) {
-      try {
-        const data = await hurrierGet(ep);
-        if (data && typeof data === "object") {
-          return data;
+    if (!couriersByCourierIdMap.has(cleanKey) && couriersByUserIdMap.has(cleanKey)) {
+      realCourierId = couriersByUserIdMap.get(cleanKey).id;
+    }
+
+    try {
+      const detailData = await hurrierGet(
+        `/dispatcher-dashboard/courier/detail?courier_id=${encodeURIComponent(realCourierId)}`
+      );
+      const cObj = detailData?.courier || detailData;
+      if (cObj && (cObj.id || cObj.user_id || cObj.phone_number)) {
+        let balanceVal = null;
+        if (cObj.user_id) {
+          try {
+            const balData = await hurrierGet(
+              `/dispatcher-dashboard/v3/couriers/${encodeURIComponent(cObj.user_id)}/balance`
+            );
+            if (balData && balData.balance !== undefined) {
+              balanceVal = balData.balance;
+            }
+          } catch {}
         }
-      } catch {}
+        return { courierObj: cObj, balanceVal };
+      }
+    } catch {}
+
+    const cachedFromZone =
+      couriersByCourierIdMap.get(realCourierId) ||
+      couriersByUserIdMap.get(cleanKey) ||
+      (cname
+        ? Array.from(couriersByCourierIdMap.values()).find(
+            (x) => normZoneStr(x.name) === normZoneStr(cname)
+          )
+        : null);
+
+    if (cachedFromZone) {
+      let balanceVal = null;
+      if (cachedFromZone.user_id) {
+        try {
+          const balData = await hurrierGet(
+            `/dispatcher-dashboard/v3/couriers/${encodeURIComponent(cachedFromZone.user_id)}/balance`
+          );
+          if (balData && balData.balance !== undefined) {
+            balanceVal = balData.balance;
+          }
+        } catch {}
+      }
+      return { courierObj: cachedFromZone, balanceVal };
     }
 
-    const searchTerms = [cid, cname].filter(Boolean);
-    for (const term of searchTerms) {
-      try {
-        const sData = await hurrierGet(
-          `/dispatcher-dashboard/couriers?page=1&per_page=20&search=${encodeURIComponent(term)}`
-        );
-        const list = Array.isArray(sData?.couriers)
-          ? sData.couriers
-          : Array.isArray(sData?.records)
-          ? sData.records
-          : Array.isArray(sData)
-          ? sData
-          : [];
-        const match =
-          list.find(
-            (x) => String(x?.id || x?.courier_id) === String(cid) || String(x?.user_id) === String(cid)
-          ) || list[0];
-        if (match) return match;
-      } catch {}
-    }
     return null;
+  }
+
+  function normalizePhoneDigitsForMatch(rawStr) {
+    const digits = String(rawStr || "").replace(/\D/g, "");
+    if (!digits) return { rawDigits: "", core10: "" };
+    let core = digits;
+    if (core.startsWith("0020") && core.length >= 13) core = core.slice(4);
+    else if (core.startsWith("20") && core.length === 12 && core[2] === "1") core = core.slice(2);
+    else if (core.startsWith("0") && core.length === 11 && core[1] === "1") core = core.slice(1);
+    return {
+      rawDigits: digits,
+      core10: core.length === 10 && core.startsWith("1") ? core : ""
+    };
   }
 
   async function runOnDemandRequestsLoop() {
@@ -1372,57 +1349,82 @@
       const cReq = cfg.courier_detail_req;
       if (cReq && cReq.courierId && Number(cReq.requestedAt || 0) > lastCourierReqHandledAt) {
         lastCourierReqHandledAt = Number(cReq.requestedAt);
-        const cid = String(cReq.courierId).trim();
-        const rawCourier = await fetchLiveCourierDetailFromHurrier(cid, cReq.courierName || "");
-        if (rawCourier) {
-          const normalized = normalizeCourierObjectForDashboard(rawCourier, cid, cReq.courierName || "");
-          await firebaseReq("PUT", `/courier_details/${encodeURIComponent(cid)}`, {
-            courier: rawCourier?.courier || rawCourier,
+        const reqKey = String(cReq.courierId).trim();
+        const liveRes = await fetchLiveCourierDetailAndBalance(reqKey, cReq.courierName || "");
+        if (liveRes && liveRes.courierObj) {
+          const normalized = normalizeCourierObjectForDashboard(
+            liveRes.courierObj,
+            liveRes.balanceVal,
+            reqKey,
+            cReq.courierName || ""
+          );
+          const payload = {
+            courier: liveRes.courierObj,
+            balance: liveRes.balanceVal,
             normalized,
+            requestedAt: Number(cReq.requestedAt),
             updatedAt: Date.now()
-          });
+          };
+          await firebaseReq("PUT", `/courier_details/${encodeURIComponent(reqKey)}`, payload);
+          if (normalized.courierId && normalized.courierId !== reqKey) {
+            await firebaseReq(
+              "PUT",
+              `/courier_details/${encodeURIComponent(normalized.courierId)}`,
+              payload
+            );
+          }
         }
       }
 
       const rsReq = cfg.rider_search_req;
       if (rsReq && rsReq.reqId && rsReq.reqId !== lastRiderSearchReqId && rsReq.query) {
         lastRiderSearchReqId = rsReq.reqId;
-        const q = String(rsReq.query).trim();
-        const foundList = [];
-        const seenKeys = new Set();
+        const rawQ = String(rsReq.query).trim();
+        const cleanDigits = rawQ.replace(/^#/, "");
+        const qLower = rawQ.toLowerCase();
+        const qPhone = normalizePhoneDigitsForMatch(rawQ);
 
-        const pushCandidate = (rawC) => {
-          if (!rawC) return;
-          const norm = normalizeCourierObjectForDashboard(rawC, "", "");
-          const k = norm.courierId || norm.userId || norm.name;
-          if (k && !seenKeys.has(k)) {
-            seenKeys.add(k);
-            foundList.push(norm);
+        const matchedIds = new Set();
+        const candidateIds = [];
+
+        for (const c of couriersByCourierIdMap.values()) {
+          const cPhone = normalizePhoneDigitsForMatch(c.phone_number || "");
+          const uidMatch =
+            c.user_id &&
+            (c.user_id === cleanDigits || (cleanDigits.length >= 5 && c.user_id.includes(cleanDigits)));
+          const cidMatch = c.id === cleanDigits;
+          const phoneMatch =
+            (qPhone.core10 && cPhone.core10 === qPhone.core10) ||
+            (qPhone.rawDigits.length >= 7 && cPhone.rawDigits.includes(qPhone.rawDigits));
+          const nameMatch =
+            c.name && !/^\d+$/.test(cleanDigits) && c.name.toLowerCase().includes(qLower);
+
+          if ((uidMatch || cidMatch || phoneMatch || nameMatch) && !matchedIds.has(c.id)) {
+            matchedIds.add(c.id);
+            candidateIds.push(c.id);
           }
-        };
-
-        try {
-          const sData = await hurrierGet(
-            `/dispatcher-dashboard/couriers?page=1&per_page=30&search=${encodeURIComponent(q)}`
-          );
-          const arr = Array.isArray(sData?.couriers)
-            ? sData.couriers
-            : Array.isArray(sData?.records)
-            ? sData.records
-            : Array.isArray(sData)
-            ? sData
-            : [];
-          arr.forEach(pushCandidate);
-        } catch {}
-
-        if (/^\d{3,10}$/.test(q) && foundList.length === 0) {
-          const direct = await fetchLiveCourierDetailFromHurrier(q, "");
-          if (direct) pushCandidate(direct);
         }
+
+        if (/^\d{3,10}$/.test(cleanDigits) && candidateIds.length === 0) {
+          candidateIds.push(cleanDigits);
+        }
+
+        const foundList = [];
+        const topIds = candidateIds.slice(0, 6);
+        await Promise.allSettled(
+          topIds.map(async (cid) => {
+            const liveRes = await fetchLiveCourierDetailAndBalance(cid, "");
+            if (liveRes && liveRes.courierObj) {
+              foundList.push(
+                normalizeCourierObjectForDashboard(liveRes.courierObj, liveRes.balanceVal, cid, "")
+              );
+            }
+          })
+        );
 
         await firebaseReq("PUT", "/config/rider_search_res", {
           reqId: rsReq.reqId,
-          query: q,
+          query: rawQ,
           results: foundList,
           updatedAt: Date.now()
         });
@@ -1431,7 +1433,7 @@
       isOnDemandBusy = false;
     }
   }
-  setInterval(runOnDemandRequestsLoop, 1200);
+  setInterval(runOnDemandRequestsLoop, 700);
 
   // ============================================================================
   // 11) MAIN 2-SECOND LIVE SYNC CYCLE
@@ -1492,17 +1494,7 @@
       const hasManialUnion = MANIAL_FAMILY_IDS.some((id) => unionZoneIds.has(id));
       const hasTahrirUnion = unionZoneIds.has(10022) || unionZoneIds.has(10163);
 
-      const anyoneViewingDispatcherTab = activeSessions.some(
-        (s) => s.activeTab === "Dispatcher Dashboard"
-      );
-      if (anyoneViewingDispatcherTab || now - lastDispatchersSyncAt >= 20000) {
-        lastDispatchersSyncAt = now;
-        hurrierGet("/issue-service/dispatcher_dashboard")
-          .then((list) => {
-            if (Array.isArray(list)) cachedDispatchersList = list;
-          })
-          .catch(() => {});
-      }
+      await syncSelectedZonesCouriers(unionZoneIds, hasManialUnion, hasTahrirUnion);
 
       const doFullActiveSweep =
         !cachedTabRecordsMap.has("Active") || now - lastFullActiveSweepAt >= 6000;
@@ -1614,7 +1606,24 @@
 
           const sessTabRecords = {};
           const sessCounts = {};
-          const activeCouriersMap = new Map();
+          const sessCouriersMap = new Map();
+
+          const sessExpandedZoneSet = new Set(sessZoneSet);
+          if (sessHasManial) MANIAL_FAMILY_IDS.forEach((id) => sessExpandedZoneSet.add(id));
+          if (sessHasTahrir) {
+            sessExpandedZoneSet.add(10022);
+            sessExpandedZoneSet.add(10163);
+          }
+
+          for (const zid of sessExpandedZoneSet) {
+            const zEntry = zoneCouriersCacheMap.get(Number(zid));
+            if (zEntry && Array.isArray(zEntry.couriers)) {
+              zEntry.couriers.forEach((c) => {
+                const key = `${zid}_${c.id}`;
+                sessCouriersMap.set(key, c);
+              });
+            }
+          }
 
           for (const ep of DELIVERY_ENDPOINTS) {
             const rawList = latestTabRecords[ep.tab] || [];
@@ -1627,28 +1636,25 @@
             if (ep.tab === "Active" || ep.tab === "Dispatched") {
               matched.forEach((rec) => {
                 const cid = rec?.courier_id ? String(rec.courier_id) : "";
-                if (!cid) return;
-                const { ids: recZIds, names: recZNames } = extractRecordZones(rec);
-                const prev = activeCouriersMap.get(cid) || {
-                  id: cid,
-                  courier_id: cid,
-                  name: rec.courier_name || `Courier #${cid}`,
-                  status: "Working",
-                  vehicle_type: "Motorbike",
-                  active_orders_count: 0,
-                  dispatched_orders_count: 0,
-                  zoneIds: [],
-                  zoneNames: []
-                };
-                if (ep.tab === "Active") prev.active_orders_count += 1;
-                if (ep.tab === "Dispatched") prev.dispatched_orders_count += 1;
-                recZIds.forEach((zid) => {
-                  if (!prev.zoneIds.includes(zid)) prev.zoneIds.push(zid);
-                });
-                recZNames.forEach((zn) => {
-                  if (!prev.zoneNames.includes(zn)) prev.zoneNames.push(zn);
-                });
-                activeCouriersMap.set(cid, prev);
+                if (!cid || couriersByCourierIdMap.has(cid)) return;
+                const fallbackKey = `ord_${cid}`;
+                if (!sessCouriersMap.has(fallbackKey)) {
+                  const { ids: recZIds, names: recZNames } = extractRecordZones(rec);
+                  sessCouriersMap.set(fallbackKey, {
+                    id: cid,
+                    courier_id: cid,
+                    user_id: "",
+                    name: rec.courier_name || `Courier #${cid}`,
+                    phone_number: "",
+                    status: "",
+                    vehicle_type: "Bike",
+                    vehicle_full: "Bike-Standard box",
+                    active_orders_count: ep.tab === "Active" ? 1 : 0,
+                    starting_point_id: 0,
+                    zoneIds: recZIds,
+                    zoneNames: recZNames
+                  });
+                }
               });
             }
           }
@@ -1668,7 +1674,7 @@
             if (sessHasTahrir && nl.startsWith("tahrir")) return true;
             return false;
           });
-          const sessCouriers = Array.from(activeCouriersMap.values());
+          const sessCouriers = Array.from(sessCouriersMap.values());
 
           await firebaseReq("PUT", `/session_bundles/${encodeURIComponent(sess.sessionId)}`, {
             updatedAt: Date.now(),
@@ -1678,7 +1684,6 @@
             completedSyncing: isCompletedSyncInProgress,
             zoneStats: sessZoneStats,
             couriers: sessCouriers,
-            dispatchers: cachedDispatchersList,
             counts: sessCounts,
             activeViewers: activeViewersSummary
           });
