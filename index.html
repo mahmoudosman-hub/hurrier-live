@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v9.5 -->
+<!-- Hurrier Live Operations Dashboard v9.6 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v9.5</title>
+  <title>Hurrier Live Operations Dashboard v9.6</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,7 +38,7 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v9.5...
+      Loading Hurrier Live Operations Dashboard v9.6...
     </div>
   </div>
 
@@ -291,8 +291,7 @@
       { id: "Queued", label: "Queued" },
       { id: "Dispatched", label: "Dispatched" },
       { id: "Active", label: "Active" },
-      { id: "Completed", label: "Completed Orders" },
-      { id: "Dispatcher Dashboard", label: "Dispatcher Dashboard", className: "mt-6" }
+      { id: "Completed", label: "Completed Orders" }
     ];
 
     function isRealHurrierZoneId(id) {
@@ -1047,10 +1046,10 @@
       return !Number.isNaN(d.getTime()) && d.getTime() > Date.now() - 60 * 1000;
     }
 
-    function extractCourierStatusDetails(fetchedCourierEntry, knownMeta) {
-      if (!fetchedCourierEntry) {
+    function extractCourierStatusDetails(fetchedCourierEntry, knownMeta, isRefreshingLive = false) {
+      if (!fetchedCourierEntry && !knownMeta?.status) {
         return {
-          statusLabel: knownMeta?.status ? humanizeSnakeCase(knownMeta.status) : "⏳ جاري جلب الحالة الحية...",
+          statusLabel: "⏳ جاري جلب الحالة الحية...",
           statusTone: "loading",
           untilFormatted: "",
           performedBy: "",
@@ -1061,215 +1060,130 @@
       }
 
       const norm = fetchedCourierEntry?.normalized || {};
-      const cObj = unwrapCourierRecord(fetchedCourierEntry);
+      const cObj = fetchedCourierEntry ? unwrapCourierRecord(fetchedCourierEntry) : {};
+      const metaObj = cObj.status_meta_data || cObj.current_state_metadata || {};
 
-      let tnwSub = null;
-      const candidateSubKeys = [
-        "temp_not_working",
-        "temporary_not_working",
-        "temp_break",
-        "temporary_break",
-        "not_working",
-        "not_working_status",
-        "break_info",
-        "current_break",
-        "status_info",
-        "state_info",
-        "availability"
-      ];
-      for (const k of candidateSubKeys) {
-        if (cObj[k] && typeof cObj[k] === "object" && !Array.isArray(cObj[k])) {
-          tnwSub = cObj[k];
-          break;
-        }
-      }
-      if (!tnwSub && cObj.current_shift && typeof cObj.current_shift === "object") {
-        for (const k of candidateSubKeys) {
-          if (cObj.current_shift[k] && typeof cObj.current_shift[k] === "object") {
-            tnwSub = cObj.current_shift[k];
-            break;
-          }
-        }
-      }
-
-      const statusObj =
-        typeof cObj.status === "object" && cObj.status !== null
-          ? cObj.status
-          : typeof cObj.state === "object" && cObj.state !== null
-          ? cObj.state
-          : null;
-
-      const rawUntil =
-        norm.statusUntil ||
-        tnwSub?.until ||
-        tnwSub?.end_at ||
-        tnwSub?.ends_at ||
-        tnwSub?.end_time ||
-        tnwSub?.expires_at ||
-        cObj.temp_not_working_until ||
-        cObj.temporary_not_working_until ||
-        cObj.not_working_until ||
-        cObj.status_until ||
-        cObj.state_until ||
-        cObj.break_until ||
-        statusObj?.until ||
-        statusObj?.end_at ||
-        "";
-
-      const untilFormatted = formatCourierUntilTime(rawUntil);
-
-      const rawPerformedBy = normalizeText(
-        norm.performedBy ||
-          tnwSub?.performed_by ||
-          tnwSub?.created_by ||
-          tnwSub?.actor ||
-          cObj.temp_not_working_performed_by ||
-          cObj.not_working_performed_by ||
-          cObj.status_performed_by ||
-          cObj.performed_by ||
-          statusObj?.performed_by ||
+      const rawStatusStr = String(
+        norm.rawStatus ||
+          (typeof cObj.status === "string" ? cObj.status : "") ||
+          norm.status ||
+          knownMeta?.rawStatus ||
+          knownMeta?.status ||
           ""
-      );
+      )
+        .trim()
+        .toLowerCase();
 
-      const rawReason = normalizeText(
-        norm.statusReason ||
-          tnwSub?.reason ||
-          tnwSub?.reason_text ||
-          tnwSub?.title ||
-          cObj.temp_not_working_reason ||
-          cObj.not_working_reason ||
-          cObj.status_reason ||
-          cObj.break_reason ||
-          cObj.reason ||
-          statusObj?.reason ||
-          ""
-      );
-
-      const tnwExplicitActive =
-        cObj.is_temp_not_working === true ||
-        cObj.is_temporary_not_working === true ||
-        cObj.temp_not_working === true ||
-        cObj.temporary_not_working === true ||
-        (tnwSub &&
-          tnwSub.active !== false &&
-          tnwSub.is_active !== false &&
-          tnwSub.enabled !== false &&
-          (tnwSub.active === true ||
-            tnwSub.is_active === true ||
-            tnwSub.enabled === true ||
-            isFutureOrActiveTimestamp(rawUntil) ||
-            Boolean(rawReason)));
-
-      const rawStatusCandidates = [
-        norm.status,
-        typeof cObj.temporary_not_working === "string" ? cObj.temporary_not_working : "",
-        typeof cObj.temp_not_working === "string" ? cObj.temp_not_working : "",
-        statusObj?.state,
-        statusObj?.status,
-        statusObj?.name,
-        typeof cObj.state === "string" ? cObj.state : "",
-        typeof cObj.courier_state === "string" ? cObj.courier_state : "",
-        typeof cObj.working_state === "string" ? cObj.working_state : "",
-        typeof cObj.current_state === "string" ? cObj.current_state : "",
-        typeof cObj.status === "string" ? cObj.status : "",
-        typeof cObj.courier_status === "string" ? cObj.courier_status : "",
-        typeof cObj.working_status === "string" ? cObj.working_status : "",
-        typeof cObj.availability_status === "string" ? cObj.availability_status : "",
-        typeof cObj.shift_status === "string" ? cObj.shift_status : "",
-        cObj.current_shift?.status,
-        cObj.current_shift?.state,
-        cObj.shift?.status
-      ];
-
-      const rawStatusStr =
-        rawStatusCandidates.find((s) => typeof s === "string" && s.trim() !== "") || "";
-      const stLower = rawStatusStr.trim().toLowerCase();
-
-      let statusLabel = "";
+      let statusLabel = "Working";
       if (
-        tnwExplicitActive ||
-        stLower.includes("temp_not_working") ||
-        stLower.includes("temporary_not_working") ||
-        stLower.includes("temporary not working") ||
-        stLower.includes("temp_break") ||
-        stLower.includes("temporary_break")
+        rawStatusStr === "break" ||
+        rawStatusStr.includes("temp_not_working") ||
+        rawStatusStr.includes("temporary_not_working") ||
+        rawStatusStr.includes("temporary not working") ||
+        rawStatusStr.includes("temp_break") ||
+        rawStatusStr.includes("temp_offline")
       ) {
         statusLabel = "Temporary not working";
+      } else if (rawStatusStr === "ending") {
+        statusLabel = "Ending";
+      } else if (rawStatusStr === "ready" || rawStatusStr === "starting") {
+        statusLabel = "Starting";
+      } else if (rawStatusStr === "late") {
+        statusLabel = "Late";
       } else if (
-        stLower === "not_working" ||
-        stLower === "not working" ||
-        stLower.includes("offline") ||
-        stLower.includes("unavailable") ||
-        (!stLower && cObj.is_working === false)
+        rawStatusStr === "not_working" ||
+        rawStatusStr === "not working" ||
+        rawStatusStr.includes("offline")
       ) {
         statusLabel = "Not working";
-      } else if (stLower === "break" || stLower === "on_break" || stLower === "on break") {
-        statusLabel = "On Break";
-      } else if (stLower.includes("ending")) {
-        statusLabel = "Ending";
-      } else if (stLower.includes("starting")) {
-        statusLabel = "Starting";
+      } else if (rawStatusStr === "working") {
+        statusLabel = "Working";
       } else if (rawStatusStr) {
         statusLabel = humanizeSnakeCase(rawStatusStr);
-      } else {
-        statusLabel = "Working";
       }
+
+      const isBreakOrOfflineState =
+        statusLabel === "Temporary not working" || statusLabel === "Not working";
+
+      const rawUntil = isBreakOrOfflineState
+        ? norm.statusUntil || cObj.status_until || metaObj.ended_at || knownMeta?.statusUntil || ""
+        : "";
+      const untilFormatted = rawUntil ? formatCourierUntilTime(rawUntil) : "";
+
+      const rawPerformedBy = isBreakOrOfflineState
+        ? normalizeText(norm.performedBy || metaObj.performed_by || knownMeta?.performedBy || "")
+        : "";
+
+      const rawReason = isBreakOrOfflineState
+        ? normalizeText(norm.statusReason || metaObj.reason || knownMeta?.statusReason || "")
+        : "";
 
       const lowerFinal = statusLabel.toLowerCase();
       const statusTone =
-        lowerFinal.includes("temporary") || lowerFinal.includes("break")
+        lowerFinal.includes("temporary")
           ? "warning"
-          : lowerFinal.includes("not working") || lowerFinal.includes("offline")
+          : lowerFinal.includes("not working") || lowerFinal === "late"
           ? "danger"
-          : lowerFinal.includes("ending")
-          ? "orange"
+          : lowerFinal === "ending" || lowerFinal === "starting"
+          ? "neutral"
           : "working";
 
-      const rawContract = normalizeText(
+      const rawContractType = normalizeText(
         norm.contract ||
+          cObj.contract_info?.type ||
           cObj.contract_type ||
-          cObj.contract?.name ||
-          cObj.contract?.type ||
-          (typeof cObj.contract === "string" ? cObj.contract : "") ||
-          cObj.employment_type ||
+          knownMeta?.contract ||
           ""
       );
+      const contract = rawContractType ? humanizeSnakeCase(rawContractType.toLowerCase()) : "";
 
       let balanceFormatted = "";
-      const rawBal = norm.balance ?? cObj.balance ?? cObj.wallet_balance ?? cObj.cash_balance;
+      const rawBal =
+        fetchedCourierEntry?.balance ??
+        norm.balance ??
+        cObj.balance ??
+        knownMeta?.balance;
       if (rawBal !== undefined && rawBal !== null && rawBal !== "") {
         const numBal = Number(rawBal);
-        balanceFormatted = !Number.isNaN(numBal) ? `${numBal.toFixed(2)} EGP` : String(rawBal);
+        balanceFormatted = !Number.isNaN(numBal) ? `$ ${numBal.toFixed(2)}` : `$ ${rawBal}`;
       }
 
       return {
         statusLabel,
         statusTone,
+        isRefreshingLive,
         untilFormatted,
-        performedBy: rawPerformedBy ? humanizeSnakeCase(rawPerformedBy).toLowerCase() : "",
+        performedBy: rawPerformedBy,
         reason: rawReason,
-        contract: rawContract ? humanizeSnakeCase(rawContract) : "",
+        contract,
         balanceFormatted
       };
     }
 
-    function buildFullCourierView(courierReq, fetchedCourierEntry, knownMeta) {
+    function buildFullCourierView(courierReq, fetchedCourierEntry, knownMeta, isRefreshingLive = false) {
       const cid = String(courierReq?.id || "");
       const norm = fetchedCourierEntry?.normalized || {};
-      const cObj = unwrapCourierRecord(fetchedCourierEntry);
+      const cObj = fetchedCourierEntry ? unwrapCourierRecord(fetchedCourierEntry) : {};
       const name = normalizeText(
         norm.name || cObj.name || cObj.courier_name || courierReq?.name || knownMeta?.name || `Courier #${cid}`
       );
       const userId = String(
-        norm.userId || cObj.user_id || cObj.userId || knownMeta?.userId || cid || ""
+        norm.userId || cObj.user_id || cObj.userId || knownMeta?.userId || ""
       );
       const phone = normalizeText(
         norm.phone || cObj.phone_number || cObj.mobile || cObj.phone || knownMeta?.phone || ""
       );
+      const vehicleObj = cObj.vehicle;
+      const vehicleFromObj =
+        vehicleObj && typeof vehicleObj === "object"
+          ? [vehicleObj.vehicle_type_name, vehicleObj.vehicle_bag_type_name].filter(Boolean).join("-")
+          : typeof vehicleObj === "string"
+          ? vehicleObj
+          : "";
       const vehicle = normalizeText(
-        norm.vehicle || cObj.vehicle_type || cObj.vehicle?.name || (typeof cObj.vehicle === "string" ? cObj.vehicle : "") || "Motorbike"
+        norm.vehicle || vehicleFromObj || knownMeta?.vehicle || "Bike-Standard box"
       );
-      const statusMeta = extractCourierStatusDetails(fetchedCourierEntry, knownMeta);
+      const statusMeta = extractCourierStatusDetails(fetchedCourierEntry, knownMeta, isRefreshingLive);
 
       return {
         id: cid,
@@ -1340,7 +1254,6 @@
       const [lastSyncTime, setLastSyncTime] = useState("-");
       const [deliveries, setDeliveries] = useState([]);
       const [completedOrders, setCompletedOrders] = useState([]);
-      const [dispatchersList, setDispatchersList] = useState([]);
       const [activeCouriersList, setActiveCouriersList] = useState([]);
       const [expandedCourierZoneIds, setExpandedCourierZoneIds] = useState(() => new Set());
       const [zoneStatsSnapshot, setZoneStatsSnapshot] = useState([]);
@@ -1364,6 +1277,7 @@
       const [orderDetailsCache, setOrderDetailsCache] = useState({});
       const [selectedCourier, setSelectedCourier] = useState(null);
       const [courierDetailsCache, setCourierDetailsCache] = useState({});
+      const [isCourierModalRefreshing, setIsCourierModalRefreshing] = useState(false);
 
       const [selectedOrderUids, setSelectedOrderUids] = useState(() => new Set());
       const [copyingFollowupState, setCopyingFollowupState] = useState("");
@@ -1521,19 +1435,20 @@
           provider.setCustomParameters({ prompt: "select_account" });
           await window.firebase.auth().signInWithPopup(provider);
         } catch (err) {
-          setAuthErrorMsg(err?.message || "تعذر تسجيل الدخول عبر Google.");
+          setAuthErrorMsg(err?.message || "تعذر تسجيل الدخول بحساب Google.");
         } finally {
           setIsSigningIn(false);
         }
       };
 
-      // On-demand Courier Detail Fetching (Supports forceRefresh for live status check)
+      // On-demand Courier Detail Fetching (Uses exact /courier/detail?courier_id=... + /balance)
       const fetchCourierDetailsOnDemand = useCallback(
         async (courierId, courierName, forceRefresh = false) => {
           const cid = String(courierId || "").trim();
           if (!cid) return null;
           if (!forceRefresh && courierDetailsCache[cid]) return courierDetailsCache[cid];
 
+          if (forceRefresh) setIsCourierModalRefreshing(true);
           try {
             const reqTimestamp = Date.now();
             await dbFetch("/config/courier_detail_req", {
@@ -1546,13 +1461,15 @@
               })
             });
 
-            for (let attempt = 0; attempt < 12; attempt++) {
-              await new Promise((r) => setTimeout(r, 550));
+            for (let attempt = 0; attempt < 14; attempt++) {
+              await new Promise((r) => setTimeout(r, 450));
               const res = await dbFetch(`/courier_details/${encodeURIComponent(cid)}`);
               if (res.ok) {
                 const data = await res.json();
                 const isFreshEnough =
-                  !forceRefresh || (data?.updatedAt && data.updatedAt >= reqTimestamp - 2500);
+                  !forceRefresh ||
+                  (data?.requestedAt && data.requestedAt >= reqTimestamp) ||
+                  (data?.updatedAt && data.updatedAt >= reqTimestamp - 1500);
                 const cObj = unwrapCourierRecord(data);
                 const norm = data?.normalized || {};
                 if (
@@ -1560,31 +1477,44 @@
                   isFreshEnough &&
                   (cObj.id || cObj.user_id || cObj.phone_number || norm.userId || norm.status)
                 ) {
-                  setCourierDetailsCache((prev) => ({ ...prev, [cid]: data }));
-                  const stDetails = extractCourierStatusDetails(data, null);
+                  setCourierDetailsCache((prev) => ({
+                    ...prev,
+                    [cid]: data,
+                    ...(norm.courierId ? { [norm.courierId]: data } : {})
+                  }));
+                  const stDetails = extractCourierStatusDetails(data, null, false);
+                  const realCid = String(norm.courierId || cObj.id || cid);
                   setKnownCouriersMeta((prev) => ({
                     ...prev,
-                    [cid]: {
+                    [realCid]: {
+                      ...prev[realCid],
+                      courierId: realCid,
                       name: normalizeText(
-                        norm.name || cObj.name || courierName || prev[cid]?.name || ""
+                        norm.name || cObj.name || courierName || prev[realCid]?.name || ""
                       ),
-                      userId: String(norm.userId || cObj.user_id || prev[cid]?.userId || cid),
+                      userId: String(norm.userId || cObj.user_id || prev[realCid]?.userId || ""),
                       phone: normalizeText(
                         norm.phone ||
                           cObj.phone_number ||
                           cObj.mobile ||
                           cObj.phone ||
-                          prev[cid]?.phone ||
+                          prev[realCid]?.phone ||
                           ""
                       ),
-                      status: stDetails.statusLabel
+                      rawStatus: norm.rawStatus || cObj.status || prev[realCid]?.rawStatus || "",
+                      status: stDetails.statusLabel,
+                      contract: norm.contract || cObj.contract_info?.type || prev[realCid]?.contract || "",
+                      vehicle: norm.vehicle || (typeof cObj.vehicle === "string" ? cObj.vehicle : "") || prev[realCid]?.vehicle || "",
+                      balance: data.balance ?? norm.balance ?? prev[realCid]?.balance
                     }
                   }));
                   return data;
                 }
               }
             }
-          } catch {}
+          } catch {} finally {
+            if (forceRefresh) setIsCourierModalRefreshing(false);
+          }
           return courierDetailsCache[cid] || null;
         },
         [courierDetailsCache, dbFetch]
@@ -1828,23 +1758,28 @@
           }
           setIsCompletedLoading(Boolean(bundle.completedSyncing));
 
-          if (Array.isArray(bundle.dispatchers)) {
-            setDispatchersList(bundle.dispatchers);
-          }
-
           if (Array.isArray(bundle.couriers)) {
             setActiveCouriersList(bundle.couriers);
             setKnownCouriersMeta((prev) => {
               const next = { ...prev };
               bundle.couriers.forEach((c) => {
                 const cid = String(c.id || c.courier_id || "");
-                if (cid) {
-                  next[cid] = {
-                    name: normalizeText(c.name || c.courier_name || prev[cid]?.name || ""),
-                    userId: String(c.user_id || prev[cid]?.userId || cid),
-                    phone: normalizeText(c.phone_number || c.mobile || prev[cid]?.phone || "")
-                  };
-                }
+                if (!cid) return;
+                const incomingStatus = String(c.status || "").trim();
+                next[cid] = {
+                  ...next[cid],
+                  courierId: cid,
+                  name: normalizeText(c.name || c.courier_name || next[cid]?.name || ""),
+                  userId: String(c.user_id || next[cid]?.userId || ""),
+                  phone: normalizeText(c.phone_number || c.mobile || next[cid]?.phone || ""),
+                  rawStatus: incomingStatus || next[cid]?.rawStatus || "",
+                  status: incomingStatus || next[cid]?.status || "",
+                  statusUntil: c.status_until || next[cid]?.statusUntil || "",
+                  performedBy: c.performed_by || next[cid]?.performedBy || "",
+                  statusReason: c.status_reason || next[cid]?.statusReason || "",
+                  contract: c.contract_type || next[cid]?.contract || "",
+                  vehicle: c.vehicle_full || c.vehicle_type || next[cid]?.vehicle || ""
+                };
               });
               return next;
             });
@@ -2176,7 +2111,7 @@
       const effectiveTabCounts = useMemo(() => {
         const res = { ...tabCounts };
         SIDEBAR_ITEMS.forEach((item) => {
-          if (["Dashboard", "Dispatcher Dashboard", "Completed", "Active Couriers"].includes(item.id)) {
+          if (["Dashboard", "Completed", "Active Couriers"].includes(item.id)) {
             delete res[item.id];
             return;
           }
@@ -2293,12 +2228,52 @@
 
       const selectedCourierFullView = useMemo(() => {
         if (!selectedCourier) return null;
+        const cid = String(selectedCourier.id || "");
+        const metaById =
+          knownCouriersMeta[cid] ||
+          Object.values(knownCouriersMeta).find((m) => String(m?.userId || "") === cid);
+        const realCid = metaById?.courierId || cid;
         return buildFullCourierView(
           selectedCourier,
-          courierDetailsCache[selectedCourier.id],
-          knownCouriersMeta[selectedCourier.id]
+          courierDetailsCache[cid] || courierDetailsCache[realCid],
+          metaById,
+          isCourierModalRefreshing
         );
-      }, [selectedCourier, courierDetailsCache, knownCouriersMeta]);
+      }, [selectedCourier, courierDetailsCache, knownCouriersMeta, isCourierModalRefreshing]);
+
+      // Instant Matched Riders in Selected Zones (Matches User ID, Courier ID, Phone, or Name across ALL statuses)
+      const matchedZoneCouriers = useMemo(() => {
+        const rawQ = searchQuery.trim();
+        if (rawQ.length < 3) return [];
+        const qLower = rawQ.toLowerCase();
+        const qPhone = normalizePhoneDigits(rawQ);
+        const cleanDigits = rawQ.replace(/^#/, "");
+
+        return activeCouriersList.filter((c) => {
+          if (!c.user_id && !c.phone_number && !c.status) return false;
+          const uid = String(c.user_id || "");
+          const cid = String(c.id || c.courier_id || "");
+          const nameLower = normalizeText(c.name || c.courier_name || "").toLowerCase();
+          const cPhone = normalizePhoneDigits(c.phone_number || "");
+
+          if (uid && (uid === cleanDigits || (cleanDigits.length >= 4 && uid.includes(cleanDigits)))) {
+            return true;
+          }
+          if (cid && cid === cleanDigits) {
+            return true;
+          }
+          if (
+            (qPhone.core10 && cPhone.core10 === qPhone.core10) ||
+            (qPhone.rawDigits.length >= 7 && cPhone.rawDigits.includes(qPhone.rawDigits))
+          ) {
+            return true;
+          }
+          if (nameLower && !/^\d+$/.test(cleanDigits) && nameLower.includes(qLower)) {
+            return true;
+          }
+          return false;
+        });
+      }, [searchQuery, activeCouriersList]);
 
       // --- RENDERERS FOR SPECIAL TABS ---
       const renderDashboardView = () => {
@@ -2399,14 +2374,57 @@
       };
 
       const renderActiveCouriersView = () => {
-        const q = searchQuery.trim().toLowerCase();
-        const matchingZonesStats = zoneStatsSnapshot.filter((zs) => {
-          const zName = normalizeText(zs.name).toLowerCase();
-          if (selectedCity !== "All Cities" && zs.city && normalizeHurrierCity(zs.city, [zs.name]) !== selectedCity) {
-            return false;
+        const rawQ = searchQuery.trim();
+        const qLower = rawQ.toLowerCase();
+        const qPhone = normalizePhoneDigits(rawQ);
+        const cleanDigits = rawQ.replace(/^#/, "");
+
+        const doesCourierMatchQuery = (c) => {
+          if (!rawQ) return true;
+          const uid = String(c.user_id || "");
+          const cid = String(c.id || c.courier_id || "");
+          const name = normalizeText(c.name || c.courier_name || "").toLowerCase();
+          const cPhone = normalizePhoneDigits(c.phone_number || "");
+          if (uid && uid.includes(cleanDigits)) return true;
+          if (cid && cid.includes(cleanDigits)) return true;
+          if (
+            (qPhone.core10 && cPhone.core10 === qPhone.core10) ||
+            (qPhone.rawDigits.length >= 6 && cPhone.rawDigits.includes(qPhone.rawDigits))
+          ) {
+            return true;
           }
-          return selectedZoneIds.includes(Number(zs.id)) || selectedZoneNames.includes(zName);
-        });
+          return name.includes(qLower);
+        };
+
+        const matchingZonesStats = zoneStatsSnapshot
+          .filter((zs) => {
+            const zName = normalizeText(zs.name).toLowerCase();
+            if (selectedCity !== "All Cities" && zs.city && normalizeHurrierCity(zs.city, [zs.name]) !== selectedCity) {
+              return false;
+            }
+            const idSet = new Set(selectedZoneIds.map(Number));
+            const hasManial = MANIAL_FAMILY_IDS.some((id) => idSet.has(id));
+            const hasTahrir = idSet.has(10022) || idSet.has(10163);
+            if (idSet.has(Number(zs.id)) || selectedZoneNames.includes(zName)) return true;
+            if (hasManial && zName.includes("manial")) return true;
+            if (hasTahrir && zName.startsWith("tahrir")) return true;
+            return false;
+          })
+          .filter((zs) => {
+            const st = zs.stat || {};
+            const totalStatActivity =
+              (st.active_count || 0) +
+              (st.queued_count || 0) +
+              (st.couriers_in_working || 0) +
+              (st.couriers_in_ending || 0) +
+              (st.couriers_in_starting || 0) +
+              (st.couriers_in_break || 0) +
+              (st.couriers_in_temp_break || 0);
+            const hasSyncedCouriers = activeCouriersList.some(
+              (c) => Number(c.starting_point_id) === Number(zs.id) || (c.zoneIds || []).includes(Number(zs.id))
+            );
+            return totalStatActivity > 0 || hasSyncedCouriers || !normalizeText(zs.name).toLowerCase().startsWith("hybrid");
+          });
 
         const toggleZoneExpand = (zid) => {
           setExpandedCourierZoneIds((prev) => {
@@ -2417,90 +2435,97 @@
           });
         };
 
-        const filteredCouriersBySearch = q
-          ? activeCouriersList.filter((c) => {
-              const name = normalizeText(c.name || c.courier_name || "").toLowerCase();
-              const id = String(c.id || c.courier_id || "");
-              const uid = String(c.user_id || "");
-              return name.includes(q) || id.includes(q) || uid.includes(q);
-            })
-          : [];
+        const vehicleOrderWeight = (vName) => {
+          const vl = String(vName || "").toLowerCase();
+          if (vl === "bike") return 1;
+          if (vl.includes("bicycle")) return 2;
+          if (vl.includes("e-bike") || vl.includes("ebike")) return 3;
+          if (vl.includes("car")) return 4;
+          if (vl.includes("walker")) return 5;
+          return 6;
+        };
+
+        const classifyHurrierBucket = (rawSt) => {
+          const s = String(rawSt || "working").toLowerCase();
+          if (s === "break" || s.includes("temp") || s === "not_working") return "Break";
+          if (s === "late") return "Late";
+          if (s === "ending") return "Ending";
+          if (s === "ready" || s === "starting") return "Starting";
+          return "Working";
+        };
+
+        const STATUS_ROWS_META = [
+          { key: "Break", label: "Break:", showTime: true, pillBg: "bg-[#6e6e6e] hover:bg-[#585858]" },
+          { key: "Late", label: "Late:", showTime: true, pillBg: "bg-[#db4437] hover:bg-[#c5372b]" },
+          { key: "Working", label: "Working:", showTime: false, pillBg: "bg-[#4caf50] hover:bg-[#3f9c43]" },
+          { key: "Ending", label: "Ending:", showTime: true, pillBg: "bg-[#6e6e6e] hover:bg-[#585858]" },
+          { key: "Starting", label: "Starting:", showTime: true, pillBg: "bg-[#db4437] hover:bg-[#c5372b]" }
+        ];
 
         return (
           <div className="mt-4 space-y-4">
-            {q && (
-              <div className="bg-white border border-blue-200 rounded-xl overflow-hidden shadow-sm">
-                <div className="px-4 py-2.5 bg-blue-50 border-b border-blue-100 text-xs font-bold text-blue-900">
-                  نتائج البحث في المناديب النشطين ({filteredCouriersBySearch.length})
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs whitespace-nowrap">
-                    <tbody className="divide-y divide-gray-100 text-[13px]">
-                      {filteredCouriersBySearch.length === 0 ? (
-                        <tr>
-                          <td className="py-6 text-center text-gray-500">
-                            لا يوجد مناديب نشطون مطابقون لـ "{searchQuery}"
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredCouriersBySearch.slice(0, 50).map((c, idx) => {
-                          const cid = String(c.id || c.courier_id || idx);
-                          const cName = normalizeText(c.name || c.courier_name || `Courier #${cid}`);
-                          return (
-                            <tr
-                              key={`search-c-${cid}`}
-                              onClick={(e) => openCourierModal(e, cid, cName)}
-                              className="hover:bg-blue-50/40 cursor-pointer"
-                            >
-                              <td className="py-3 px-4 font-bold text-blue-600 hover:underline">{cName}</td>
-                              <td className="py-3 px-3 font-mono text-gray-600">#{c.user_id || cid}</td>
-                              <td className="py-3 px-3 font-mono font-bold text-gray-800">
-                                Active Orders: {c.active_orders_count ?? 0}
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
             <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm divide-y divide-gray-200">
               {matchingZonesStats.length === 0 ? (
                 <div className="py-12 text-center text-gray-500 text-sm">
-                  جاري تحميل حالة المناديب للزونات المختارة...
+                  جاري تحميل حالة جميع المناديب للزونات المختارة...
                 </div>
               ) : (
                 matchingZonesStats.map((zs) => {
                   const st = zs.stat || {};
-                  const workingCnt = st.couriers_in_working ?? 0;
-                  const activeOrdCnt = st.active_count ?? 0;
-                  const queuedOrdCnt = st.queued_count ?? 0;
-                  const delayMins = zs.delay !== undefined ? zs.delay : Math.round(Number(st.delay || 0) * 10) / 10;
-                  const isExpanded = expandedCourierZoneIds.has(zs.id);
                   const zLower = normalizeText(zs.name).toLowerCase();
 
-                  const zoneCouriers = activeCouriersList.filter((c) => {
+                  const allZoneCouriers = activeCouriersList.filter((c) => {
+                    if (c.starting_point_id) {
+                      return Number(c.starting_point_id) === Number(zs.id);
+                    }
                     const cZIds = Array.isArray(c.zoneIds) ? c.zoneIds.map(Number) : [];
-                    const cZNames = Array.isArray(c.zoneNames) ? c.zoneNames.map((n) => normalizeText(n).toLowerCase()) : [];
+                    const cZNames = Array.isArray(c.zoneNames)
+                      ? c.zoneNames.map((n) => normalizeText(n).toLowerCase())
+                      : [];
                     return cZIds.includes(Number(zs.id)) || cZNames.includes(zLower);
                   });
+
+                  const filteredZoneCouriers = rawQ
+                    ? allZoneCouriers.filter(doesCourierMatchQuery)
+                    : allZoneCouriers;
+
+                  if (rawQ && filteredZoneCouriers.length === 0) {
+                    return null;
+                  }
+
+                  const activeOrdCnt = st.active_count ?? 0;
+                  const workingAndEndingCnt =
+                    (st.couriers_in_working ?? 0) + (st.couriers_in_ending ?? 0);
+                  const queuedOrdCnt = st.queued_count ?? 0;
+                  const delayMins =
+                    zs.delay !== undefined ? zs.delay : Math.round(Number(st.delay || 0) * 10) / 10;
+
+                  const isExpanded = Boolean(rawQ) || expandedCourierZoneIds.has(zs.id);
+
+                  const byVehicleMap = new Map();
+                  filteredZoneCouriers.forEach((c) => {
+                    const vName = normalizeText(c.vehicle_type || "Bike") || "Bike";
+                    if (!byVehicleMap.has(vName)) byVehicleMap.set(vName, []);
+                    byVehicleMap.get(vName).push(c);
+                  });
+                  const sortedVehicleGroups = Array.from(byVehicleMap.entries()).sort(
+                    (a, b) => vehicleOrderWeight(a[0]) - vehicleOrderWeight(b[0])
+                  );
 
                   return (
                     <div key={zs.id || zs.name} className="bg-white">
                       <button
                         type="button"
                         onClick={() => toggleZoneExpand(zs.id)}
-                        className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors text-left"
+                        className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50/80 transition-colors text-left"
                       >
                         <div className="flex flex-wrap items-center gap-1.5 text-[15px]">
                           <span className="font-bold text-gray-900">{zs.name}</span>
                           <span className="font-semibold text-gray-900">
-                            ({workingCnt} / {activeOrdCnt} / <span className="text-gray-400">{queuedOrdCnt}</span>)
+                            ({activeOrdCnt} / {workingAndEndingCnt} /{" "}
+                            <span className="text-gray-400">{queuedOrdCnt}</span>)
                           </span>
-                          <span className="font-bold text-[#c2410c] ml-1">{delayMins}m</span>
+                          <span className="font-bold text-[#a9382b] ml-1">{delayMins}m</span>
                         </div>
                         <span className="text-gray-400 text-xs font-bold">
                           {isExpanded ? "▲" : "▼"}
@@ -2508,60 +2533,125 @@
                       </button>
 
                       {isExpanded && (
-                        <div className="px-5 pb-4 pt-1 bg-slate-50/70 border-t border-gray-100 space-y-3">
-                          <div className="flex flex-wrap items-center gap-2 text-xs">
-                            <span className="px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold">
-                              Working: {workingCnt}
-                            </span>
-                            <span className="px-2.5 py-1 rounded-md bg-blue-50 text-blue-800 border border-blue-200 font-bold">
-                              Starting: {st.couriers_in_starting ?? 0}
-                            </span>
-                            <span className="px-2.5 py-1 rounded-md bg-orange-50 text-orange-800 border border-orange-200 font-bold">
-                              Ending: {st.couriers_in_ending ?? 0}
-                            </span>
-                            <span className="px-2.5 py-1 rounded-md bg-amber-50 text-amber-800 border border-amber-200 font-bold">
-                              Temp Break: {st.couriers_in_temp_break ?? 0}
-                            </span>
-                            <span className="px-2.5 py-1 rounded-md bg-gray-100 text-gray-700 border border-gray-200 font-bold">
-                              Break: {st.couriers_in_break ?? 0}
-                            </span>
-                          </div>
-
-                          {zoneCouriers.length === 0 ? (
+                        <div className="px-6 pb-5 pt-1 bg-white space-y-5">
+                          {sortedVehicleGroups.length === 0 ? (
                             <div className="text-xs text-gray-500 py-2">
-                              لا يوجد مناديب محملون بأوردرات نشطة حالياً في {zs.name}.
+                              لا يوجد مناديب مسجلون حالياً في {zs.name}.
                             </div>
                           ) : (
-                            <div className="overflow-x-auto bg-white border border-gray-200 rounded-lg">
-                              <table className="w-full text-left text-xs whitespace-nowrap">
-                                <thead>
-                                  <tr className="border-b border-gray-200 text-gray-500 font-bold uppercase bg-gray-50">
-                                    <th className="py-2.5 px-4">COURIER</th>
-                                    <th className="py-2.5 px-3">ID</th>
-                                    <th className="py-2.5 px-3">ACTIVE ORDERS</th>
-                                    <th className="py-2.5 px-3">DISPATCHED</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-gray-100 text-[13px]">
-                                  {zoneCouriers.map((c, idx) => {
-                                    const cid = String(c.id || c.courier_id || idx);
-                                    const cName = normalizeText(c.name || c.courier_name || `Courier #${cid}`);
-                                    return (
-                                      <tr
-                                        key={`${zs.id}-${cid}`}
-                                        onClick={(e) => openCourierModal(e, cid, cName)}
-                                        className="hover:bg-blue-50/40 cursor-pointer"
-                                      >
-                                        <td className="py-2.5 px-4 font-bold text-blue-600 hover:underline">{cName}</td>
-                                        <td className="py-2.5 px-3 font-mono text-gray-600">#{cid}</td>
-                                        <td className="py-2.5 px-3 font-mono font-bold text-gray-900">{c.active_orders_count ?? 0}</td>
-                                        <td className="py-2.5 px-3 font-mono text-gray-600">{c.dispatched_orders_count ?? 0}</td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
+                            sortedVehicleGroups.map(([vName, vCouriers]) => {
+                              const buckets = {
+                                Break: [],
+                                Late: [],
+                                Working: [],
+                                Ending: [],
+                                Starting: []
+                              };
+                              vCouriers.forEach((c) => {
+                                buckets[classifyHurrierBucket(c.status)].push(c);
+                              });
+                              Object.values(buckets).forEach((arr) =>
+                                arr.sort((a, b) =>
+                                  normalizeText(a.name).localeCompare(normalizeText(b.name))
+                                )
+                              );
+
+                              return (
+                                <div key={`${zs.id}-${vName}`} className="space-y-2.5">
+                                  <div className="flex items-center gap-1.5 text-[13px] font-semibold text-gray-800">
+                                    <span>{vName.toLowerCase().includes("car") ? "🚗" : "🚴"}</span>
+                                    <span>{vName}</span>
+                                  </div>
+
+                                  <div className="space-y-2.5 pl-1">
+                                    {STATUS_ROWS_META.map((rowMeta) => {
+                                      const list = buckets[rowMeta.key] || [];
+                                      if (list.length === 0) return null;
+
+                                      if (!rowMeta.showTime) {
+                                        return (
+                                          <div key={rowMeta.key} className="space-y-1.5">
+                                            <div className="text-[13px] text-gray-800">
+                                              {rowMeta.label}
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                              {list.map((c, idx) => {
+                                                const cid = String(c.id || c.courier_id || idx);
+                                                const cName = normalizeText(
+                                                  c.name || c.courier_name || `Courier #${cid}`
+                                                );
+                                                const ordCnt = Number(c.active_orders_count ?? 0);
+                                                return (
+                                                  <button
+                                                    key={`${zs.id}-${cid}`}
+                                                    type="button"
+                                                    onMouseEnter={() => handleCourierHover(cid, cName)}
+                                                    onClick={(e) => openCourierModal(e, cid, cName)}
+                                                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-white text-[12px] font-medium transition-colors shadow-sm ${rowMeta.pillBg}`}
+                                                  >
+                                                    <span>{cName}</span>
+                                                    <span
+                                                      className={`font-bold ${
+                                                        ordCnt > 0 ? "text-[#ffeb3b]" : "text-white"
+                                                      }`}
+                                                    >
+                                                      {ordCnt}
+                                                    </span>
+                                                  </button>
+                                                );
+                                              })}
+                                            </div>
+                                          </div>
+                                        );
+                                      }
+
+                                      return (
+                                        <div
+                                          key={rowMeta.key}
+                                          className="flex flex-wrap items-center gap-x-2.5 gap-y-2 text-[13px]"
+                                        >
+                                          <span className="text-gray-800">{rowMeta.label}</span>
+                                          {list.map((c, idx) => {
+                                            const cid = String(c.id || c.courier_id || idx);
+                                            const cName = normalizeText(
+                                              c.name || c.courier_name || `Courier #${cid}`
+                                            );
+                                            const ordCnt = Number(c.active_orders_count ?? 0);
+                                            return (
+                                              <div
+                                                key={`${zs.id}-${cid}`}
+                                                className="inline-flex items-center gap-1.5"
+                                              >
+                                                {c.state_time_24h && (
+                                                  <span className="text-gray-500 text-[12px] font-mono">
+                                                    {c.state_time_24h}
+                                                  </span>
+                                                )}
+                                                <button
+                                                  type="button"
+                                                  onMouseEnter={() => handleCourierHover(cid, cName)}
+                                                  onClick={(e) => openCourierModal(e, cid, cName)}
+                                                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-white text-[12px] font-medium transition-colors shadow-sm ${rowMeta.pillBg}`}
+                                                >
+                                                  <span>{cName}</span>
+                                                  <span
+                                                    className={`font-bold ${
+                                                      ordCnt > 0 ? "text-[#ffeb3b]" : "text-white"
+                                                    }`}
+                                                  >
+                                                    {ordCnt}
+                                                  </span>
+                                                </button>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })
                           )}
                         </div>
                       )}
@@ -2570,46 +2660,6 @@
                 })
               )}
             </div>
-          </div>
-        );
-      };
-
-      const renderDispatcherDashboardView = () => {
-        return (
-          <div className="mt-4 space-y-5">
-            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs whitespace-nowrap">
-                  <thead>
-                    <tr className="border-b border-gray-200 text-gray-600 font-bold uppercase bg-gray-50">
-                      <th className="py-3.5 px-4">EMAIL</th>
-                      <th className="py-3.5 px-3">ISSUES PICKED</th>
-                      <th className="py-3.5 px-3">PROCESSING</th>
-                      <th className="py-3.5 px-3">MAX PICKED FOR</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100 text-[13px]">
-                    {dispatchersList.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="py-8 text-center text-gray-500">
-                          No dispatchers found at the moment…
-                        </td>
-                      </tr>
-                    ) : (
-                      dispatchersList.map((d, idx) => (
-                        <tr key={d.email || idx} className="hover:bg-blue-50/30">
-                          <td className="py-3 px-4 font-semibold text-gray-900">{d.email || "-"}</td>
-                          <td className="py-3 px-3 font-mono">{d.picked ?? d.issues_picked ?? 0}</td>
-                          <td className="py-3 px-3 font-mono">{d.processing ?? 0}</td>
-                          <td className="py-3 px-3 font-mono">{d.max_picked_for || "-"}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            {renderDashboardView()}
           </div>
         );
       };
@@ -3682,8 +3732,20 @@
         const rawQ = String(riderSearchReq.query).trim();
         const qLower = rawQ.toLowerCase();
         const qPhone = normalizePhoneDigits(rawQ);
+        const cleanDigits = rawQ.replace(/^#/, "");
 
         const mergedMap = new Map();
+        const mapRawStatusLabel = (rawSt) => {
+          const s = String(rawSt || "").toLowerCase();
+          if (s === "break" || s.includes("temp")) return "Temporary not working";
+          if (s === "ending") return "Ending";
+          if (s === "ready" || s === "starting") return "Starting";
+          if (s === "late") return "Late";
+          if (s === "not_working" || s === "offline") return "Not working";
+          if (s === "working") return "Working";
+          return rawSt || "Working";
+        };
+
         const addRider = (rObj) => {
           if (!rObj) return;
           const key = String(rObj.courierId || rObj.userId || rObj.name || "").toLowerCase();
@@ -3695,6 +3757,33 @@
 
         (Array.isArray(riderSearchResults) ? riderSearchResults : []).forEach(addRider);
 
+        activeCouriersList.forEach((c) => {
+          const cid = String(c.id || c.courier_id || "");
+          const uid = String(c.user_id || "");
+          const name = normalizeText(c.name || c.courier_name || "");
+          const cPhone = normalizePhoneDigits(c.phone_number || "");
+
+          const phoneMatch =
+            (qPhone.core10 && cPhone.core10 === qPhone.core10) ||
+            (qPhone.rawDigits.length >= 7 && cPhone.rawDigits.includes(qPhone.rawDigits));
+          const idMatch =
+            (uid && (uid === cleanDigits || (cleanDigits.length >= 5 && uid.includes(cleanDigits)))) ||
+            (cid && cid === cleanDigits);
+          const nameMatch = name && !/^\d+$/.test(cleanDigits) && name.toLowerCase().includes(qLower);
+
+          if (phoneMatch || idMatch || nameMatch) {
+            addRider({
+              courierId: cid,
+              userId: uid || cid,
+              name: name || `Courier #${cid}`,
+              phone: c.phone_number || "",
+              status: mapRawStatusLabel(c.status),
+              statusUntil: c.status_until || "",
+              statusReason: c.status_reason || ""
+            });
+          }
+        });
+
         Object.entries(knownCouriersMeta || {}).forEach(([cid, meta]) => {
           if (!meta) return;
           const mPhone = normalizePhoneDigits(meta.phone || "");
@@ -3702,22 +3791,24 @@
             (qPhone.core10 && mPhone.core10 === qPhone.core10) ||
             (qPhone.rawDigits.length >= 7 && mPhone.rawDigits.includes(qPhone.rawDigits));
           const idMatch =
-            String(cid) === rawQ || (meta.userId && String(meta.userId) === rawQ);
-          const nameMatch = meta.name && meta.name.toLowerCase().includes(qLower);
+            String(cid) === cleanDigits || (meta.userId && String(meta.userId) === cleanDigits);
+          const nameMatch = meta.name && !/^\d+$/.test(cleanDigits) && meta.name.toLowerCase().includes(qLower);
 
           if (phoneMatch || idMatch || nameMatch) {
             addRider({
               courierId: String(cid),
-              userId: String(meta.userId || cid),
+              userId: String(meta.userId || ""),
               name: meta.name || `Courier #${cid}`,
               phone: meta.phone || "",
-              status: "Working"
+              status: mapRawStatusLabel(meta.rawStatus || meta.status),
+              statusUntil: meta.statusUntil || "",
+              statusReason: meta.statusReason || ""
             });
           }
         });
 
         return Array.from(mergedMap.values());
-      }, [riderSearchReq, riderSearchResults, knownCouriersMeta]);
+      }, [riderSearchReq, riderSearchResults, activeCouriersList, knownCouriersMeta]);
 
       // --- 0) GOOGLE SIGN-IN & GMAIL WHITELIST GATE ---
       if (authState !== "authorized") {
@@ -3729,7 +3820,7 @@
                   <span className="text-2xl">🚴‍♂️</span>
                   <div>
                     <h1 className="text-lg font-bold tracking-tight">Hurrier Live Operations</h1>
-                    <p className="text-xs text-slate-300">v9.5 • Secured Google Access</p>
+                    <p className="text-xs text-slate-300">v9.6 • Secured Google Access</p>
                   </div>
                 </div>
                 <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200 border border-emerald-400/30">
@@ -3868,7 +3959,7 @@
                         تحديد الزونات قبل بدء المتابعة
                       </h1>
                       <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-200 border border-emerald-300/40">
-                        ★ v9.5 • {userRole === "admin" ? "Admin" : "Employee"}
+                        ★ v9.6 • {userRole === "admin" ? "Admin" : "Employee"}
                       </span>
                     </div>
                     <p className="text-[11px] sm:text-xs text-slate-300 mt-0.5 truncate">
@@ -4177,7 +4268,7 @@
 
                 <div className="px-4 py-3 bg-slate-50 border-b border-gray-200 text-xs space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-emerald-700">★ v9.5 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                    <span className="font-bold text-emerald-700">★ v9.6 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                     <button
                       type="button"
                       onClick={handleGoogleSignOut}
@@ -4235,7 +4326,7 @@
 
             <div className="px-4 py-2.5 bg-slate-50 border-b border-gray-200 text-[11px] space-y-1">
               <div className="flex items-center justify-between">
-                <span className="font-bold text-emerald-700">★ v9.5 ({userRole === "admin" ? "Admin" : "Secured"})</span>
+                <span className="font-bold text-emerald-700">★ v9.6 ({userRole === "admin" ? "Admin" : "Secured"})</span>
                 <button
                   type="button"
                   onClick={handleGoogleSignOut}
@@ -4552,7 +4643,7 @@
                     <h1 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
                       {activeTab === "Active Couriers"
                         ? "Active Couriers"
-                        : activeTab === "Dashboard" || activeTab === "Dispatcher Dashboard"
+                        : activeTab === "Dashboard"
                         ? activeTab
                         : activeTab === "Completed"
                         ? "Completed Orders"
@@ -4568,6 +4659,61 @@
                     ↻ Refresh
                   </button>
                 </div>
+
+                {/* Instant Matched Riders in Selected Zones (User ID / Phone / Name across all statuses) */}
+                {!riderSearchReq && activeTab !== "Active Couriers" && matchedZoneCouriers.length > 0 && (
+                  <div className="mb-4 p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200 shadow-sm space-y-2.5">
+                    <div className="text-xs font-bold text-emerald-900 flex items-center justify-between">
+                      <span>🚴‍♂️ مناديب مطابقون في الزونات المحددة ({matchedZoneCouriers.length})</span>
+                      <span className="text-[11px] font-normal text-emerald-700">شامل جميع الحالات (Working / Break / Ending / Starting / Late)</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                      {matchedZoneCouriers.slice(0, 6).map((c) => {
+                        const cid = String(c.id || c.courier_id || "");
+                        const cName = normalizeText(c.name || c.courier_name || `Courier #${cid}`);
+                        const rawSt = String(c.status || "").toLowerCase();
+                        const stText =
+                          rawSt === "break" || rawSt.includes("temp")
+                            ? "Temporary not working"
+                            : rawSt === "ready" || rawSt === "starting"
+                            ? "Starting"
+                            : humanizeSnakeCase(rawSt || "Working");
+                        const stBadge =
+                          stText === "Temporary not working"
+                            ? "bg-amber-100 text-amber-900 border-amber-300"
+                            : stText === "Late"
+                            ? "bg-red-100 text-red-800 border-red-300"
+                            : stText === "Ending" || stText === "Starting"
+                            ? "bg-gray-100 text-gray-800 border-gray-300"
+                            : "bg-emerald-100 text-emerald-800 border-emerald-300";
+
+                        return (
+                          <div
+                            key={`mz-${cid}`}
+                            onClick={(e) => openCourierModal(e, cid, cName)}
+                            className="p-3 rounded-xl bg-white border border-gray-200 hover:border-blue-300 cursor-pointer flex items-center justify-between gap-2 text-xs shadow-sm"
+                          >
+                            <div className="min-w-0 space-y-1">
+                              <div className="font-bold text-blue-600 hover:underline truncate">{cName}</div>
+                              <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-600 font-mono">
+                                {c.user_id && <span>User ID: <strong className="text-gray-900">#{c.user_id}</strong></span>}
+                                {c.phone_number && <span>📞 {c.phone_number}</span>}
+                              </div>
+                            </div>
+                            <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                              <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${stBadge}`}>
+                                {stText}
+                              </span>
+                              <span className="text-[11px] text-gray-500 font-semibold">
+                                Orders: {c.active_orders_count ?? 0}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Live Rider Search Banner */}
                 {riderSearchReq && (
@@ -4739,8 +4885,6 @@
                   ? renderDashboardView()
                   : activeTab === "Active Couriers"
                   ? renderActiveCouriersView()
-                  : activeTab === "Dispatcher Dashboard"
-                  ? renderDispatcherDashboardView()
                   : activeTab === "Completed"
                   ? renderCompletedOrdersView()
                   : renderDeliveriesTable()}
@@ -5275,12 +5419,17 @@
                         ? "bg-amber-50/90 border-amber-200"
                         : selectedCourierFullView.statusTone === "danger"
                         ? "bg-red-50/90 border-red-200"
-                        : selectedCourierFullView.statusTone === "orange"
-                        ? "bg-orange-50/90 border-orange-200"
                         : "bg-gray-100/90 border-gray-200"
                     }`}
                   >
-                    <div className="text-xs text-gray-500 font-medium">Status</div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-500 font-medium">Status</span>
+                      {selectedCourierFullView.isRefreshingLive && (
+                        <span className="text-[11px] text-blue-600 font-semibold animate-pulse">
+                          ⟳ تحديث حي...
+                        </span>
+                      )}
+                    </div>
                     <div
                       className={`text-base font-bold ${
                         selectedCourierFullView.statusTone === "warning"
