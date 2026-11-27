@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      9.6
-// @description  [v9.6] Full Zone Couriers + Exact Courier Status & Balance + Fast Sync
+// @version      9.7
+// @description  [v9.7] Exact Active Couriers per Zone + Full Order & Rider Sync
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "9.6";
+  const SCRIPT_VERSION = "9.7";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -1632,31 +1632,6 @@
             );
             sessTabRecords[ep.tab] = matched;
             sessCounts[ep.tab] = matched.length;
-
-            if (ep.tab === "Active" || ep.tab === "Dispatched") {
-              matched.forEach((rec) => {
-                const cid = rec?.courier_id ? String(rec.courier_id) : "";
-                if (!cid || couriersByCourierIdMap.has(cid)) return;
-                const fallbackKey = `ord_${cid}`;
-                if (!sessCouriersMap.has(fallbackKey)) {
-                  const { ids: recZIds, names: recZNames } = extractRecordZones(rec);
-                  sessCouriersMap.set(fallbackKey, {
-                    id: cid,
-                    courier_id: cid,
-                    user_id: "",
-                    name: rec.courier_name || `Courier #${cid}`,
-                    phone_number: "",
-                    status: "",
-                    vehicle_type: "Bike",
-                    vehicle_full: "Bike-Standard box",
-                    active_orders_count: ep.tab === "Active" ? 1 : 0,
-                    starting_point_id: 0,
-                    zoneIds: recZIds,
-                    zoneNames: recZNames
-                  });
-                }
-              });
-            }
           }
 
           primaryActiveMatched = Math.max(primaryActiveMatched, sessCounts["Active"] || 0);
