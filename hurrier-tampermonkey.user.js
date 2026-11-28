@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.0
-// @description  [v10.0] Unified Device Multi-Tab Instant Handoff + Full Active Deliveries Pagination & Zone Match + Shared 2h Completed Archive + Notes & Rider Search
+// @version      10.2
+// @description  [v10.2] Fix Active Couriers Zone Delay + Fix Completed Deliveries Endpoint + Unified Device Multi-Tab
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.0";
+  const SCRIPT_VERSION = "10.2";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -783,16 +783,33 @@
       primaryDel.completed_at,
       primaryDel.delivered_at,
       primaryDel.dropped_off_at,
+      primaryDel.finished_at,
       timings.completed_at,
+      timings.delivered_at,
+      timings.dropped_off_at,
       order.current_state_transition,
       order.completed_at,
-      order.updated_at
+      order.delivered_at,
+      order.dropped_off_at,
+      order.finished_at,
+      rec?.completed_at,
+      rec?.delivered_at,
+      rec?.dropped_off_at
     ];
     for (const v of candidates) {
       if (v) {
         const ms = typeof v === "number" ? (v > 1e12 ? v : v * 1000) : new Date(v).getTime();
         if (!Number.isNaN(ms) && ms > 946684800000) return ms;
       }
+    }
+    const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
+    const rawTotalTimeSec = Number(timings.total_time);
+    if (placedMs > 0 && !Number.isNaN(rawTotalTimeSec) && rawTotalTimeSec > 0) {
+      return placedMs + rawTotalTimeSec * 1000;
+    }
+    if (order.updated_at) {
+      const updMs = new Date(order.updated_at).getTime();
+      if (!Number.isNaN(updMs) && updMs > 946684800000) return updMs;
     }
     return 0;
   }
@@ -811,7 +828,7 @@
     if (completedArchiveLoadedFromFb) return;
     completedArchiveLoadedFromFb = true;
     try {
-      const data = await firebaseReq("GET", "/shared_completed_archive");
+      const data = await firebaseReq("GET", "/config/shared_completed_archive");
       if (data && typeof data === "object") {
         Object.entries(data).forEach(([code, rec]) => {
           if (rec && typeof rec === "object") {
@@ -830,7 +847,7 @@
       obj[code] = rec;
     }
     try {
-      await firebaseReq("PUT", "/shared_completed_archive", obj);
+      await firebaseReq("PUT", "/config/shared_completed_archive", obj);
     } catch {}
   }
 
@@ -873,10 +890,13 @@
     };
   }
 
-  async function fetchCompletedOrdersPage(page) {
+  async function fetchCompletedOrdersPage(page, spQuery = "") {
     const endpoints = [
-      `/dispatcher-dashboard/orders/completed?page=${page}&per_page=50`,
-      `/orders/completed?page=${page}&per_page=50`
+      ...(spQuery
+        ? [`/dispatcher-dashboard/deliveries/completed?${spQuery}&page=${page}&per_page=50`]
+        : []),
+      `/dispatcher-dashboard/deliveries/completed?page=${page}&per_page=50`,
+      `/dispatcher-dashboard/orders/completed?page=${page}&per_page=50`
     ];
     for (const ep of endpoints) {
       try {
@@ -888,7 +908,7 @@
           : Array.isArray(data)
           ? data
           : null;
-        if (recs) return recs;
+        if (Array.isArray(recs)) return recs;
       } catch {}
     }
     return [];
@@ -901,19 +921,8 @@
     const spQuery = buildStartingPointQueryParams(allZoneIds);
 
     try {
-      for (let pg = 1; pg <= 35; pg++) {
-        let recs = [];
-        if (spQuery) {
-          try {
-            const d = await hurrierGet(
-              `/dispatcher-dashboard/orders/completed?${spQuery}&page=${pg}&per_page=50`
-            );
-            if (Array.isArray(d?.records)) recs = d.records;
-          } catch {}
-        }
-        if (recs.length === 0) {
-          recs = await fetchCompletedOrdersPage(pg);
-        }
+      for (let pg = 1; pg <= 45; pg++) {
+        const recs = await fetchCompletedOrdersPage(pg, spQuery);
         if (recs.length === 0) break;
 
         let oldestInPage = Infinity;
@@ -1226,19 +1235,8 @@
           }
 
           const spQuery = buildStartingPointQueryParams(req.zoneIds || allZoneIds);
-          for (let pg = 1; pg <= 50; pg++) {
-            let recs = [];
-            if (spQuery) {
-              try {
-                const d = await hurrierGet(
-                  `/dispatcher-dashboard/orders/completed?${spQuery}&page=${pg}&per_page=50`
-                );
-                if (Array.isArray(d?.records)) recs = d.records;
-              } catch {}
-            }
-            if (recs.length === 0) {
-              recs = await fetchCompletedOrdersPage(pg);
-            }
+          for (let pg = 1; pg <= 60; pg++) {
+            const recs = await fetchCompletedOrdersPage(pg, spQuery);
             if (recs.length === 0) break;
 
             let oldestInPage = Infinity;
@@ -1448,11 +1446,18 @@
                   name: spNameClean,
                   city: cityName
                 });
+                const rawDelayVal =
+                  sp?.delay ??
+                  sp?.stat?.delay ??
+                  sp?.stat?.avg_delay ??
+                  zGrp?.delay ??
+                  zGrp?.stat?.delay ??
+                  0;
                 allZoneStatsList.push({
                   id: spIdNum,
                   name: spNameClean,
                   city: cityName,
-                  delay: Math.round(Number(sp?.stat?.delay || 0) * 10) / 10,
+                  delay: Math.round(Number(rawDelayVal || 0) * 10) / 10,
                   stat: sp?.stat || {}
                 });
               }
