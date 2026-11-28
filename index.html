@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v10.12 -->
+<!-- Hurrier Live Operations Dashboard v10.13 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v10.12</title>
+  <title>Hurrier Live Operations Dashboard v10.13</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,14 +38,14 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v10.12...
+      Loading Hurrier Live Operations Dashboard v10.13...
     </div>
   </div>
 
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
-    const APP_VERSION = "10.12";
+    const APP_VERSION = "10.13";
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
     const FIREBASE_PROJECT_ID = "hurrier-live";
     const FIREBASE_AUTH_DOMAIN = "hurrier-live.firebaseapp.com";
@@ -869,6 +869,10 @@
         cachedEntry?.detail?.order || cachedEntry?.detail || orderItem?.raw?.order || {};
       const rawDeliveries = Array.isArray(cachedEntry?.deliveries?.deliveries)
         ? cachedEntry.deliveries.deliveries
+        : Array.isArray(dOrder?.deliveries)
+        ? dOrder.deliveries
+        : Array.isArray(cachedEntry?.detail?.deliveries)
+        ? cachedEntry.detail.deliveries
         : [];
 
       const id = String(orderItem?.id || dOrder.code || "-");
@@ -1136,7 +1140,10 @@
         id,
         orderCode,
         orderBadges,
-        isLoadedFromApi: Boolean(cachedEntry && (cachedEntry.detail || cachedEntry.deliveries)),
+        isLoadedFromApi: Boolean(
+          cachedEntry && (cachedEntry.detail || cachedEntry.deliveries || cachedEntry.notFound)
+        ),
+        isNotFound: Boolean(cachedEntry?.notFound && !cachedEntry?.detail && !cachedEntry?.deliveries),
         status,
         statusSinceStr,
         platformName,
@@ -1826,7 +1833,10 @@
         const q = zoneSearchQuery.trim().toLowerCase();
         if (!q) return effectiveZonesCatalog;
         return effectiveZonesCatalog.filter(
-          (z) => z.name.toLowerCase().includes(q) || String(z.id).includes(q) || z.city.toLowerCase().includes(q)
+          (z) =>
+            z.name.toLowerCase().includes(q) ||
+            String(z.id).includes(q) ||
+            z.city.toLowerCase().includes(q)
         );
       }, [zoneSearchQuery, effectiveZonesCatalog]);
 
@@ -2042,11 +2052,16 @@
         return () => clearInterval(timer);
       }, [authState, isZoneSetupConfirmed, selectedZoneIds, fetchMySessionBundleFromFirebase]);
 
-      // On-demand Order Detail Fetching (Per-Order Queue + Persistent Mobile Polling & Auto-Retry)
+      // On-demand Order Detail Fetching (Per-Order Queue + Fast 300ms Polling & Auto-Retry)
+      const hoverPrefetchTimerRef = useRef(null);
+
       const requestOrderDetailsFromBridge = useCallback(
         async (orderItem, opts = {}) => {
           if (!orderItem?.id || orderItem.id === "-") return;
           const code = String(orderItem.id).trim();
+          const internalOrderId = String(
+            orderItem?.orderId || orderItem?.raw?.order?.id || ""
+          ).trim();
           const {
             keepPollingWhileOpen = false,
             forceRefresh = false,
@@ -2062,6 +2077,7 @@
               body: JSON.stringify({
                 code,
                 orderCode: orderItem.orderCode || `HF_EG${code}`,
+                internalOrderId,
                 requestedAt: Date.now()
               })
             });
@@ -2072,7 +2088,10 @@
               const quickRes = await dbFetch(`/order_details/${encodeURIComponent(code)}`);
               if (quickRes.ok) {
                 const quickData = await quickRes.json();
-                if (quickData && (quickData.detail || quickData.deliveries)) {
+                if (
+                  quickData &&
+                  (quickData.detail || quickData.deliveries || quickData.notFound)
+                ) {
                   if (!isCancelled()) {
                     setOrderDetailsCache((prev) => ({ ...prev, [code]: quickData }));
                   }
@@ -2084,20 +2103,20 @@
             if (isCancelled()) return;
             await sendOrderDetailRequest();
 
-            const maxAttempts = keepPollingWhileOpen ? 90 : 12;
+            const maxAttempts = keepPollingWhileOpen ? 100 : 14;
             for (let attempt = 0; attempt < maxAttempts; attempt++) {
               if (isCancelled()) return;
-              await new Promise((r) => setTimeout(r, 550));
+              await new Promise((r) => setTimeout(r, 300));
               if (isCancelled()) return;
 
-              if (keepPollingWhileOpen && attempt > 0 && attempt % 7 === 0) {
+              if (keepPollingWhileOpen && attempt > 0 && attempt % 10 === 0) {
                 sendOrderDetailRequest().catch(() => {});
               }
 
               const res = await dbFetch(`/order_details/${encodeURIComponent(code)}`);
               if (res.ok) {
                 const data = await res.json();
-                if (data && (data.detail || data.deliveries)) {
+                if (data && (data.detail || data.deliveries || data.notFound)) {
                   if (!isCancelled()) {
                     setOrderDetailsCache((prev) => ({ ...prev, [code]: data }));
                   }
@@ -2125,12 +2144,24 @@
 
       const handleOrderRowHover = useCallback(
         (item) => {
-          if (item?.id && !orderDetailsCache[item.id]) {
-            requestOrderDetailsFromBridge(item, { keepPollingWhileOpen: false });
+          if (hoverPrefetchTimerRef.current) {
+            clearTimeout(hoverPrefetchTimerRef.current);
+            hoverPrefetchTimerRef.current = null;
           }
+          if (!item?.id || item.id === "-" || orderDetailsCache[item.id]) return;
+          hoverPrefetchTimerRef.current = setTimeout(() => {
+            requestOrderDetailsFromBridge(item, { keepPollingWhileOpen: false });
+          }, 500);
         },
         [orderDetailsCache, requestOrderDetailsFromBridge]
       );
+
+      const handleOrderRowLeave = useCallback(() => {
+        if (hoverPrefetchTimerRef.current) {
+          clearTimeout(hoverPrefetchTimerRef.current);
+          hoverPrefetchTimerRef.current = null;
+        }
+      }, []);
 
       // Live Rider Search
       const triggerLiveRiderSearch = useCallback(
@@ -3557,6 +3588,7 @@
                       <tr
                         key={item.uid}
                         onMouseEnter={() => handleOrderRowHover(item)}
+                        onMouseLeave={handleOrderRowLeave}
                         onClick={() => setSelectedOrder(item)}
                         className="hover:bg-blue-50/30 transition-colors cursor-pointer"
                       >
@@ -4295,6 +4327,7 @@
                         <tr
                           key={item.uid}
                           onMouseEnter={() => handleOrderRowHover(item)}
+                          onMouseLeave={handleOrderRowLeave}
                           onClick={() => setSelectedOrder(item)}
                           className={`transition-colors cursor-pointer ${
                             isRowSelected ? "bg-blue-50/70" : "hover:bg-blue-50/30"
