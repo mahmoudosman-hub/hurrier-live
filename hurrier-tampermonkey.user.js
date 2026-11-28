@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.16
-// @description  [v10.16] Fix Syntax & Restore Full On-Demand Handlers (Order Details + Transitions Retry + Courier Profile + Rider Search + Direct Completed Lookup)
+// @version      10.17
+// @description  [v10.17] Resolve Internal Hurrier Order ID (order.id) First for Order Details, Transitions Logs & Completed Lookup (Eliminates 404s)
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.16";
+  const SCRIPT_VERSION = "10.17";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -1105,6 +1105,43 @@
   }
 
   // Catch orders that disappear from Active/Dispatched and turn into Completed in real time
+  function resolveInternalOrderId(code, explicitInternalId = "") {
+    const exp = String(explicitInternalId || "").trim();
+    if (exp && exp !== code) return exp;
+
+    const cleanCode = String(code || "")
+      .trim()
+      .replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "")
+      .trim();
+    if (!cleanCode) return "";
+
+    const fromComp = sharedCompletedMap.get(cleanCode);
+    const compOid = String(fromComp?.order?.id || "").trim();
+    if (compOid && compOid !== cleanCode) return compOid;
+
+    const fromPrev = prevLiveOrdersMap.get(cleanCode);
+    const prevOid = String(fromPrev?.order?.id || fromPrev?.id || "").trim();
+    if (prevOid && prevOid !== cleanCode) return prevOid;
+
+    for (const tabKey of ["Active", "Dispatched", "Queued"]) {
+      const list = cachedTabRecordsMap.get(tabKey) || [];
+      for (const r of list) {
+        const ord = r?.order || {};
+        const rCode = String(
+          ord.code ||
+            ord.confirmation_number ||
+            String(ord.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+            ""
+        ).trim();
+        if (rCode === cleanCode) {
+          const oid = String(ord.id || r?.id || "").trim();
+          if (oid && oid !== cleanCode) return oid;
+        }
+      }
+    }
+    return "";
+  }
+
   async function catchCompletedTransitionsFromLiveOrders(globalTabRecords) {
     const currentLiveCodes = new Set();
     for (const tabKey of ["Queued", "Dispatched", "Active"]) {
@@ -1146,8 +1183,10 @@
         await Promise.all(
           batch.map(async ({ code, prevRec }) => {
             if (!checkedTransitionCodes.has(code)) checkedTransitionCodes.set(code, Date.now());
+            const targetId =
+              resolveInternalOrderId(code, prevRec?.order?.id || prevRec?.id) || code;
             try {
-              const det = await hurrierGet(`/orders/${encodeURIComponent(code)}`);
+              const det = await hurrierGet(`/orders/${encodeURIComponent(targetId)}`);
               const dOrder = det?.order || det || {};
               const st = String(dOrder.status || "").toLowerCase();
               if (st === "completed" || st === "delivered") {
@@ -1394,43 +1433,79 @@
             processedOrderDetailReqs.set(code, reqSig);
 
             const orderCode = String(req.orderCode || `HF_EG${code}`).trim();
-            const internalId = String(req.internalOrderId || "").trim();
+            const internalId = resolveInternalOrderId(code, req.internalOrderId);
 
             const fetchOrderDetailAnyId = async () => {
-              try {
-                const r1 = await hurrierGetWithRetry(`/orders/${encodeURIComponent(code)}`, 2, 250);
-                if (r1 && (r1.order || r1.id || r1.code)) return r1;
-              } catch (err) {
-                if (!internalId || internalId === code) throw err;
-              }
               if (internalId && internalId !== code) {
-                return await hurrierGetWithRetry(`/orders/${encodeURIComponent(internalId)}`, 2, 250);
+                try {
+                  const rInt = await hurrierGetWithRetry(
+                    `/orders/${encodeURIComponent(internalId)}`,
+                    2,
+                    250
+                  );
+                  if (rInt && (rInt.order || rInt.id || rInt.code)) return rInt;
+                } catch {}
               }
+              try {
+                const r1 = await hurrierGetWithRetry(`/orders/${encodeURIComponent(code)}`, 1, 250);
+                if (r1 && (r1.order || r1.id || r1.code)) return r1;
+              } catch {}
+              try {
+                const rSearch = await hurrierGetWithRetry(
+                  `/orders?code=${encodeURIComponent(code)}`,
+                  1,
+                  250
+                );
+                const foundOrd = Array.isArray(rSearch?.orders)
+                  ? rSearch.orders[0]
+                  : Array.isArray(rSearch?.records)
+                  ? rSearch.records[0]?.order || rSearch.records[0]
+                  : rSearch?.order || null;
+                if (foundOrd && foundOrd.id) {
+                  return await hurrierGetWithRetry(
+                    `/orders/${encodeURIComponent(foundOrd.id)}`,
+                    1,
+                    250
+                  );
+                }
+              } catch {}
               return null;
             };
 
             const fetchOrderDeliveriesAnyId = async () => {
+              if (internalId && internalId !== code) {
+                try {
+                  const dInt = await hurrierGetWithRetry(
+                    `/orders/${encodeURIComponent(internalId)}/deliveries`,
+                    2,
+                    250
+                  );
+                  const listInt = Array.isArray(dInt?.deliveries)
+                    ? dInt.deliveries
+                    : Array.isArray(dInt?.records)
+                    ? dInt.records
+                    : Array.isArray(dInt)
+                    ? dInt
+                    : [];
+                  if (listInt.length > 0) return dInt;
+                } catch {}
+              }
               try {
                 const d1 = await hurrierGetWithRetry(
                   `/orders/${encodeURIComponent(code)}/deliveries`,
-                  2,
+                  1,
                   250
                 );
                 const list1 = Array.isArray(d1?.deliveries)
                   ? d1.deliveries
+                  : Array.isArray(d1?.records)
+                  ? d1.records
                   : Array.isArray(d1)
                   ? d1
                   : [];
-                if (list1.length > 0 || !internalId || internalId === code) return d1;
+                if (list1.length > 0) return d1;
               } catch (err) {
-                if (!internalId || internalId === code) throw err;
-              }
-              if (internalId && internalId !== code) {
-                return await hurrierGetWithRetry(
-                  `/orders/${encodeURIComponent(internalId)}/deliveries`,
-                  2,
-                  250
-                );
+                if (!internalId) throw err;
               }
               return null;
             };
@@ -1453,13 +1528,43 @@
 
             const hasDetail = detRes.status === "fulfilled" && detRes.value;
             const delVal = delRes.status === "fulfilled" ? delRes.value : null;
-            const extractedDelList = Array.isArray(delVal?.deliveries)
+            let extractedDelList = Array.isArray(delVal?.deliveries)
               ? delVal.deliveries
+              : Array.isArray(delVal?.records)
+              ? delVal.records
               : Array.isArray(delVal)
               ? delVal
               : Array.isArray(detRes.value?.order?.deliveries)
               ? detRes.value.order.deliveries
+              : Array.isArray(detRes.value?.deliveries)
+              ? detRes.value.deliveries
               : [];
+
+            // If detail resolved the true internal order.id and deliveries were still empty, fetch deliveries using it
+            const resolvedDetOid = String(
+              detRes.value?.order?.id || detRes.value?.id || ""
+            ).trim();
+            if (
+              extractedDelList.length === 0 &&
+              resolvedDetOid &&
+              resolvedDetOid !== internalId &&
+              resolvedDetOid !== code
+            ) {
+              try {
+                const dResolved = await hurrierGetWithRetry(
+                  `/orders/${encodeURIComponent(resolvedDetOid)}/deliveries`,
+                  1,
+                  250
+                );
+                extractedDelList = Array.isArray(dResolved?.deliveries)
+                  ? dResolved.deliveries
+                  : Array.isArray(dResolved?.records)
+                  ? dResolved.records
+                  : Array.isArray(dResolved)
+                  ? dResolved
+                  : [];
+              } catch {}
+            }
             const hasDeliveries = extractedDelList.length > 0;
             const isGenuine404 =
               detRes.status === "rejected" &&
@@ -1660,8 +1765,13 @@
             status = "completed";
             record = sharedCompletedMap.get(code);
           } else {
+            const targetLookupId = resolveInternalOrderId(code) || code;
             try {
-              const det = await hurrierGetWithRetry(`/orders/${encodeURIComponent(code)}`, 1, 250);
+              const det = await hurrierGetWithRetry(
+                `/orders/${encodeURIComponent(targetLookupId)}`,
+                1,
+                250
+              );
               const dOrder = det?.order || det || {};
               if (dOrder && (dOrder.id || dOrder.code)) {
                 found = true;
