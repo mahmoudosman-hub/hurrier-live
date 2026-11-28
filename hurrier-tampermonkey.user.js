@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.18
-// @description  [v10.18] Exact 64-bit Order/Delivery ID Parser (Fixes 18-digit Rounding 404s & Split Collisions) + Priority Fast-Lane (<1s Order Logs) + VO# Fallback Lookup
+// @version      10.20
+// @description  [v10.20] Auto-Discover Hurrier BFF Order/Deliveries/Notes Endpoints + Passive Native Request Sniffer + Priority Yield on Completed Sweep
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.18";
+  const SCRIPT_VERSION = "10.20";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -36,7 +36,7 @@
   const DEVICE_ID_STORAGE_KEY = "hurrier_live_device_id_v1";
   const DEVICE_ACTIVE_TAB_KEY = "hurrier_live_device_active_tab_v2";
   const DEVICE_TABS_REGISTRY_KEY = "hurrier_live_device_tabs_registry_v2";
-
+  const DISCOVERED_ORDER_PREFIX_KEY = "hurrier_discovered_order_api_prefix_v1";
   const IS_DASHBOARD_HOST =
     location.hostname.includes("mahmoudosman-hub.github.io") ||
     location.hostname.includes("hurrier-live");
@@ -351,6 +351,202 @@
     }
     throw lastErr;
   }
+
+  // ============================================================================
+  // 4B) HURRIER BFF ENDPOINT AUTO-DISCOVERY & PASSIVE NATIVE SNIFFER
+  // ============================================================================
+  const DEFAULT_ORDER_API_PREFIXES = [
+    "/hurrier/orders",
+    "/hurrier/v1/orders",
+    "/dispatcher-dashboard/orders",
+    "/hurrier/v2/orders",
+    "/orders"
+  ];
+
+  function getDiscoveredOrderPrefix() {
+    try {
+      return String(window.localStorage.getItem(DISCOVERED_ORDER_PREFIX_KEY) || "").trim();
+    } catch {
+      return "";
+    }
+  }
+
+  function setDiscoveredOrderPrefix(prefix) {
+    const clean = String(prefix || "").trim();
+    if (!clean) return;
+    try {
+      window.localStorage.setItem(DISCOVERED_ORDER_PREFIX_KEY, clean);
+    } catch {}
+  }
+
+  function getOrderedApiPrefixes() {
+    const saved = getDiscoveredOrderPrefix();
+    const list = [];
+    if (saved) list.push(saved);
+    for (const p of DEFAULT_ORDER_API_PREFIXES) {
+      if (!list.includes(p)) list.push(p);
+    }
+    return list;
+  }
+
+  async function fetchFirstValidOrderEndpoint(buildSuffixFn, validateFn) {
+    const prefixes = getOrderedApiPrefixes();
+    const saved = getDiscoveredOrderPrefix();
+
+    // 1) Try previously discovered 200-OK prefix first with zero extra traffic
+    if (saved) {
+      try {
+        const res = await hurrierGetWithRetry(`${saved}${buildSuffixFn(saved)}`, 1, 180);
+        if (validateFn(res)) return { prefix: saved, data: res };
+      } catch (err) {
+        if (!String(err?.message || "").includes("HURRIER_404")) {
+          // Transient error on known prefix; still allow fallback race below
+        }
+      }
+    }
+
+    // 2) Probe remaining Hurrier BFF prefixes in parallel to discover the live route immediately
+    const candidates = prefixes.filter((p) => p !== saved);
+    const settled = await Promise.allSettled(
+      candidates.map(async (prefix) => {
+        const res = await hurrierGet(`${prefix}${buildSuffixFn(prefix)}`);
+        if (!validateFn(res)) throw new Error("INVALID_SHAPE");
+        return { prefix, data: res };
+      })
+    );
+
+    for (const item of settled) {
+      if (item.status === "fulfilled" && item.value) {
+        setDiscoveredOrderPrefix(item.value.prefix);
+        return item.value;
+      }
+    }
+    return null;
+  }
+
+  // Passive observer on native Hurrier fetch/XHR calls so any order opened in Hurrier
+  // automatically teaches the script the exact endpoint URL & mirrors its payload.
+  function installPassiveHurrierApiSniffer() {
+    if (window.__hurrierPassiveSnifferInstalled) return;
+    window.__hurrierPassiveSnifferInstalled = true;
+
+    const inspectNativeResponse = (rawUrl, rawText) => {
+      try {
+        const urlStr = String(rawUrl || "");
+        if (!urlStr.includes("/api/")) return;
+        const apiPath = urlStr.split("/api")[1]?.split("?")[0] || "";
+        if (!apiPath) return;
+
+        // Learn exact BFF order prefix whenever Hurrier's own UI fetches an order or deliveries
+        const prefixMatch = apiPath.match(
+          /^(\/(?:hurrier(?:\/v\d+)?|dispatcher-dashboard)\/orders|\/orders)(?:\/|$)/i
+        );
+        if (prefixMatch && prefixMatch[1]) {
+          setDiscoveredOrderPrefix(prefixMatch[1]);
+        }
+
+        if (!rawText || typeof rawText !== "string" || rawText.length < 10) return;
+        const parsed = parseHurrierJsonSafe(rawText);
+        if (!parsed || typeof parsed !== "object") return;
+
+        const dOrder = parsed.order || (parsed.order_code || parsed.confirmation_number ? parsed : null);
+        const delArr = Array.isArray(parsed.deliveries)
+          ? parsed.deliveries
+          : Array.isArray(dOrder?.deliveries)
+          ? dOrder.deliveries
+          : null;
+        const notesArr = Array.isArray(parsed.dispatcher_notes) ? parsed.dispatcher_notes : null;
+
+        if (!dOrder && !delArr && !notesArr) return;
+
+        const rawCode = String(
+          dOrder?.code ||
+            dOrder?.confirmation_number ||
+            String(dOrder?.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+            ""
+        ).trim();
+
+        if (!rawCode) return;
+
+        firebaseReq("GET", `/order_details/${encodeURIComponent(rawCode)}`)
+          .then((prev) => {
+            const base = prev && typeof prev === "object" ? prev : {};
+            const nextDeliveries = delArr
+              ? { deliveries: delArr }
+              : base.deliveries || null;
+            const hasTransitions = Array.isArray(nextDeliveries?.deliveries)
+              ? nextDeliveries.deliveries.some(
+                  (d) => Array.isArray(d?.transitions) && d.transitions.length > 0
+                )
+              : false;
+            return firebaseReq("PUT", `/order_details/${encodeURIComponent(rawCode)}`, {
+              code: rawCode,
+              detail: dOrder ? { order: dOrder } : base.detail || null,
+              deliveries: nextDeliveries,
+              deliveriesFetched: Boolean(hasTransitions || base.deliveriesFetched),
+              notFound: false,
+              notes: notesArr ? { dispatcher_notes: notesArr } : base.notes || { dispatcher_notes: [] },
+              updatedAt: Date.now()
+            });
+          })
+          .catch(() => {});
+      } catch {}
+    };
+
+    try {
+      const origFetch = window.fetch;
+      if (typeof origFetch === "function") {
+        window.fetch = async function (...args) {
+          const response = await origFetch.apply(this, args);
+          try {
+            const reqUrl = typeof args[0] === "string" ? args[0] : args[0]?.url || "";
+            if (
+              response &&
+              response.ok &&
+              reqUrl.includes("logisticsbackoffice.com/api/") &&
+              (/\/orders\//i.test(reqUrl) ||
+                /\/deliveries\//i.test(reqUrl) ||
+                /dispatcher_notes/i.test(reqUrl))
+            ) {
+              response
+                .clone()
+                .text()
+                .then((txt) => inspectNativeResponse(reqUrl, txt))
+                .catch(() => {});
+            }
+          } catch {}
+          return response;
+        };
+      }
+    } catch {}
+
+    try {
+      const origOpen = XMLHttpRequest.prototype.open;
+      const origSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+        this.__hurrierSniffUrl = String(url || "");
+        return origOpen.call(this, method, url, ...rest);
+      };
+      XMLHttpRequest.prototype.send = function (...args) {
+        this.addEventListener("load", function () {
+          try {
+            const u = this.__hurrierSniffUrl || "";
+            if (
+              this.status >= 200 &&
+              this.status < 300 &&
+              u.includes("/api/") &&
+              (/\/orders\//i.test(u) || /\/deliveries\//i.test(u) || /dispatcher_notes/i.test(u))
+            ) {
+              inspectNativeResponse(u, this.responseText);
+            }
+          } catch {}
+        });
+        return origSend.apply(this, args);
+      };
+    } catch {}
+  }
+
+  installPassiveHurrierApiSniffer();
 
   // ============================================================================
   // 5) UNIFIED DEVICE MULTI-TAB INSTANT HANDOFF & MULTI-PC PRIMARY LEADER ELECTION
@@ -1207,7 +1403,11 @@
             if (!checkedTransitionCodes.has(code)) checkedTransitionCodes.set(code, Date.now());
             const internalOid = String(prevRec?.order?.id || prevRec?.id || code).trim();
             try {
-              const det = await hurrierGet(`/orders/${encodeURIComponent(internalOid)}`);
+              const hit = await fetchFirstValidOrderEndpoint(
+                () => `/${encodeURIComponent(internalOid)}`,
+                (r) => Boolean(r && (r.order || r.id || r.code || r.status))
+              );
+              const det = hit?.data || null;
               const dOrder = det?.order || det || {};
               const st = String(dOrder.status || "").toLowerCase();
               if (st === "completed" || st === "delivered") {
@@ -1330,6 +1530,10 @@
         batchPages.push(pg);
       }
 
+      if (isPriorityUrgentActive()) {
+        await new Promise((r) => setTimeout(r, 700));
+      }
+
       const batchResults = await Promise.all(
         batchPages.map(async (pNum) => {
           if (prefetched.has(pNum)) return { page: pNum, records: prefetched.get(pNum) };
@@ -1367,6 +1571,7 @@
       batchIdx++;
 
       if (reachedOlderThanWindow) break;
+      await new Promise((r) => setTimeout(r, 120));
     }
 
     return lastPage;
@@ -1452,83 +1657,66 @@
 
             const orderCode = String(req.orderCode || `HF_EG${code}`).trim();
             const vendorOrderNumber = String(req.vendorOrderNumber || "").trim();
+            const explicitDeliveryId = String(req.deliveryId || "").trim();
             const internalId = resolveInternalOrderId(
               code,
               req.internalOrderId,
               vendorOrderNumber
             );
 
+            const idsToProbe = [];
+            if (internalId && internalId !== code) idsToProbe.push(internalId);
+            if (code) idsToProbe.push(code);
+
+            const isValidOrderObj = (r) =>
+              Boolean(r && (r.order || r.id || r.code || r.confirmation_number || r.status));
+
+            const extractDeliveriesList = (d) =>
+              Array.isArray(d?.deliveries)
+                ? d.deliveries
+                : Array.isArray(d?.records)
+                ? d.records
+                : Array.isArray(d)
+                ? d
+                : [];
+
             const fetchOrderDetailAnyId = async () => {
-              if (internalId && internalId !== code) {
-                try {
-                  const rInt = await hurrierGetWithRetry(
-                    `/orders/${encodeURIComponent(internalId)}`,
-                    1,
-                    200
-                  );
-                  if (rInt && (rInt.order || rInt.id || rInt.code)) return rInt;
-                } catch {}
-              }
-              try {
-                const r1 = await hurrierGetWithRetry(`/orders/${encodeURIComponent(code)}`, 1, 200);
-                if (r1 && (r1.order || r1.id || r1.code)) return r1;
-              } catch {}
-              try {
-                const rSearch = await hurrierGetWithRetry(
-                  `/orders?code=${encodeURIComponent(code)}`,
-                  1,
-                  200
+              for (const probeId of idsToProbe) {
+                const hit = await fetchFirstValidOrderEndpoint(
+                  () => `/${encodeURIComponent(probeId)}`,
+                  isValidOrderObj
                 );
-                const foundOrd = Array.isArray(rSearch?.orders)
-                  ? rSearch.orders[0]
-                  : Array.isArray(rSearch?.records)
-                  ? rSearch.records[0]?.order || rSearch.records[0]
-                  : rSearch?.order || null;
-                if (foundOrd && foundOrd.id) {
-                  return await hurrierGetWithRetry(
-                    `/orders/${encodeURIComponent(String(foundOrd.id))}`,
-                    1,
-                    200
-                  );
-                }
-              } catch {}
+                if (hit?.data) return hit.data;
+              }
               return null;
             };
 
             const fetchOrderDeliveriesAnyId = async () => {
-              if (internalId && internalId !== code) {
-                try {
-                  const dInt = await hurrierGetWithRetry(
-                    `/orders/${encodeURIComponent(internalId)}/deliveries`,
-                    2,
-                    200
-                  );
-                  const listInt = Array.isArray(dInt?.deliveries)
-                    ? dInt.deliveries
-                    : Array.isArray(dInt?.records)
-                    ? dInt.records
-                    : Array.isArray(dInt)
-                    ? dInt
-                    : [];
-                  if (listInt.length > 0) return dInt;
-                } catch {}
-              }
-              try {
-                const d1 = await hurrierGetWithRetry(
-                  `/orders/${encodeURIComponent(code)}/deliveries`,
-                  1,
-                  200
+              for (const probeId of idsToProbe) {
+                const hit = await fetchFirstValidOrderEndpoint(
+                  () => `/${encodeURIComponent(probeId)}/deliveries`,
+                  (d) => extractDeliveriesList(d).length > 0
                 );
-                const list1 = Array.isArray(d1?.deliveries)
-                  ? d1.deliveries
-                  : Array.isArray(d1?.records)
-                  ? d1.records
-                  : Array.isArray(d1)
-                  ? d1
-                  : [];
-                if (list1.length > 0) return d1;
-              } catch (err) {
-                if (!internalId) throw err;
+                if (hit?.data) return hit.data;
+              }
+              if (explicitDeliveryId) {
+                const delPrefixes = [
+                  "/hurrier/deliveries",
+                  "/hurrier/v1/deliveries",
+                  "/dispatcher-dashboard/deliveries",
+                  "/deliveries"
+                ];
+                for (const dp of delPrefixes) {
+                  try {
+                    const singleDel = await hurrierGet(
+                      `${dp}/${encodeURIComponent(explicitDeliveryId)}`
+                    );
+                    const dObj = singleDel?.delivery || singleDel;
+                    if (dObj && (Array.isArray(dObj.transitions) || dObj.id)) {
+                      return { deliveries: [dObj] };
+                    }
+                  } catch {}
+                }
               }
               return null;
             };
@@ -1537,22 +1725,17 @@
               const codesToTry = [orderCode];
               if (code && !codesToTry.includes(code)) codesToTry.push(code);
               for (const nCode of codesToTry) {
-                try {
-                  const n1 = await hurrierGetWithRetry(
-                    `/orders/dispatcher_notes?code=${encodeURIComponent(nCode)}`,
-                    1,
-                    200
-                  );
-                  if (n1) return n1;
-                } catch {}
-                try {
-                  const n2 = await hurrierGetWithRetry(
-                    `/hurrier/v1/orders/dispatcher_notes?code=${encodeURIComponent(nCode)}`,
-                    1,
-                    200
-                  );
-                  if (n2) return n2;
-                } catch {}
+                const hit = await fetchFirstValidOrderEndpoint(
+                  () => `/dispatcher_notes?code=${encodeURIComponent(nCode)}`,
+                  (n) => Boolean(n && (Array.isArray(n.dispatcher_notes) || Array.isArray(n)))
+                );
+                if (hit?.data) return hit.data;
+
+                const hitAlt = await fetchFirstValidOrderEndpoint(
+                  () => `/dispatcher_notes?order_code=${encodeURIComponent(nCode)}`,
+                  (n) => Boolean(n && (Array.isArray(n.dispatcher_notes) || Array.isArray(n)))
+                );
+                if (hitAlt?.data) return hitAlt.data;
               }
               return null;
             };
@@ -1572,50 +1755,48 @@
             let freshDeliveries = delRes.status === "fulfilled" ? delRes.value : null;
             const freshNotes = notesRes.status === "fulfilled" ? notesRes.value : null;
 
-            // If detail response returned the true internal order.id and deliveries weren't fetched yet, fetch using it
+            // Check if the order detail payload already embeds deliveries/transitions or notes
+            const embeddedDeliveries =
+              freshDetail?.deliveries || freshDetail?.order?.deliveries || null;
+            if (!freshDeliveries && Array.isArray(embeddedDeliveries) && embeddedDeliveries.length > 0) {
+              freshDeliveries = { deliveries: embeddedDeliveries };
+            }
+
             const resolvedOidFromDetail = String(
               freshDetail?.order?.id || freshDetail?.id || ""
             ).trim();
             if (
               !freshDeliveries &&
               resolvedOidFromDetail &&
-              resolvedOidFromDetail !== code &&
-              resolvedOidFromDetail !== internalId
+              !idsToProbe.includes(resolvedOidFromDetail)
             ) {
-              try {
-                freshDeliveries = await hurrierGetWithRetry(
-                  `/orders/${encodeURIComponent(resolvedOidFromDetail)}/deliveries`,
-                  1,
-                  200
-                );
-              } catch {}
+              const hit2 = await fetchFirstValidOrderEndpoint(
+                () => `/${encodeURIComponent(resolvedOidFromDetail)}/deliveries`,
+                (d) => extractDeliveriesList(d).length > 0
+              );
+              if (hit2?.data) freshDeliveries = hit2.data;
             }
 
             const finalDetail = freshDetail || prevEntry.detail || null;
             const finalDeliveries = freshDeliveries || prevEntry.deliveries || null;
-            const finalNotes = freshNotes || prevEntry.notes || { dispatcher_notes: [] };
+            const embeddedNotes =
+              freshDetail?.dispatcher_notes || freshDetail?.order?.dispatcher_notes || null;
+            const finalNotes =
+              freshNotes ||
+              (Array.isArray(embeddedNotes) ? { dispatcher_notes: embeddedNotes } : null) ||
+              prevEntry.notes || { dispatcher_notes: [] };
 
-            const delListCheck = Array.isArray(finalDeliveries?.deliveries)
-              ? finalDeliveries.deliveries
-              : Array.isArray(finalDeliveries?.records)
-              ? finalDeliveries.records
-              : Array.isArray(finalDeliveries)
-              ? finalDeliveries
-              : [];
+            const delListCheck = extractDeliveriesList(finalDeliveries);
             const hasDeliveries = delListCheck.some(
               (d) => Array.isArray(d?.transitions) && d.transitions.length > 0
             );
-            const isGenuine404 =
-              delRes.status === "rejected" &&
-              String(delRes.reason?.message || "").includes("HURRIER_404") &&
-              !finalDetail;
 
             const payload = {
               code,
               detail: finalDetail,
               deliveries: finalDeliveries,
-              deliveriesFetched: Boolean(hasDeliveries || isGenuine404),
-              notFound: isGenuine404,
+              deliveriesFetched: Boolean(hasDeliveries || finalDetail),
+              notFound: false,
               notes: finalNotes,
               updatedAt: Date.now()
             };
@@ -1775,7 +1956,11 @@
             const internalOid = resolveInternalOrderId(code, "", "");
             const lookupId = internalOid || code;
             try {
-              const det = await hurrierGet(`/orders/${encodeURIComponent(lookupId)}`);
+              const hit = await fetchFirstValidOrderEndpoint(
+                () => `/${encodeURIComponent(lookupId)}`,
+                (r) => Boolean(r && (r.order || r.id || r.code || r.confirmation_number || r.status))
+              );
+              const det = hit?.data || null;
               const dOrder = det?.order || det || {};
               if (dOrder && (dOrder.id || dOrder.code)) {
                 found = true;
@@ -1789,6 +1974,9 @@
                     saveSharedCompletedArchiveToFb().catch(() => {});
                   }
                 }
+              } else {
+                found = false;
+                status = "not_found";
               }
             } catch (e) {
               const errMsg = String(e?.message || "");
