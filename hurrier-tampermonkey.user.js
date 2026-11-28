@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.5
-// @description  [v10.5] Smart Delta Completed Sync + Instant Firebase Archive Hydration + Live Transition Catcher + Unified Multi-Tab Handoff
+// @version      10.4
+// @description  [v10.4] Instant Progressive Completed Orders Push + Live Active-to-Completed Catcher + Full-Day Zone Archive (Up to 4000 Pages)
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.5";
+  const SCRIPT_VERSION = "10.4";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -558,7 +558,6 @@
   let completedSyncing = false;
   let completedLastSweepAt = 0;
   let completedLastTailSyncAt = 0;
-  let completedNewestCachedMs = 0;
   let lastKnownCompletedLastPage = 1;
   let lastHandledForceSweepTs = 0;
   let latestUnionZoneIds = [];
@@ -881,71 +880,18 @@
 
   async function loadInitialSharedCompletedArchive() {
     if (completedArchiveLoadedFromFb) return;
+    completedArchiveLoadedFromFb = true;
     try {
       const data = await firebaseReq("GET", "/config/shared_completed_archive");
-      completedArchiveLoadedFromFb = true;
       if (data && typeof data === "object") {
         Object.entries(data).forEach(([code, rec]) => {
           if (rec && typeof rec === "object") {
-            const ms = extractCompletedMsFromRecord(rec);
-            sharedCompletedMap.set(String(code), ms > 0 ? { ...rec, __completed_at_ms: ms } : rec);
+            sharedCompletedMap.set(String(code), rec);
           }
         });
         pruneOldCompletedRecords();
-        let maxMs = 0;
-        for (const rec of sharedCompletedMap.values()) {
-          const ms = extractCompletedMsFromRecord(rec);
-          if (ms > maxMs) maxMs = ms;
-        }
-        completedNewestCachedMs = maxMs;
-        const now = Date.now();
-        // If Firebase archive already has today's orders up to < 15m ago, skip full 2h sweep and delta-sync only the gap
-        if (sharedCompletedMap.size > 0 && maxMs > 0 && now - maxMs < 15 * 60 * 1000) {
-          completedLastSweepAt = now;
-          runCompletedSmartDeltaSync(maxMs - 2 * 60 * 1000).catch(() => {});
-        }
       }
     } catch {}
-  }
-
-  // Pulls ONLY the missing gap from newestCachedMs up to now (instead of re-scanning all 2 hours after logout/reload)
-  async function runCompletedSmartDeltaSync(fromCutoffMs) {
-    if (completedSyncing) return;
-    completedSyncing = true;
-    const now = Date.now();
-    const effectiveFromMs = Math.max(now - 2 * 3600 * 1000, Number(fromCutoffMs || 0));
-    const todayStr = getCairoDateStringForMs(now);
-
-    try {
-      const deltaMap = new Map();
-      const detectedLastPage = await ingestCompletedWindowBackwardsForDate(
-        todayStr,
-        effectiveFromMs,
-        now + 10 * 60 * 1000,
-        deltaMap,
-        lastKnownCompletedLastPage
-      );
-      if (detectedLastPage > 0) {
-        lastKnownCompletedLastPage = detectedLastPage;
-      }
-
-      let addedAny = false;
-      for (const [code, rec] of deltaMap.entries()) {
-        if (doesCompletedRecordMatchUnionZones(rec)) {
-          sharedCompletedMap.set(code, rec);
-          addedAny = true;
-        }
-      }
-      pruneOldCompletedRecords();
-      completedLastSweepAt = Date.now();
-      completedLastTailSyncAt = completedLastSweepAt;
-      if (addedAny) {
-        await saveSharedCompletedArchiveToFb();
-        await pushImmediateCompletedPatchToSessions();
-      }
-    } finally {
-      completedSyncing = false;
-    }
   }
 
   async function saveSharedCompletedArchiveToFb() {
@@ -1709,16 +1655,7 @@
       }
 
       await loadInitialSharedCompletedArchive();
-      if (completedLastSweepAt === 0) {
-        if (
-          sharedCompletedMap.size > 0 &&
-          completedNewestCachedMs >= now - 2 * 3600 * 1000
-        ) {
-          runCompletedSmartDeltaSync(completedNewestCachedMs - 2 * 60 * 1000).catch(() => {});
-        } else {
-          runCompletedArchive15MinSweep().catch(() => {});
-        }
-      } else if (now - completedLastSweepAt >= 15 * 60 * 1000) {
+      if (completedLastSweepAt === 0 || now - completedLastSweepAt >= 15 * 60 * 1000) {
         runCompletedArchive15MinSweep().catch(() => {});
       } else if (now - completedLastTailSyncAt >= 20 * 1000) {
         runCompletedTailQuickRefresh().catch(() => {});
