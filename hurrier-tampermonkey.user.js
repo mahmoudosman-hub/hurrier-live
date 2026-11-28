@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.11
-// @description  [v10.11] Long Order-ID Lookup (19-20 digit internal ids now searchable) + Rich Completed Search (Rider ID / phone / VO) + Honest Lookup Errors + Near-Real-Time 60s Completed Delta + Rolling 2h Archive
+// @version      10.12
+// @description  [v10.12] Multi-Rider / Split Order Sibling Preservation (All Riders Shown) + Preorder Live Delay Countdown & Badge + Long Order-ID Lookup + Rich Completed Search + Rolling 2h Archive
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.11";
+  const SCRIPT_VERSION = "10.12";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -619,10 +619,12 @@
 
     const addRecs = (recs) => {
       for (const r of recs) {
-        // v10.8: dedup ONLY on the delivery's own id. The old fallback to order id
-        // collapsed split-order siblings sharing one order id (silent order loss).
+        // v10.12: dedup on delivery id + courier_id so every rider on multi-rider / split orders survives
         const rid = String(r?.id ?? "").trim();
-        const dedupKey = rid || `uniq_${all.length}_${Math.random().toString(36).slice(2, 9)}`;
+        const cid = String(r?.courier_id ?? "").trim();
+        const dedupKey = rid
+          ? `${rid}_${cid}`
+          : `uniq_${all.length}_${Math.random().toString(36).slice(2, 9)}`;
         if (!seenIds.has(dedupKey)) {
           seenIds.add(dedupKey);
           all.push(r);
@@ -1769,8 +1771,11 @@
             const mergedById = new Map();
             const mergeKey = (r, prefix, idx) => {
               const ownId = String(r?.id ?? "").trim();
-              // v10.8: never merge on order id (split-order siblings must survive)
-              return ownId || `${prefix}_${idx}_${Math.random().toString(36).slice(2, 8)}`;
+              const cid = String(r?.courier_id ?? "").trim();
+              // v10.12: key by delivery id + courier_id so multi-rider / split-order siblings survive
+              return ownId
+                ? `${ownId}_${cid}`
+                : `${prefix}_${idx}_${Math.random().toString(36).slice(2, 8)}`;
             };
             prevAll.forEach((r, idx) => {
               mergedById.set(mergeKey(r, "prev", idx), r);
@@ -1937,16 +1942,36 @@
             }
           });
 
+          // v10.12: collect parent order keys of every matched delivery across Queued/Dispatched/Active
+          // so split/multi-rider sibling deliveries (is_primary: false) are NEVER dropped when their
+          // starting_points differ from the primary delivery's starting_points.
+          const matchedParentOrderKeys = new Set();
+          const collectOrderKeys = (rec) => {
+            const ord = rec?.order || {};
+            const keys = [];
+            if (ord.id) keys.push(`oid:${String(ord.id).trim()}`);
+            if (ord.code) keys.push(`code:${String(ord.code).trim()}`);
+            if (ord.order_code) keys.push(`ocode:${String(ord.order_code).trim()}`);
+            return keys;
+          };
+
+          for (const tKey of ["Queued", "Dispatched", "Active"]) {
+            for (const r of globalTabRecords[tKey]) {
+              if (recordMatchesSessionZones(r, sessZoneIdSet, sessZoneNameSet)) {
+                collectOrderKeys(r).forEach((k) => matchedParentOrderKeys.add(k));
+              }
+            }
+          }
+
+          const recordBelongsToSessionWithSiblings = (r) => {
+            if (recordMatchesSessionZones(r, sessZoneIdSet, sessZoneNameSet)) return true;
+            return collectOrderKeys(r).some((k) => matchedParentOrderKeys.has(k));
+          };
+
           const sessTabRecords = {
-            Queued: globalTabRecords.Queued.filter((r) =>
-              recordMatchesSessionZones(r, sessZoneIdSet, sessZoneNameSet)
-            ),
-            Dispatched: globalTabRecords.Dispatched.filter((r) =>
-              recordMatchesSessionZones(r, sessZoneIdSet, sessZoneNameSet)
-            ),
-            Active: globalTabRecords.Active.filter((r) =>
-              recordMatchesSessionZones(r, sessZoneIdSet, sessZoneNameSet)
-            )
+            Queued: globalTabRecords.Queued.filter(recordBelongsToSessionWithSiblings),
+            Dispatched: globalTabRecords.Dispatched.filter(recordBelongsToSessionWithSiblings),
+            Active: globalTabRecords.Active.filter(recordBelongsToSessionWithSiblings)
           };
 
           maxActiveDisplayed = Math.max(maxActiveDisplayed, sessTabRecords.Active.length);
