@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v10.9 -->
+<!-- Hurrier Live Operations Dashboard v10.11 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v10.9</title>
+  <title>Hurrier Live Operations Dashboard v10.11</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,14 +38,14 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v10.9...
+      Loading Hurrier Live Operations Dashboard v10.11...
     </div>
   </div>
 
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
-    const APP_VERSION = "10.9";
+    const APP_VERSION = "10.11";
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
     const FIREBASE_PROJECT_ID = "hurrier-live";
     const FIREBASE_AUTH_DOMAIN = "hurrier-live.firebaseapp.com";
@@ -409,7 +409,8 @@
         .trim()
         .replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "")
         .trim();
-      return /^\d{7,14}(-\d+)?$/.test(clean);
+      // v10.11: Hurrier order ids can be long internal ids (up to 19-20 digits) — accept them all
+      return /^\d{7,20}(-\d+)?$/.test(clean);
     }
 
     function normalizePhoneDigits(rawStr) {
@@ -2542,6 +2543,34 @@
         const cutoffMs = anchorNow - windowMs - graceMs;
 
         const enriched = sourceOrders.map((item) => {
+          // v10.10: rich search blob — order id/code/VO, courier name + rider ID + user_id + phone,
+          // vendor + vendor code, city & zone names — so searching a Rider ID or phone actually matches
+          if (!item.__searchBlob || item.__blobMeta !== knownCouriersMeta) {
+            const cMeta = item.courierId ? knownCouriersMeta[item.courierId] : null;
+            const cPhone = String(cMeta?.phone || "");
+            let blob = [
+              item.id,
+              item.orderCode,
+              item.vo,
+              item.courier,
+              item.courierId,
+              cMeta?.userId,
+              cMeta?.phone,
+              item.vendor,
+              item.vendorCode,
+              item.city,
+              item.raw?.order?.id,
+              item.raw?.id,
+              ...(item.zonesList || [])
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase();
+            const pDigits = cPhone.replace(/\D/g, "");
+            if (pDigits) blob += ` ${pDigits} ${pDigits.replace(/^20/, "")}`;
+            item.__searchBlob = blob;
+            item.__blobMeta = knownCouriersMeta;
+          }
           const cachedDet = orderDetailsCache[item.id]?.detail?.order || orderDetailsCache[item.id]?.detail;
           const exactIso = cachedDet?.current_state_transition;
           if (exactIso) {
@@ -2576,12 +2605,7 @@
           }
 
           if (!q) return true;
-          return (
-            String(item.id).toLowerCase().includes(q) ||
-            String(item.vo).toLowerCase().includes(q) ||
-            String(item.courier).toLowerCase().includes(q) ||
-            String(item.vendor).toLowerCase().includes(q)
-          );
+          return String(item.__searchBlob || "").includes(q);
         });
 
         return filtered.sort((a, b) =>
@@ -2599,7 +2623,8 @@
         completedZoneFilter,
         completedSearchQuery,
         completedSortAsc,
-        matchesZoneFilter
+        matchesZoneFilter,
+        knownCouriersMeta
       ]);
 
       // Instant Direct Order ID Lookup when searching for an Order ID not in local window
@@ -2639,7 +2664,8 @@
                     setDirectCompletedLookup({
                       query: cleanCode,
                       loading: false,
-                      status: "not_found",
+                      // v10.10: pass through "not_found" vs "lookup_error" honestly
+                      status: String(data.status || "not_found"),
                       orderItem: null
                     });
                   } else {
@@ -3249,7 +3275,7 @@
                           setCompletedSearchQuery(e.target.value);
                           setCompletedPage(1);
                         }}
-                        placeholder="اكتب Order ID (من أي وقت باليوم) أو VO أو اسم الرايدر..."
+                        placeholder="اكتب Order ID (من أي وقت باليوم) أو VO أو اسم/رقم الرايدر أو التليفون..."
                         className="w-full pl-3 pr-8 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm focus:outline-none focus:border-blue-500"
                       />
                       {completedSearchQuery && (
@@ -3391,6 +3417,10 @@
                   ) : directCompletedLookup.status === "not_found" ? (
                     <span className="font-semibold text-gray-700">
                       لم يتم العثور على أوردر برقم #{directCompletedLookup.query} في Hurrier.
+                    </span>
+                  ) : directCompletedLookup.status === "lookup_error" ? (
+                    <span className="font-bold text-amber-800">
+                      ⚠️ حصل خطأ مؤقت أثناء البحث عن الأوردر #{directCompletedLookup.query} في هورير — استنى ثواني وجرّب تاني (اتأكد كمان إن تاب السكريبت فاتح وشغّال).
                     </span>
                   ) : directCompletedLookup.status ? (
                     <div className="flex flex-wrap items-center justify-between w-full gap-2">
