@@ -1,26 +1,335 @@
-// ... existing code ...
+// ==UserScript==
+// @name         Hurrier Live Sync
+// @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
 // @version      10.0
-// @description  [v10.0] Unified Device Multi-Tab Instant Handoff + Full Active Deliveries Pagination & Zone Match + Shared 2h Completed Archive
+// @description  [v10.0] Unified Device Multi-Tab Instant Handoff + Full Active Deliveries Pagination & Zone Match + Shared 2h Completed Archive + Notes & Rider Search
+// @author       Mahmoud Mohammed
+// @match        https://eg.me.logisticsbackoffice.com/*
+// @match        https://mahmoudosman-hub.github.io/hurrier-live/*
+// @match        https://hurrier-live.web.app/*
+// @match        https://hurrier-live.firebaseapp.com/*
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
-// ... existing code ...
+// @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_xmlhttpRequest
+// @grant        GM_openInTab
+// @connect      raw.githubusercontent.com
+// @connect      hurrier-live-default-rtdb.europe-west1.firebasedatabase.app
+// @connect      securetoken.googleapis.com
+// @connect      eg.me.logisticsbackoffice.com
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+  "use strict";
+
   const SCRIPT_VERSION = "10.0";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
     "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
   const BASE_API = "https://eg.me.logisticsbackoffice.com/api";
+
   const AUTH_BRIDGE_STORAGE_KEY = "hurrier_fb_bridge_auth";
   const GM_AUTH_BRIDGE_KEY = "hurrier_fb_bridge_auth_v1";
   const DEVICE_ID_STORAGE_KEY = "hurrier_live_device_id_v1";
   const DEVICE_ACTIVE_TAB_KEY = "hurrier_live_device_active_tab_v2";
   const DEVICE_TABS_REGISTRY_KEY = "hurrier_live_device_tabs_registry_v2";
-// ... existing code ...
+
+  const IS_DASHBOARD_HOST =
+    location.hostname.includes("mahmoudosman-hub.github.io") ||
+    location.hostname.includes("hurrier-live");
+  const IS_HURRIER_HOST = location.hostname.includes("logisticsbackoffice.com");
+
+  // ============================================================================
+  // 1) DASHBOARD HOST AUTH BRIDGE (Mirrors Google Sign-In Token to Tampermonkey)
+  // ============================================================================
+  function syncAuthBridgeFromDashboardPage() {
+    try {
+      const raw = window.localStorage.getItem(AUTH_BRIDGE_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.idToken && parsed.apiKey) {
+        if (typeof GM_setValue === "function") {
+          GM_setValue(GM_AUTH_BRIDGE_KEY, parsed);
+        }
+      }
+    } catch {}
+  }
+
+  if (IS_DASHBOARD_HOST) {
+    syncAuthBridgeFromDashboardPage();
+    setInterval(syncAuthBridgeFromDashboardPage, 2500);
+    window.addEventListener("storage", (e) => {
+      if (e.key === AUTH_BRIDGE_STORAGE_KEY) syncAuthBridgeFromDashboardPage();
+    });
+    return;
+  }
+
+  if (!IS_HURRIER_HOST) return;
+
+  // ============================================================================
+  // 2) FLOATING STATUS & AUTO-UPDATE BADGE UI
+  // ============================================================================
+  let badgeEl = null;
+  let updateAvailableVersion = "";
+
+  function ensureBadge() {
+    if (badgeEl && document.body && document.body.contains(badgeEl)) return badgeEl;
+    if (!document.body) return null;
+    badgeEl = document.createElement("div");
+    badgeEl.id = "hurrier-live-sync-badge";
+    Object.assign(badgeEl.style, {
+      position: "fixed",
+      bottom: "14px",
+      right: "16px",
+      zIndex: "2147483647",
+      padding: "7px 14px",
+      borderRadius: "9999px",
+      backgroundColor: "#15803d",
+      color: "#ffffff",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+      fontSize: "12px",
+      fontWeight: "700",
+      boxShadow: "0 6px 18px rgba(0,0,0,0.22)",
+      cursor: "pointer",
+      userSelect: "none",
+      transition: "all 0.2s ease",
+      letterSpacing: "0.01em"
+    });
+    badgeEl.textContent = `v${SCRIPT_VERSION} • Initializing...`;
+    badgeEl.addEventListener("click", () => {
+      if (updateAvailableVersion) {
+        if (typeof GM_openInTab === "function") {
+          GM_openInTab(GITHUB_SCRIPT_RAW_URL, { active: true });
+        } else {
+          window.open(GITHUB_SCRIPT_RAW_URL, "_blank");
+        }
+      } else {
+        window.open("https://mahmoudosman-hub.github.io/hurrier-live/", "_blank");
+      }
+    });
+    document.body.appendChild(badgeEl);
+    return badgeEl;
+  }
+
+  function setBadge(bgColor, text) {
+    const el = ensureBadge();
+    if (!el) return;
+    if (updateAvailableVersion) {
+      el.style.backgroundColor = "#1d4ed8";
+      el.textContent = `⬆ Update v${updateAvailableVersion} Ready (Click to Update)`;
+      return;
+    }
+    el.style.backgroundColor = bgColor;
+    el.textContent = text;
+  }
+
+  function compareVersions(a, b) {
+    const pa = String(a || "0")
+      .split(".")
+      .map((n) => parseInt(n, 10) || 0);
+    const pb = String(b || "0")
+      .split(".")
+      .map((n) => parseInt(n, 10) || 0);
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+      const na = pa[i] || 0;
+      const nb = pb[i] || 0;
+      if (na > nb) return 1;
+      if (na < nb) return -1;
+    }
+    return 0;
+  }
+
+  function checkGitHubForScriptUpdates() {
+    if (typeof GM_xmlhttpRequest !== "function") return;
+    GM_xmlhttpRequest({
+      method: "GET",
+      url: `${GITHUB_SCRIPT_RAW_URL}?t=${Date.now()}`,
+      onload: (res) => {
+        if (res.status >= 200 && res.status < 300 && res.responseText) {
+          const m = /@version\s+([0-9]+(?:\.[0-9]+)*)/.exec(res.responseText);
+          if (m && m[1] && compareVersions(m[1], SCRIPT_VERSION) > 0) {
+            updateAvailableVersion = m[1];
+            setBadge("#1d4ed8", `⬆ Update v${m[1]} Ready (Click to Update)`);
+          }
+        }
+      }
+    });
+  }
+
+  setTimeout(checkGitHubForScriptUpdates, 4000);
+  setInterval(checkGitHubForScriptUpdates, 90000);
+
+  // ============================================================================
+  // 3) FIREBASE AUTH TOKEN BRIDGE & AUTO-REFRESH
+  // ============================================================================
+  function readStoredAuthBridge() {
+    try {
+      if (typeof GM_getValue === "function") {
+        const gmVal = GM_getValue(GM_AUTH_BRIDGE_KEY, null);
+        if (gmVal && gmVal.idToken) return gmVal;
+      }
+    } catch {}
+    try {
+      const lsRaw = window.localStorage.getItem(AUTH_BRIDGE_STORAGE_KEY);
+      if (lsRaw) {
+        const parsed = JSON.parse(lsRaw);
+        if (parsed && parsed.idToken) return parsed;
+      }
+    } catch {}
+    return null;
+  }
+
+  function writeStoredAuthBridge(obj) {
+    try {
+      if (typeof GM_setValue === "function") {
+        GM_setValue(GM_AUTH_BRIDGE_KEY, obj);
+      }
+    } catch {}
+    try {
+      window.localStorage.setItem(AUTH_BRIDGE_STORAGE_KEY, JSON.stringify(obj));
+    } catch {}
+  }
+
+  function getBridgedLeaderEmail() {
+    const b = readStoredAuthBridge();
+    return b?.email || "";
+  }
+
+  async function refreshFirebaseIdToken(bridge) {
+    if (!bridge?.refreshToken || !bridge?.apiKey) return bridge?.idToken || "";
+    try {
+      const res = await fetch(
+        `https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(bridge.apiKey)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(bridge.refreshToken)}`
+        }
+      );
+      if (!res.ok) return bridge?.idToken || "";
+      const data = await res.json();
+      if (data && data.id_token) {
+        const updated = {
+          ...bridge,
+          idToken: data.id_token,
+          refreshToken: data.refresh_token || bridge.refreshToken,
+          updatedAt: Date.now()
+        };
+        writeStoredAuthBridge(updated);
+        return data.id_token;
+      }
+    } catch {}
+    return bridge?.idToken || "";
+  }
+
+  async function getValidFirebaseIdToken(forceRefresh = false) {
+    const bridge = readStoredAuthBridge();
+    if (!bridge || !bridge.idToken) return "";
+    const ageMs = Date.now() - Number(bridge.updatedAt || 0);
+    if (forceRefresh || ageMs > 45 * 60 * 1000) {
+      return await refreshFirebaseIdToken(bridge);
+    }
+    return bridge.idToken;
+  }
+
+  async function firebaseReq(method, path, bodyObj = undefined) {
+    let token = await getValidFirebaseIdToken(false);
+    if (!token) throw new Error("NO_FIREBASE_TOKEN");
+    const sep = path.includes("?") ? "&" : "?";
+    const buildUrl = (tok) =>
+      `${FIREBASE_DB_URL}${path}.json${tok ? `${sep}auth=${encodeURIComponent(tok)}` : ""}`;
+
+    const opts = {
+      method,
+      headers: { "Content-Type": "application/json" }
+    };
+    if (bodyObj !== undefined) {
+      opts.body = JSON.stringify(bodyObj);
+    }
+
+    let res = await fetch(buildUrl(token), opts);
+    if (res.status === 401 || res.status === 403) {
+      token = await getValidFirebaseIdToken(true);
+      if (token) {
+        res = await fetch(buildUrl(token), opts);
+      }
+    }
+    if (!res.ok) throw new Error(`FB_${res.status}`);
+    if (method === "DELETE") return null;
+    return res.json();
+  }
+
+  // ============================================================================
+  // 4) HURRIER BACKOFFICE API CLIENT (Auto-extracts JWT Token + Session Cookies)
+  // ============================================================================
+  function getHurrierBearerToken() {
+    const candidateKeys = [
+      "dhhToken",
+      "token",
+      "access_token",
+      "jwt",
+      "authToken",
+      "id_token"
+    ];
+
+    const extractJwt = (val) => {
+      if (!val || typeof val !== "string") return "";
+      const clean = val.replace(/^Bearer\s+/i, "").replace(/^"|"$/g, "").trim();
+      if (/^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(clean)) {
+        return clean;
+      }
+      const m = clean.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+      return m ? m[0] : "";
+    };
+
+    for (const store of [window.localStorage, window.sessionStorage]) {
+      try {
+        for (const k of candidateKeys) {
+          const tok = extractJwt(store.getItem(k));
+          if (tok) return tok;
+        }
+        for (let i = 0; i < store.length; i++) {
+          const k = store.key(i);
+          if (!k || k === AUTH_BRIDGE_STORAGE_KEY) continue;
+          const tok = extractJwt(store.getItem(k));
+          if (tok) return tok;
+        }
+      } catch {}
+    }
+
+    try {
+      const cookieJwt = extractJwt(document.cookie);
+      if (cookieJwt) return cookieJwt;
+    } catch {}
+
+    return "";
+  }
+
+  async function hurrierGet(path) {
+    const url = path.startsWith("http") ? path : `${BASE_API}${path}`;
+    const jwt = getHurrierBearerToken();
+    const headers = {
+      Accept: "application/json"
+    };
+    if (jwt) {
+      headers.Authorization = `Bearer ${jwt}`;
+    }
+    const res = await fetch(url, {
+      method: "GET",
+      headers,
+      credentials: "include"
+    });
+    if (!res.ok) throw new Error(`HURRIER_${res.status}`);
+    return res.json();
+  }
+
   // ============================================================================
   // 5) UNIFIED DEVICE MULTI-TAB INSTANT HANDOFF & MULTI-PC PRIMARY LEADER ELECTION
   // ============================================================================
-  // All Hurrier tabs on the SAME PC share ONE persistent Device ID and ONE shared Leader ID
-  // so opening/switching/closing multiple tabs hands off leadership in ~0s without Standby flicker,
-  // while OTHER admins on DIFFERENT PCs remain in Backup Standby until this PC stops feeding.
   function getOrCreatePersistentDeviceId() {
     const fallbackKey = "hurrier_live_gm_device_id_v1";
     try {
@@ -230,11 +539,50 @@
   }, 3000);
 
   // ============================================================================
-// ... existing code ...
-  async function fetchSingleDeliveryPage(path, page) {
+  // 6) PAGINATION & DATA FETCHING HELPERS
+  // ============================================================================
+  const DELIVERY_ENDPOINTS = [
+    { tab: "Queued", path: "/dispatcher-dashboard/deliveries/queued" },
+    { tab: "Dispatched", path: "/dispatcher-dashboard/deliveries/dispatched" },
+    { tab: "Active", path: "/dispatcher-dashboard/deliveries/active" }
+  ];
+
+  const cachedTabRecordsMap = new Map();
+  let lastFullActiveSweepAt = 0;
+  let lastKnownActivePageCount = 1;
+  let lastCatalogSyncAt = 0;
+  const knownZonesCatalogMap = new Map();
+
+  // Shared 2h Completed Orders Archive State
+  const sharedCompletedMap = new Map();
+  let completedArchiveLoadedFromFb = false;
+  let completedSyncing = false;
+  let completedLastSweepAt = 0;
+  let lastHandledForceSweepTs = 0;
+  const prevActiveOrdersByCode = new Map();
+
+  // Courier Cache & Throttling
+  const couriersBySpCache = new Map();
+  const allKnownCouriersMap = new Map();
+
+  // Processed Request Trackers
+  const processedOrderDetailReqs = new Map();
+  let lastHandledCourierDetailTs = 0;
+  let lastHandledRiderSearchId = "";
+  const processedCompletedIdReqs = new Map();
+  const processedCompletedRangeReqs = new Map();
+
+  function buildStartingPointQueryParams(zoneIds) {
+    const ids = Array.from(new Set((zoneIds || []).map(Number).filter((n) => n > 0)));
+    if (ids.length === 0) return "";
+    return ids.map((id) => `starting_point_id%5B%5D=${encodeURIComponent(id)}`).join("&");
+  }
+
+  async function fetchSingleDeliveryPage(basePathWithQuery, page) {
+    const sep = basePathWithQuery.includes("?") ? "&" : "?";
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const data = await hurrierGet(`${path}?page=${page}&per_page=50`);
+        const data = await hurrierGet(`${basePathWithQuery}${sep}page=${page}&per_page=50`);
         const recs = Array.isArray(data?.records) ? data.records : [];
         const totalHint = Number(
           data?.metadata?.total_count ??
@@ -252,7 +600,7 @@
     return { ok: false, records: [], totalHint: 0 };
   }
 
-  async function fetchAllDeliveryPages(path, maxPagesCap = 180) {
+  async function fetchAllDeliveryPages(basePathWithQuery, maxPagesCap = 180) {
     const all = [];
     const seenIds = new Set();
 
@@ -269,7 +617,7 @@
       }
     };
 
-    const p1 = await fetchSingleDeliveryPage(path, 1);
+    const p1 = await fetchSingleDeliveryPage(basePathWithQuery, 1);
     if (!p1.ok) return null;
     addRecs(p1.records);
 
@@ -294,7 +642,9 @@
       }
       if (batchPages.length === 0) break;
 
-      const results = await Promise.all(batchPages.map((pg) => fetchSingleDeliveryPage(path, pg)));
+      const results = await Promise.all(
+        batchPages.map((pg) => fetchSingleDeliveryPage(basePathWithQuery, pg))
+      );
       let batchHadRecords = false;
       let explicitEndReached = false;
 
@@ -304,7 +654,10 @@
           batchHadRecords = true;
           totalPages = Math.max(totalPages, batchPages[i]);
           addRecs(res.records);
-          if (res.records.length < 50 && (!expectedTotalPages || batchPages[i] >= expectedTotalPages)) {
+          if (
+            res.records.length < 50 &&
+            (!expectedTotalPages || batchPages[i] >= expectedTotalPages)
+          ) {
             explicitEndReached = true;
           }
         } else if (res.ok && res.records.length === 0) {
@@ -326,8 +679,622 @@
     return { records: all, totalPages };
   }
 
+  function formatCairo24Hour(isoStr) {
+    if (!isoStr || String(isoStr).startsWith("0001-01-01")) return "";
+    const d = new Date(isoStr);
+    if (Number.isNaN(d.getTime())) return "";
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Africa/Cairo",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false
+    }).format(d);
+  }
+
+  function normalizeCourierEntryForSp(entry, spId) {
+    const c = entry?.courier || entry || {};
+    const veh = entry?.vehicle || {};
+    const meta = entry?.current_state_metadata || c?.status_meta_data || {};
+    const cid = String(c.id || entry?.courier_id || "");
+    const statusLower = String(c.status || "working").toLowerCase();
+
+    let stateTime24h = "";
+    if (statusLower === "break" || statusLower.includes("temp")) {
+      stateTime24h = formatCairo24Hour(meta.ended_at);
+    } else if (statusLower === "ending") {
+      stateTime24h = formatCairo24Hour(entry?.active_shift_ended_at || meta.shift_ended_at);
+    } else if (statusLower === "starting" || statusLower === "ready" || statusLower === "late") {
+      stateTime24h = formatCairo24Hour(entry?.active_shift_started_at || meta.shift_started_at);
+    }
+
+    const vType = veh.vehicle_type_name || "Bike";
+    const vBag = veh.vehicle_bag_type_name || "";
+    const norm = {
+      starting_point_id: Number(spId),
+      id: c.id,
+      courier_id: c.id,
+      name: c.name || "",
+      user_id: c.user_id || "",
+      phone_number: c.phone_number || "",
+      status: c.status || "working",
+      status_until: meta.ended_at || "",
+      performed_by: meta.performed_by || "",
+      status_reason: meta.reason || "",
+      contract_type: c.contract_type || "",
+      vehicle_type: vType,
+      vehicle_full: [vType, vBag].filter(Boolean).join("-"),
+      active_orders_count: Number(entry?.active_delivery_count ?? 0),
+      state_time_24h: stateTime24h
+    };
+
+    if (cid) {
+      allKnownCouriersMap.set(cid, norm);
+    }
+    return norm;
+  }
+
+  async function fetchCouriersForStartingPoints(spIds) {
+    const now = Date.now();
+    const toFetch = [];
+    for (const id of spIds) {
+      const cached = couriersBySpCache.get(Number(id));
+      if (!cached || now - cached.ts > 6500) {
+        toFetch.push(Number(id));
+      }
+    }
+
+    for (let i = 0; i < toFetch.length; i += 6) {
+      const chunk = toFetch.slice(i, i + 6);
+      await Promise.all(
+        chunk.map(async (spId) => {
+          try {
+            const data = await hurrierGet(
+              `/dispatcher-dashboard/couriers?starting_point_id=${encodeURIComponent(spId)}`
+            );
+            const rawList = Array.isArray(data?.couriers) ? data.couriers : [];
+            const normalized = rawList.map((entry) => normalizeCourierEntryForSp(entry, spId));
+            couriersBySpCache.set(spId, { ts: Date.now(), list: normalized });
+          } catch {}
+        })
+      );
+    }
+
+    const out = [];
+    for (const id of spIds) {
+      const cached = couriersBySpCache.get(Number(id));
+      if (cached && Array.isArray(cached.list)) {
+        out.push(...cached.list);
+      }
+    }
+    return out;
+  }
+
   // ============================================================================
-// ... existing code ...
+  // 7) UNIFIED 2-HOUR COMPLETED ARCHIVE (15-MIN SWEEP + LIVE TRANSITION CAPTURE)
+  // ============================================================================
+  function extractCompletedMsFromRecord(rec) {
+    if (rec?.__completed_at_ms && Number(rec.__completed_at_ms) > 0) {
+      return Number(rec.__completed_at_ms);
+    }
+    const order = rec?.order || {};
+    const primaryDel = rec?.primary_delivery || {};
+    const timings = rec?.primary_delivery_timings || {};
+    const candidates = [
+      primaryDel.completed_at,
+      primaryDel.delivered_at,
+      primaryDel.dropped_off_at,
+      timings.completed_at,
+      order.current_state_transition,
+      order.completed_at,
+      order.updated_at
+    ];
+    for (const v of candidates) {
+      if (v) {
+        const ms = typeof v === "number" ? (v > 1e12 ? v : v * 1000) : new Date(v).getTime();
+        if (!Number.isNaN(ms) && ms > 946684800000) return ms;
+      }
+    }
+    return 0;
+  }
+
+  function pruneOldCompletedRecords() {
+    const cutoff = Date.now() - 2 * 3600 * 1000;
+    for (const [code, rec] of sharedCompletedMap.entries()) {
+      const ms = extractCompletedMsFromRecord(rec);
+      if (ms > 0 && ms < cutoff) {
+        sharedCompletedMap.delete(code);
+      }
+    }
+  }
+
+  async function loadInitialSharedCompletedArchive() {
+    if (completedArchiveLoadedFromFb) return;
+    completedArchiveLoadedFromFb = true;
+    try {
+      const data = await firebaseReq("GET", "/shared_completed_archive");
+      if (data && typeof data === "object") {
+        Object.entries(data).forEach(([code, rec]) => {
+          if (rec && typeof rec === "object") {
+            sharedCompletedMap.set(String(code), rec);
+          }
+        });
+        pruneOldCompletedRecords();
+      }
+    } catch {}
+  }
+
+  async function saveSharedCompletedArchiveToFb() {
+    pruneOldCompletedRecords();
+    const obj = {};
+    for (const [code, rec] of sharedCompletedMap.entries()) {
+      obj[code] = rec;
+    }
+    try {
+      await firebaseReq("PUT", "/shared_completed_archive", obj);
+    } catch {}
+  }
+
+  function buildCompletedRecordFromOrderDetail(detailRes, fallbackDeliveryRec = null) {
+    const dOrder = detailRes?.order || detailRes || {};
+    const code = String(
+      dOrder.code ||
+        dOrder.confirmation_number ||
+        String(dOrder.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+        ""
+    ).trim();
+    const sps =
+      dOrder?.drop_off_address?.starting_points ||
+      fallbackDeliveryRec?.starting_points ||
+      [];
+    const completedAtIso =
+      dOrder.current_state_transition || dOrder.updated_at || new Date().toISOString();
+    const completedMs = new Date(completedAtIso).getTime() || Date.now();
+
+    return {
+      __completed_at_ms: completedMs,
+      starting_points: sps,
+      distance: fallbackDeliveryRec?.distance || dOrder.distance || 0,
+      courier_id: fallbackDeliveryRec?.courier_id || dOrder.courier_id || "",
+      courier_name: fallbackDeliveryRec?.courier_name || dOrder.courier_name || "",
+      order: {
+        ...dOrder,
+        code,
+        confirmation_number: code,
+        status: dOrder.status || "completed",
+        current_state_transition: completedAtIso
+      },
+      primary_delivery: {
+        completed_at: completedAtIso,
+        courier_id: fallbackDeliveryRec?.courier_id || dOrder.courier_id || "",
+        courier_name: fallbackDeliveryRec?.courier_name || dOrder.courier_name || "",
+        delivery_distance: fallbackDeliveryRec?.distance || dOrder.distance || 0
+      },
+      primary_delivery_timings: dOrder.timings || {}
+    };
+  }
+
+  async function fetchCompletedOrdersPage(page) {
+    const endpoints = [
+      `/dispatcher-dashboard/orders/completed?page=${page}&per_page=50`,
+      `/orders/completed?page=${page}&per_page=50`
+    ];
+    for (const ep of endpoints) {
+      try {
+        const data = await hurrierGet(ep);
+        const recs = Array.isArray(data?.records)
+          ? data.records
+          : Array.isArray(data?.orders)
+          ? data.orders
+          : Array.isArray(data)
+          ? data
+          : null;
+        if (recs) return recs;
+      } catch {}
+    }
+    return [];
+  }
+
+  async function runCompletedArchive15MinSweep(allZoneIds) {
+    if (completedSyncing) return;
+    completedSyncing = true;
+    const cutoffMs = Date.now() - 2 * 3600 * 1000;
+    const spQuery = buildStartingPointQueryParams(allZoneIds);
+
+    try {
+      for (let pg = 1; pg <= 35; pg++) {
+        let recs = [];
+        if (spQuery) {
+          try {
+            const d = await hurrierGet(
+              `/dispatcher-dashboard/orders/completed?${spQuery}&page=${pg}&per_page=50`
+            );
+            if (Array.isArray(d?.records)) recs = d.records;
+          } catch {}
+        }
+        if (recs.length === 0) {
+          recs = await fetchCompletedOrdersPage(pg);
+        }
+        if (recs.length === 0) break;
+
+        let oldestInPage = Infinity;
+        for (const r of recs) {
+          const ord = r?.order || r || {};
+          const code = String(
+            ord.confirmation_number ||
+              ord.code ||
+              String(ord.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+              ""
+          ).trim();
+          const compMs = extractCompletedMsFromRecord(r);
+          if (compMs > 0) oldestInPage = Math.min(oldestInPage, compMs);
+          if (code && (!compMs || compMs >= cutoffMs)) {
+            sharedCompletedMap.set(code, {
+              ...r,
+              __completed_at_ms: compMs || Date.now()
+            });
+          }
+        }
+
+        if (oldestInPage !== Infinity && oldestInPage < cutoffMs) {
+          break;
+        }
+      }
+
+      pruneOldCompletedRecords();
+      completedLastSweepAt = Date.now();
+      await saveSharedCompletedArchiveToFb();
+    } finally {
+      completedSyncing = false;
+    }
+  }
+
+  async function captureRecentlyCompletedOrders(currentActiveAndDispRecords) {
+    const currentCodes = new Set();
+    for (const r of currentActiveAndDispRecords) {
+      const ord = r?.order || {};
+      const code = String(
+        ord.code ||
+          String(ord.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+          ""
+      ).trim();
+      if (code) {
+        currentCodes.add(code);
+        prevActiveOrdersByCode.set(code, r);
+      }
+    }
+
+    const disappeared = [];
+    for (const [code, prevRec] of prevActiveOrdersByCode.entries()) {
+      if (!currentCodes.has(code)) {
+        prevActiveOrdersByCode.delete(code);
+        disappeared.push({ code, prevRec });
+      }
+    }
+
+    if (disappeared.length === 0) return;
+
+    let addedAny = false;
+    for (const { code, prevRec } of disappeared.slice(0, 12)) {
+      try {
+        const det = await hurrierGet(`/hurrier/v2/orders/${encodeURIComponent(code)}`);
+        const st = String(det?.order?.status || det?.status || "").toLowerCase();
+        if (st === "completed" || st === "delivered") {
+          const compRec = buildCompletedRecordFromOrderDetail(det, prevRec);
+          sharedCompletedMap.set(code, compRec);
+          addedAny = true;
+        }
+      } catch {}
+    }
+
+    if (addedAny) {
+      await saveSharedCompletedArchiveToFb();
+    }
+  }
+
+  // ============================================================================
+  // 8) ON-DEMAND REQUEST HANDLERS (Order Details + Notes, Courier Details, Rider Search, Completed Lookup)
+  // ============================================================================
+  async function processOnDemandRequests(allZoneIds) {
+    // A) Per-Order Detail + Deliveries + Dispatcher Notes Requests
+    try {
+      const reqs = await firebaseReq("GET", "/config/order_detail_reqs");
+      if (reqs && typeof reqs === "object") {
+        const entries = Object.entries(reqs).filter(([, v]) => v && v.code);
+        for (const [key, req] of entries.slice(0, 6)) {
+          const code = String(req.code).trim();
+          const reqTs = Number(req.requestedAt || 0);
+          if (processedOrderDetailReqs.get(code) === reqTs) continue;
+          processedOrderDetailReqs.set(code, reqTs);
+
+          const orderCode = String(req.orderCode || `HF_EG${code}`).trim();
+          const [detRes, delRes, notesRes] = await Promise.allSettled([
+            hurrierGet(`/hurrier/v2/orders/${encodeURIComponent(code)}`).catch(() =>
+              hurrierGet(`/orders/${encodeURIComponent(code)}`)
+            ),
+            hurrierGet(`/hurrier/v2/orders/${encodeURIComponent(code)}/deliveries`).catch(() =>
+              hurrierGet(`/orders/${encodeURIComponent(code)}/deliveries`)
+            ),
+            hurrierGet(`/orders/dispatcher_notes?code=${encodeURIComponent(orderCode)}`).catch(() =>
+              hurrierGet(`/hurrier/v1/orders/dispatcher_notes?code=${encodeURIComponent(orderCode)}`)
+            )
+          ]);
+
+          const payload = {
+            code,
+            detail: detRes.status === "fulfilled" ? detRes.value : null,
+            deliveries: delRes.status === "fulfilled" ? delRes.value : null,
+            notes: notesRes.status === "fulfilled" ? notesRes.value : { dispatcher_notes: [] },
+            updatedAt: Date.now()
+          };
+          await firebaseReq("PUT", `/order_details/${encodeURIComponent(code)}`, payload);
+          firebaseReq("DELETE", `/config/order_detail_reqs/${encodeURIComponent(key)}`).catch(() => {});
+        }
+      }
+    } catch {}
+
+    // B) On-Demand Courier Detail + Balance
+    try {
+      const cReq = await firebaseReq("GET", "/config/courier_detail_req");
+      if (cReq && cReq.courierId && Number(cReq.requestedAt || 0) > lastHandledCourierDetailTs) {
+        lastHandledCourierDetailTs = Number(cReq.requestedAt);
+        const cid = String(cReq.courierId).trim();
+        const [detRes, balRes] = await Promise.allSettled([
+          hurrierGet(`/courier/detail?courier_id=${encodeURIComponent(cid)}`).catch(() =>
+            hurrierGet(`/couriers/${encodeURIComponent(cid)}`)
+          ),
+          hurrierGet(`/courier/balance?courier_id=${encodeURIComponent(cid)}`).catch(() =>
+            hurrierGet(`/couriers/${encodeURIComponent(cid)}/balance`)
+          )
+        ]);
+        const rawDet = detRes.status === "fulfilled" ? detRes.value : {};
+        const rawBal = balRes.status === "fulfilled" ? balRes.value : {};
+        const cObj = rawDet?.courier || rawDet || {};
+        const meta = cObj?.status_meta_data || cObj?.current_state_metadata || {};
+        const veh = cObj?.vehicle;
+        const vehStr =
+          veh && typeof veh === "object"
+            ? [veh.vehicle_type_name, veh.vehicle_bag_type_name].filter(Boolean).join("-")
+            : typeof veh === "string"
+            ? veh
+            : "";
+
+        const balanceVal =
+          rawBal?.balance ?? rawBal?.amount ?? cObj?.balance ?? rawDet?.balance ?? null;
+
+        await firebaseReq("PUT", `/courier_details/${encodeURIComponent(cid)}`, {
+          ...rawDet,
+          balance: balanceVal,
+          requestedAt: lastHandledCourierDetailTs,
+          updatedAt: Date.now(),
+          normalized: {
+            courierId: String(cObj.id || cid),
+            userId: String(cObj.user_id || ""),
+            name: cObj.name || cReq.courierName || "",
+            phone: cObj.phone_number || cObj.mobile || cObj.phone || "",
+            rawStatus: cObj.status || "",
+            status: cObj.status || "",
+            statusUntil: cObj.status_until || meta.ended_at || "",
+            performedBy: meta.performed_by || "",
+            statusReason: meta.reason || "",
+            contract: cObj.contract_info?.type || cObj.contract_type || "",
+            vehicle: vehStr,
+            balance: balanceVal
+          }
+        });
+      }
+    } catch {}
+
+    // C) Live Rider Search
+    try {
+      const rReq = await firebaseReq("GET", "/config/rider_search_req");
+      if (rReq && rReq.reqId && rReq.reqId !== lastHandledRiderSearchId && rReq.query) {
+        lastHandledRiderSearchId = String(rReq.reqId);
+        const q = String(rReq.query).trim();
+        const qLower = q.toLowerCase();
+        const qDigits = q.replace(/\D/g, "");
+        const resultsMap = new Map();
+
+        const addMatch = (item) => {
+          const cid = String(item.courierId || item.id || "");
+          if (!cid) return;
+          if (!resultsMap.has(cid)) {
+            resultsMap.set(cid, {
+              courierId: cid,
+              userId: String(item.userId || item.user_id || ""),
+              name: item.name || "",
+              phone: item.phone || item.phone_number || "",
+              status: item.status || "Working",
+              statusUntil: item.statusUntil || item.status_until || "",
+              statusReason: item.statusReason || item.status_reason || ""
+            });
+          }
+        };
+
+        for (const c of allKnownCouriersMap.values()) {
+          const uid = String(c.user_id || "");
+          const cid = String(c.id || "");
+          const ph = String(c.phone_number || "").replace(/\D/g, "");
+          const nm = String(c.name || "").toLowerCase();
+          if (
+            (qDigits && (uid.includes(qDigits) || cid === qDigits || ph.includes(qDigits))) ||
+            (nm && nm.includes(qLower))
+          ) {
+            addMatch(c);
+          }
+        }
+
+        try {
+          const apiData = await hurrierGet(`/couriers?query=${encodeURIComponent(q)}`).catch(() =>
+            hurrierGet(`/courier/search?query=${encodeURIComponent(q)}`)
+          );
+          const list = Array.isArray(apiData?.couriers)
+            ? apiData.couriers
+            : Array.isArray(apiData)
+            ? apiData
+            : [];
+          list.forEach((entry) => {
+            const c = entry?.courier || entry || {};
+            const meta = entry?.current_state_metadata || c?.status_meta_data || {};
+            addMatch({
+              courierId: c.id,
+              userId: c.user_id,
+              name: c.name,
+              phone: c.phone_number,
+              status: c.status,
+              statusUntil: meta.ended_at || "",
+              statusReason: meta.reason || ""
+            });
+          });
+        } catch {}
+
+        await firebaseReq("PUT", "/config/rider_search_res", {
+          reqId: lastHandledRiderSearchId,
+          results: Array.from(resultsMap.values()).slice(0, 20),
+          updatedAt: Date.now()
+        });
+      }
+    } catch {}
+
+    // D) Direct Order ID Lookup in Completed Orders
+    try {
+      const idReqs = await firebaseReq("GET", "/config/completed_id_reqs");
+      if (idReqs && typeof idReqs === "object") {
+        for (const [key, req] of Object.entries(idReqs)) {
+          if (!req || !req.code) continue;
+          const code = String(req.code).trim();
+          const reqTs = Number(req.requestedAt || 0);
+          if (processedCompletedIdReqs.get(code) === reqTs) continue;
+          processedCompletedIdReqs.set(code, reqTs);
+
+          let found = false;
+          let status = "not_found";
+          let record = null;
+
+          if (sharedCompletedMap.has(code)) {
+            found = true;
+            status = "completed";
+            record = sharedCompletedMap.get(code);
+          } else {
+            try {
+              const det = await hurrierGet(`/hurrier/v2/orders/${encodeURIComponent(code)}`);
+              const dOrder = det?.order || det || {};
+              if (dOrder && (dOrder.id || dOrder.code)) {
+                found = true;
+                status = String(dOrder.status || "completed").toLowerCase();
+                record = buildCompletedRecordFromOrderDetail(det, null);
+                if (status === "completed" || status === "delivered") {
+                  status = "completed";
+                  sharedCompletedMap.set(code, record);
+                  saveSharedCompletedArchiveToFb().catch(() => {});
+                }
+              }
+            } catch {}
+          }
+
+          await firebaseReq("PUT", `/session_bundles/comp_id_${encodeURIComponent(code)}`, {
+            code,
+            found,
+            status,
+            record,
+            updatedAt: Date.now()
+          });
+          firebaseReq("DELETE", `/config/completed_id_reqs/${encodeURIComponent(key)}`).catch(() => {});
+        }
+      }
+    } catch {}
+
+    // E) Custom Time Range Completed Orders Request
+    try {
+      const rangeReqs = await firebaseReq("GET", "/config/completed_range_reqs");
+      if (rangeReqs && typeof rangeReqs === "object") {
+        for (const [sessKey, req] of Object.entries(rangeReqs)) {
+          if (!req || !req.reqId) continue;
+          if (processedCompletedRangeReqs.get(sessKey) === req.reqId) continue;
+          processedCompletedRangeReqs.set(sessKey, req.reqId);
+
+          const fromMs = Number(req.fromMs || 0);
+          const toMs = Number(req.toMs || 0);
+          const matched = [];
+          const seenCodes = new Set();
+
+          for (const [code, rec] of sharedCompletedMap.entries()) {
+            const ms = extractCompletedMsFromRecord(rec);
+            if (ms >= fromMs && ms <= toMs) {
+              seenCodes.add(code);
+              matched.push(rec);
+            }
+          }
+
+          const spQuery = buildStartingPointQueryParams(req.zoneIds || allZoneIds);
+          for (let pg = 1; pg <= 50; pg++) {
+            let recs = [];
+            if (spQuery) {
+              try {
+                const d = await hurrierGet(
+                  `/dispatcher-dashboard/orders/completed?${spQuery}&page=${pg}&per_page=50`
+                );
+                if (Array.isArray(d?.records)) recs = d.records;
+              } catch {}
+            }
+            if (recs.length === 0) {
+              recs = await fetchCompletedOrdersPage(pg);
+            }
+            if (recs.length === 0) break;
+
+            let oldestInPage = Infinity;
+            for (const r of recs) {
+              const ord = r?.order || r || {};
+              const code = String(
+                ord.confirmation_number ||
+                  ord.code ||
+                  String(ord.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+                  ""
+              ).trim();
+              const ms = extractCompletedMsFromRecord(r);
+              if (ms > 0) oldestInPage = Math.min(oldestInPage, ms);
+              if (code && !seenCodes.has(code) && ms >= fromMs && ms <= toMs) {
+                seenCodes.add(code);
+                matched.push({ ...r, __completed_at_ms: ms });
+              }
+            }
+            if (oldestInPage !== Infinity && oldestInPage < fromMs) break;
+          }
+
+          await firebaseReq(
+            "PUT",
+            `/session_bundles/comp_range_${encodeURIComponent(req.sessionId || sessKey)}`,
+            {
+              reqId: req.reqId,
+              records: matched,
+              updatedAt: Date.now()
+            }
+          );
+          firebaseReq("DELETE", `/config/completed_range_reqs/${encodeURIComponent(sessKey)}`).catch(
+            () => {}
+          );
+        }
+      }
+    } catch {}
+
+    // F) Force Completed Archive Refresh Request
+    try {
+      const fReq = await firebaseReq("GET", "/config/completed_force_sync_req");
+      if (fReq && Number(fReq.requestedAt || 0) > lastHandledForceSweepTs) {
+        lastHandledForceSweepTs = Number(fReq.requestedAt);
+        runCompletedArchive15MinSweep(allZoneIds).catch(() => {});
+      }
+    } catch {}
+  }
+
+  // ============================================================================
+  // 9) MAIN 2-SECOND REAL-TIME SYNC LOOP
+  // ============================================================================
+  let isSyncTickRunning = false;
+
+  async function runSyncTick() {
+    if (isSyncTickRunning) return;
+    isSyncTickRunning = true;
+
     try {
       if (!acquireSamePcTabLock()) {
         isCurrentLeader = false;
@@ -336,13 +1303,73 @@
       }
 
       const authToken = await getValidFirebaseIdToken(false);
-// ... existing code ...
+      if (!authToken) {
+        setBadge("#b45309", `v${SCRIPT_VERSION} • Open Dashboard Tab Once`);
+        return;
+      }
+
+      const leaderOk = await ensureMultiPcLeadership();
+      const now = Date.now();
+
+      // Read active sessions
+      const rawSessions = (await firebaseReq("GET", "/active_sessions")) || {};
+      const activeSessions = [];
+      const activeViewers = [];
+      const unionZoneIdsSet = new Set();
+
+      Object.entries(rawSessions).forEach(([sid, sess]) => {
+        if (!sess || typeof sess !== "object") return;
+        if (now - Number(sess.lastSeen || 0) > 35000) return;
+        const zIds = Array.isArray(sess.zoneIds)
+          ? sess.zoneIds.map(Number).filter((n) => n > 0)
+          : [];
+        if (zIds.length === 0) return;
+        zIds.forEach((id) => unionZoneIdsSet.add(id));
+        activeSessions.push({ ...sess, sessionId: sid, zoneIds: zIds });
+        activeViewers.push({
+          sessionId: sid,
+          email: sess.email || "",
+          employeeName: sess.employeeName || sess.email || "Captain",
+          zoneCount: zIds.length,
+          activeTab: sess.activeTab || "Active"
+        });
+      });
+
+      if (!leaderOk) {
+        setBadge(
+          "#0f766e",
+          `v${SCRIPT_VERSION} [Backup Standby] (${activeViewers.length} Viewers)`
+        );
+        return;
+      }
+
+      const unionZoneIds = Array.from(unionZoneIdsSet);
+
+      // Process on-demand requests even if 0 active sessions
+      await processOnDemandRequests(unionZoneIds);
+
+      if (activeSessions.length === 0) {
+        setBadge(
+          "#15803d",
+          `v${SCRIPT_VERSION} [Primary Leader] Live (2s) • 0 Viewers`
+        );
+        return;
+      }
+
+      await loadInitialSharedCompletedArchive();
+      if (now - completedLastSweepAt >= 15 * 60 * 1000) {
+        runCompletedArchive15MinSweep(unionZoneIds).catch(() => {});
+      }
+
+      const spQuery = buildStartingPointQueryParams(unionZoneIds);
       const doFullActiveSweep =
         !cachedTabRecordsMap.has("Active") || now - lastFullActiveSweepAt >= 5000;
 
       const [statsRes, ...tabFetchResults] = await Promise.allSettled([
         hurrierGet("/dispatcher-dashboard/stats"),
         ...DELIVERY_ENDPOINTS.map(async (ep) => {
+          const fullUrl = spQuery ? `${ep.path}?${spQuery}` : ep.path;
+
           if (ep.tab === "Active" && !doFullActiveSweep) {
             const prevAll = cachedTabRecordsMap.get("Active") || [];
             const pagesToRefresh = new Set([1, 2, 3]);
@@ -354,7 +1381,7 @@
               pagesToRefresh.add(p);
             }
             const refreshedPages = await Promise.all(
-              Array.from(pagesToRefresh).map((pg) => fetchSingleDeliveryPage(ep.path, pg))
+              Array.from(pagesToRefresh).map((pg) => fetchSingleDeliveryPage(fullUrl, pg))
             );
             const mergedById = new Map();
             prevAll.forEach((r, idx) => {
@@ -364,7 +1391,9 @@
             refreshedPages.forEach((pr) => {
               if (pr.ok && pr.records.length > 0) {
                 pr.records.forEach((r, idx) => {
-                  const id = String(r?.id ?? r?.order?.id ?? r?.order?.code ?? `ref_${pr.records.length}_${idx}`);
+                  const id = String(
+                    r?.id ?? r?.order?.id ?? r?.order?.code ?? `ref_${pr.records.length}_${idx}`
+                  );
                   mergedById.set(id, r);
                 });
               }
@@ -372,7 +1401,7 @@
             return { tab: ep.tab, records: Array.from(mergedById.values()) };
           }
 
-          const full = await fetchAllDeliveryPages(ep.path, ep.tab === "Active" ? 180 : 50);
+          const full = await fetchAllDeliveryPages(fullUrl, ep.tab === "Active" ? 180 : 50);
           if (full && Array.isArray(full.records)) {
             if (ep.tab === "Active") {
               lastFullActiveSweepAt = Date.now();
@@ -384,27 +1413,64 @@
           return { tab: ep.tab, records: cachedTabRecordsMap.get(ep.tab) || [] };
         })
       ]);
-// ... existing code ...
-      // Build complete live Zone Name -> ID lookup from stats + catalog so zero starting_points are dropped
-      const liveZoneNameToId = new Map();
-      (Array.isArray(ALL_ZONES_CATALOG) ? ALL_ZONES_CATALOG : []).forEach((z) => {
-        if (z?.id && z?.name) {
-          liveZoneNameToId.set(String(z.name).trim().toLowerCase(), Number(z.id));
+
+      const globalTabRecords = { Queued: [], Dispatched: [], Active: [] };
+      tabFetchResults.forEach((res) => {
+        if (res.status === "fulfilled" && res.value?.tab) {
+          globalTabRecords[res.value.tab] = res.value.records || [];
         }
       });
+
+      // Capture orders transitioning out of Active/Dispatched into Completed
+      captureRecentlyCompletedOrders([
+        ...globalTabRecords.Active,
+        ...globalTabRecords.Dispatched
+      ]).catch(() => {});
+
+      // Fetch active couriers for all union starting points
+      const allUnionCouriers = await fetchCouriersForStartingPoints(unionZoneIds);
+
+      // Parse zone stats & update dynamic zones catalog
+      const allZoneStatsList = [];
+      const liveZoneNameToId = new Map();
+
       if (statsRes.status === "fulfilled" && Array.isArray(statsRes.value?.cities)) {
         statsRes.value.cities.forEach((cityObj) => {
+          const cityName = cityObj?.city_name || "Cairo";
           (cityObj?.zones || []).forEach((zGrp) => {
             (zGrp?.starting_points || []).forEach((sp) => {
               if (sp?.id && sp?.name) {
-                liveZoneNameToId.set(String(sp.name).trim().toLowerCase(), Number(sp.id));
+                const spIdNum = Number(sp.id);
+                const spNameClean = String(sp.name).trim();
+                liveZoneNameToId.set(spNameClean.toLowerCase(), spIdNum);
+                knownZonesCatalogMap.set(spIdNum, {
+                  id: spIdNum,
+                  name: spNameClean,
+                  city: cityName
+                });
+                allZoneStatsList.push({
+                  id: spIdNum,
+                  name: spNameClean,
+                  city: cityName,
+                  delay: Math.round(Number(sp?.stat?.delay || 0) * 10) / 10,
+                  stat: sp?.stat || {}
+                });
               }
             });
           });
         });
       }
 
-      // Ensure session bundle filtering matches Hurrier API starting_point_id[] 1:1 (including empty starting_points)
+      if (knownZonesCatalogMap.size > 0 && now - lastCatalogSyncAt > 10 * 60 * 1000) {
+        lastCatalogSyncAt = now;
+        firebaseReq(
+          "PUT",
+          "/config/dynamic_zones_catalog",
+          Array.from(knownZonesCatalogMap.values())
+        ).catch(() => {});
+      }
+
+      // Helper to match a record against a specific session's selected zones
       const recordMatchesSessionZones = (rec, sessZoneIdSet, sessZoneNameSet) => {
         const rawSps = Array.isArray(rec?.starting_points)
           ? rec.starting_points
@@ -432,4 +1498,80 @@
           return Boolean(mappedStrippedId && sessZoneIdSet.has(mappedStrippedId));
         });
       };
-// ... existing code ...
+
+      pruneOldCompletedRecords();
+      const allCompletedRecords = Array.from(sharedCompletedMap.values());
+
+      // Build & push tailored session bundles for each active viewer
+      let maxActiveDisplayed = 0;
+      await Promise.all(
+        activeSessions.map(async (sess) => {
+          const sessZoneIdSet = new Set(sess.zoneIds.map(Number));
+          const sessZoneNameSet = new Set();
+          knownZonesCatalogMap.forEach((z, zid) => {
+            if (sessZoneIdSet.has(zid)) {
+              sessZoneNameSet.add(String(z.name).trim().toLowerCase());
+            }
+          });
+
+          const sessTabRecords = {
+            Queued: globalTabRecords.Queued.filter((r) =>
+              recordMatchesSessionZones(r, sessZoneIdSet, sessZoneNameSet)
+            ),
+            Dispatched: globalTabRecords.Dispatched.filter((r) =>
+              recordMatchesSessionZones(r, sessZoneIdSet, sessZoneNameSet)
+            ),
+            Active: globalTabRecords.Active.filter((r) =>
+              recordMatchesSessionZones(r, sessZoneIdSet, sessZoneNameSet)
+            )
+          };
+
+          maxActiveDisplayed = Math.max(maxActiveDisplayed, sessTabRecords.Active.length);
+
+          const sessCompletedRecords = allCompletedRecords.filter((r) =>
+            recordMatchesSessionZones(r, sessZoneIdSet, sessZoneNameSet)
+          );
+
+          const sessCouriers = allUnionCouriers.filter((c) =>
+            sessZoneIdSet.has(Number(c.starting_point_id))
+          );
+
+          const sessZoneStats = allZoneStatsList.filter((zs) =>
+            sessZoneIdSet.has(Number(zs.id))
+          );
+
+          await firebaseReq("PUT", `/session_bundles/${encodeURIComponent(sess.sessionId)}`, {
+            updatedAt: Date.now(),
+            tabRecords: sessTabRecords,
+            completedRecords: sessCompletedRecords,
+            completedSyncing,
+            completedLastSweepAt,
+            couriers: sessCouriers,
+            zoneStats: sessZoneStats,
+            counts: {
+              Queued: sessTabRecords.Queued.length,
+              Dispatched: sessTabRecords.Dispatched.length,
+              Active: sessTabRecords.Active.length
+            },
+            activeViewers
+          });
+        })
+      );
+
+      setBadge(
+        "#15803d",
+        `v${SCRIPT_VERSION} [Primary Leader] Live (2s) • ${activeViewers.length} Viewer • ${maxActiveDisplayed} Act • Comp (${allCompletedRecords.length})`
+      );
+    } catch (err) {
+      setBadge("#b91c1c", `v${SCRIPT_VERSION} • Sync Retry (${err?.message || "err"})`);
+    } finally {
+      isSyncTickRunning = false;
+    }
+  }
+
+  setTimeout(() => {
+    ensureBadge();
+    runSyncTick();
+    setInterval(runSyncTick, 2000);
+  }, 1200);
+})();
