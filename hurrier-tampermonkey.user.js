@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.6
-// @description  [v10.6] Rolling 2h Completed Archive (15m Cycle Auto-Prune Old & Add New) + Instant Login Hydration + Status Filter Pills + Unified Multi-Tab Handoff
+// @version      10.7
+// @description  [v10.7] Anti-Order-Loss: Failed Pagination Pages Auto-Retry + Server Total Count Telemetry + Rolling 2h Completed Archive + Instant Login Hydration + Status Filter Pills + Unified Multi-Tab Handoff
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.6";
+  const SCRIPT_VERSION = "10.7";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -548,6 +548,7 @@
   ];
 
   const cachedTabRecordsMap = new Map();
+  const lastServerTotalsMap = new Map();
   let lastFullActiveSweepAt = 0;
   let lastKnownActivePageCount = 1;
   const knownZonesCatalogMap = new Map();
@@ -585,7 +586,7 @@
 
   async function fetchSingleDeliveryPage(basePathWithQuery, page) {
     const sep = basePathWithQuery.includes("?") ? "&" : "?";
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 4; attempt++) {
       try {
         const data = await hurrierGet(`${basePathWithQuery}${sep}page=${page}&per_page=50`);
         const recs = Array.isArray(data?.records) ? data.records : [];
@@ -599,7 +600,8 @@
         );
         return { ok: true, records: recs, totalHint };
       } catch {
-        await new Promise((r) => setTimeout(r, 150));
+        // Progressive backoff (300ms/600ms/900ms) so a busy Hurrier server is not hammered
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
       }
     }
     return { ok: false, records: [], totalHint: 0 };
@@ -608,6 +610,8 @@
   async function fetchAllDeliveryPages(basePathWithQuery, maxPagesCap = 180) {
     const all = [];
     const seenIds = new Set();
+    let serverTotalHint = 0;
+    const failedPages = new Set();
 
     const addRecs = (recs) => {
       for (const r of recs) {
@@ -624,13 +628,14 @@
 
     const p1 = await fetchSingleDeliveryPage(basePathWithQuery, 1);
     if (!p1.ok) return null;
+    serverTotalHint = Number(p1.totalHint || 0);
     addRecs(p1.records);
 
     const expectedTotalPages =
       p1.totalHint > 0 ? Math.min(maxPagesCap, Math.ceil(p1.totalHint / 50)) : 0;
 
     if (p1.records.length < 50 && (!expectedTotalPages || expectedTotalPages <= 1)) {
-      return { records: all, totalPages: 1 };
+      return { records: all, totalPages: 1, serverTotal: serverTotalHint };
     }
 
     let nextPage = 2;
@@ -652,25 +657,33 @@
       );
       let batchHadRecords = false;
       let explicitEndReached = false;
+      let batchAllFailed = true;
 
       for (let i = 0; i < results.length; i++) {
         const res = results[i];
-        if (res.ok && res.records.length > 0) {
+        if (!res.ok) {
+          // Mark the page for a post-loop retry instead of silently losing its records
+          failedPages.add(batchPages[i]);
+          continue;
+        }
+        batchAllFailed = false;
+        if (res.records.length > 0) {
           batchHadRecords = true;
           totalPages = Math.max(totalPages, batchPages[i]);
           addRecs(res.records);
+          if (res.totalHint > 0 && serverTotalHint === 0) serverTotalHint = res.totalHint;
           if (
             res.records.length < 50 &&
             (!expectedTotalPages || batchPages[i] >= expectedTotalPages)
           ) {
             explicitEndReached = true;
           }
-        } else if (res.ok && res.records.length === 0) {
+        } else if (res.records.length === 0) {
           explicitEndReached = true;
         }
       }
 
-      if (!batchHadRecords) {
+      if (batchAllFailed || !batchHadRecords) {
         consecutiveEmptyBatches++;
         if (consecutiveEmptyBatches >= 2) break;
       } else {
@@ -681,7 +694,34 @@
       }
     }
 
-    return { records: all, totalPages };
+    // CRITICAL ANTI-LOSS RETRY: any page that failed during the sweep is retried up to
+    // 3 extra rounds before giving up, so a transient 4xx/5xx can never drop ~50 orders
+    let retryRound = 0;
+    while (failedPages.size > 0 && retryRound < 3) {
+      retryRound++;
+      const pages = Array.from(failedPages).sort((a, b) => a - b);
+      failedPages.clear();
+      const retryResults = await Promise.all(
+        pages.map((pg) => fetchSingleDeliveryPage(basePathWithQuery, pg))
+      );
+      retryResults.forEach((res, i) => {
+        const pg = pages[i];
+        if (!res.ok) {
+          failedPages.add(pg);
+          return;
+        }
+        if (res.totalHint > 0 && serverTotalHint === 0) serverTotalHint = res.totalHint;
+        if (res.records.length > 0) {
+          totalPages = Math.max(totalPages, pg);
+          addRecs(res.records);
+        }
+      });
+      if (failedPages.size > 0) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+
+    return { records: all, totalPages, serverTotal: serverTotalHint };
   }
 
   function formatCairo24Hour(isoStr) {
@@ -1681,7 +1721,11 @@
                 });
               }
             });
-            return { tab: ep.tab, records: Array.from(mergedById.values()) };
+            return {
+              tab: ep.tab,
+              records: Array.from(mergedById.values()),
+              serverTotal: Number(lastServerTotalsMap.get(ep.tab) || 0)
+            };
           }
 
           const full = await fetchAllDeliveryPages(fullUrl, ep.tab === "Active" ? 180 : 50);
@@ -1691,16 +1735,31 @@
               lastKnownActivePageCount = full.totalPages || 1;
             }
             cachedTabRecordsMap.set(ep.tab, full.records);
-            return { tab: ep.tab, records: full.records };
+            if (Number(full.serverTotal || 0) > 0) {
+              lastServerTotalsMap.set(ep.tab, Number(full.serverTotal));
+            }
+            return {
+              tab: ep.tab,
+              records: full.records,
+              serverTotal: Number(full.serverTotal || 0)
+            };
           }
-          return { tab: ep.tab, records: cachedTabRecordsMap.get(ep.tab) || [] };
+          return {
+            tab: ep.tab,
+            records: cachedTabRecordsMap.get(ep.tab) || [],
+            serverTotal: Number(lastServerTotalsMap.get(ep.tab) || 0)
+          };
         })
       ]);
 
       const globalTabRecords = { Queued: [], Dispatched: [], Active: [] };
+      const serverTabTotals = {};
       tabFetchResults.forEach((res) => {
         if (res.status === "fulfilled" && res.value?.tab) {
           globalTabRecords[res.value.tab] = res.value.records || [];
+          if (Number(res.value.serverTotal || 0) > 0) {
+            serverTabTotals[res.value.tab] = Number(res.value.serverTotal);
+          }
         }
       });
 
@@ -1837,6 +1896,7 @@
               Dispatched: sessTabRecords.Dispatched.length,
               Active: sessTabRecords.Active.length
             },
+            serverTotals: serverTabTotals,
             activeViewers
           });
         })
