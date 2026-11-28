@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.14
-// @description  [v10.14] Dedicated 400ms Fast-Lane Order Detail & Notes Fetcher (Parallel + Retry + Zero Null Overwrite) + Multi-Rider Sibling Preservation + Preorder Countdown + Rolling 2h Archive
+// @version      10.16
+// @description  [v10.16] Fix Syntax & Restore Full On-Demand Handlers (Order Details + Transitions Retry + Courier Profile + Rider Search + Direct Completed Lookup)
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.14";
+  const SCRIPT_VERSION = "10.16";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -1396,25 +1396,48 @@
             const orderCode = String(req.orderCode || `HF_EG${code}`).trim();
             const internalId = String(req.internalOrderId || "").trim();
 
+            const fetchOrderDetailAnyId = async () => {
+              try {
+                const r1 = await hurrierGetWithRetry(`/orders/${encodeURIComponent(code)}`, 2, 250);
+                if (r1 && (r1.order || r1.id || r1.code)) return r1;
+              } catch (err) {
+                if (!internalId || internalId === code) throw err;
+              }
+              if (internalId && internalId !== code) {
+                return await hurrierGetWithRetry(`/orders/${encodeURIComponent(internalId)}`, 2, 250);
+              }
+              return null;
+            };
+
+            const fetchOrderDeliveriesAnyId = async () => {
+              try {
+                const d1 = await hurrierGetWithRetry(
+                  `/orders/${encodeURIComponent(code)}/deliveries`,
+                  2,
+                  250
+                );
+                const list1 = Array.isArray(d1?.deliveries)
+                  ? d1.deliveries
+                  : Array.isArray(d1)
+                  ? d1
+                  : [];
+                if (list1.length > 0 || !internalId || internalId === code) return d1;
+              } catch (err) {
+                if (!internalId || internalId === code) throw err;
+              }
+              if (internalId && internalId !== code) {
+                return await hurrierGetWithRetry(
+                  `/orders/${encodeURIComponent(internalId)}/deliveries`,
+                  2,
+                  250
+                );
+              }
+              return null;
+            };
+
             const [detRes, delRes, notesRes] = await Promise.allSettled([
-              hurrierGetWithRetry(`/orders/${encodeURIComponent(code)}`, 2, 250).catch((err) => {
-                if (internalId && internalId !== code) {
-                  return hurrierGetWithRetry(`/orders/${encodeURIComponent(internalId)}`, 1, 250);
-                }
-                throw err;
-              }),
-              hurrierGetWithRetry(`/orders/${encodeURIComponent(code)}/deliveries`, 2, 250).catch(
-                (err) => {
-                  if (internalId && internalId !== code) {
-                    return hurrierGetWithRetry(
-                      `/orders/${encodeURIComponent(internalId)}/deliveries`,
-                      1,
-                      250
-                    );
-                  }
-                  throw err;
-                }
-              ),
+              fetchOrderDetailAnyId(),
+              fetchOrderDeliveriesAnyId(),
               hurrierGetWithRetry(
                 `/orders/dispatcher_notes?code=${encodeURIComponent(orderCode)}`,
                 1,
@@ -1429,62 +1452,66 @@
             ]);
 
             const hasDetail = detRes.status === "fulfilled" && detRes.value;
-            const hasDeliveries = delRes.status === "fulfilled" && delRes.value;
+            const delVal = delRes.status === "fulfilled" ? delRes.value : null;
+            const extractedDelList = Array.isArray(delVal?.deliveries)
+              ? delVal.deliveries
+              : Array.isArray(delVal)
+              ? delVal
+              : Array.isArray(detRes.value?.order?.deliveries)
+              ? detRes.value.order.deliveries
+              : [];
+            const hasDeliveries = extractedDelList.length > 0;
             const isGenuine404 =
               detRes.status === "rejected" &&
               String(detRes.reason?.message || "").includes("HURRIER_404") &&
               delRes.status === "rejected" &&
               String(delRes.reason?.message || "").includes("HURRIER_404");
 
-            if (!hasDetail && !hasDeliveries && !isGenuine404) {
-              // Transient error / rate-limit: do NOT overwrite with null; allow up to 3 automatic retries
+            if ((!hasDetail || !hasDeliveries) && !isGenuine404) {
+              // Retry if either detail or deliveries failed transiently so logs never stay empty
               const attemptKey = `${code}_${reqTs}`;
               const tries = (orderDetailAttemptCounts.get(attemptKey) || 0) + 1;
               orderDetailAttemptCounts.set(attemptKey, tries);
               if (tries < 3) {
                 processedOrderDetailReqs.delete(code);
+                if (!hasDetail) return;
               } else {
                 firebaseReq("DELETE", `/config/order_detail_reqs/${encodeURIComponent(key)}`).catch(
                   () => {}
                 );
               }
-              return;
+            } else {
+              firebaseReq("DELETE", `/config/order_detail_reqs/${encodeURIComponent(key)}`).catch(
+                () => {}
+              );
             }
 
-            // If order detail returned a canonical order_code and initial notes were empty, fetch notes with canonical order_code
-            let finalNotes =
-              notesRes.status === "fulfilled" && notesRes.value
-                ? notesRes.value
-                : { dispatcher_notes: [] };
-            const resolvedOrderCode = String(
-              detRes.value?.order?.order_code || detRes.value?.order_code || ""
-            ).trim();
-            if (
-              resolvedOrderCode &&
-              resolvedOrderCode !== orderCode &&
-              (!Array.isArray(finalNotes?.dispatcher_notes) ||
-                finalNotes.dispatcher_notes.length === 0)
-            ) {
+            let prevSaved = null;
+            if (!hasDetail || !hasDeliveries) {
               try {
-                const retryNotes = await hurrierGet(
-                  `/orders/dispatcher_notes?code=${encodeURIComponent(resolvedOrderCode)}`
-                );
-                if (retryNotes) finalNotes = retryNotes;
+                prevSaved = await firebaseReq("GET", `/order_details/${encodeURIComponent(code)}`);
               } catch {}
             }
 
+            const finalDetail = hasDetail ? detRes.value : prevSaved?.detail || null;
+            const finalDeliveries = hasDeliveries
+              ? { deliveries: extractedDelList }
+              : prevSaved?.deliveries || { deliveries: [] };
+            const finalNotes =
+              notesRes.status === "fulfilled" && notesRes.value
+                ? notesRes.value
+                : prevSaved?.notes || { dispatcher_notes: [] };
+
             const payload = {
               code,
-              detail: hasDetail ? detRes.value : null,
-              deliveries: hasDeliveries ? delRes.value : null,
+              detail: finalDetail,
+              deliveries: finalDeliveries,
+              deliveriesFetched: Boolean(hasDeliveries || delRes.status === "fulfilled" || isGenuine404),
+              notFound: isGenuine404,
               notes: finalNotes,
-              notFound: Boolean(isGenuine404 && !hasDetail && !hasDeliveries),
               updatedAt: Date.now()
             };
             await firebaseReq("PUT", `/order_details/${encodeURIComponent(code)}`, payload);
-            firebaseReq("DELETE", `/config/order_detail_reqs/${encodeURIComponent(key)}`).catch(
-              () => {}
-            );
           })
         );
       }
@@ -1497,11 +1524,11 @@
         lastHandledCourierDetailTs = Number(cReq.requestedAt);
         const cid = String(cReq.courierId).trim();
         const [detRes, balRes] = await Promise.allSettled([
-          hurrierGet(`/courier/detail?courier_id=${encodeURIComponent(cid)}`).catch(() =>
-            hurrierGet(`/couriers/${encodeURIComponent(cid)}`)
+          hurrierGetWithRetry(`/courier/detail?courier_id=${encodeURIComponent(cid)}`, 1, 250).catch(
+            () => hurrierGetWithRetry(`/couriers/${encodeURIComponent(cid)}`, 1, 250)
           ),
-          hurrierGet(`/courier/balance?courier_id=${encodeURIComponent(cid)}`).catch(() =>
-            hurrierGet(`/couriers/${encodeURIComponent(cid)}/balance`)
+          hurrierGetWithRetry(`/courier/balance?courier_id=${encodeURIComponent(cid)}`, 1, 250).catch(
+            () => hurrierGetWithRetry(`/couriers/${encodeURIComponent(cid)}/balance`, 1, 250)
           )
         ]);
         const rawDet = detRes.status === "fulfilled" ? detRes.value : {};
@@ -1634,7 +1661,7 @@
             record = sharedCompletedMap.get(code);
           } else {
             try {
-              const det = await hurrierGet(`/orders/${encodeURIComponent(code)}`);
+              const det = await hurrierGetWithRetry(`/orders/${encodeURIComponent(code)}`, 1, 250);
               const dOrder = det?.order || det || {};
               if (dOrder && (dOrder.id || dOrder.code)) {
                 found = true;
@@ -1650,8 +1677,6 @@
                 }
               }
             } catch (e) {
-              // v10.10: only a real 404 means "not found" — auth/rate-limit/network errors must NOT
-              // be reported as not_found (that was showing false negatives to the captain)
               const errMsg = String(e?.message || "");
               if (errMsg.includes("HURRIER_404")) {
                 found = false;
