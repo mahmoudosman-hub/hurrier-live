@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.9
-// @description  [v10.9] Near-Real-Time Completed Archive: 60s Delta Sync + Instant Delta On New Viewer + Live-Transition Catch x3 (15/tick) + Re-check Lost Transitions + Server-Authoritative Counts + Failed Page Auto-Retry + Rolling 2h Archive
+// @version      10.11
+// @description  [v10.11] Long Order-ID Lookup (19-20 digit internal ids now searchable) + Rich Completed Search (Rider ID / phone / VO) + Honest Lookup Errors + Near-Real-Time 60s Completed Delta + Rolling 2h Archive
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.9";
+  const SCRIPT_VERSION = "10.11";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -1552,7 +1552,18 @@
                   }
                 }
               }
-            } catch {}
+            } catch (e) {
+              // v10.10: only a real 404 means "not found" — auth/rate-limit/network errors must NOT
+              // be reported as not_found (that was showing false negatives to the captain)
+              const errMsg = String(e?.message || "");
+              if (errMsg.includes("HURRIER_404")) {
+                found = false;
+                status = "not_found";
+              } else {
+                found = false;
+                status = "lookup_error";
+              }
+            }
           }
 
           await firebaseReq("PUT", `/session_bundles/comp_id_${encodeURIComponent(code)}`, {
