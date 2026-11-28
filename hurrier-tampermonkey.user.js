@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.2
-// @description  [v10.2] Fix Active Couriers Zone Delay + Fix Completed Deliveries Endpoint + Unified Device Multi-Tab
+// @version      10.3
+// @description  [v10.3] Fix Completed Orders Backward Tail Pagination + Fix Active Couriers Zone Delay + Remove 404 Endpoints
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.2";
+  const SCRIPT_VERSION = "10.3";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -558,8 +558,9 @@
   let completedArchiveLoadedFromFb = false;
   let completedSyncing = false;
   let completedLastSweepAt = 0;
+  let completedLastTailSyncAt = 0;
+  let lastKnownCompletedLastPage = 1;
   let lastHandledForceSweepTs = 0;
-  const prevActiveOrdersByCode = new Map();
 
   // Courier Cache & Throttling
   const couriersBySpCache = new Map();
@@ -770,8 +771,17 @@
   }
 
   // ============================================================================
-  // 7) UNIFIED 2-HOUR COMPLETED ARCHIVE (15-MIN SWEEP + LIVE TRANSITION CAPTURE)
+  // 7) UNIFIED 2-HOUR COMPLETED ARCHIVE (15-MIN FULL SWEEP + 25s TAIL REFRESH)
   // ============================================================================
+  function getCairoDateStringForMs(ms) {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(new Date(ms));
+  }
+
   function extractCompletedMsFromRecord(rec) {
     if (rec?.__completed_at_ms && Number(rec.__completed_at_ms) > 0) {
       return Number(rec.__completed_at_ms);
@@ -890,43 +900,103 @@
     };
   }
 
-  async function fetchCompletedOrdersPage(page, spQuery = "") {
-    const endpoints = [
-      ...(spQuery
-        ? [`/dispatcher-dashboard/deliveries/completed?${spQuery}&page=${page}&per_page=50`]
-        : []),
-      `/dispatcher-dashboard/deliveries/completed?page=${page}&per_page=50`,
-      `/dispatcher-dashboard/orders/completed?page=${page}&per_page=50`
-    ];
-    for (const ep of endpoints) {
-      try {
-        const data = await hurrierGet(ep);
-        const recs = Array.isArray(data?.records)
-          ? data.records
-          : Array.isArray(data?.orders)
-          ? data.orders
-          : Array.isArray(data)
-          ? data
-          : null;
-        if (Array.isArray(recs)) return recs;
-      } catch {}
+  // Hurrier's /dispatcher-dashboard/orders/completed?date=YYYY-MM-DD returns records sorted ASCENDING (00:00 AM first)
+  async function fetchCompletedOrdersPageWithMeta(dateStr, page) {
+    try {
+      const data = await hurrierGet(
+        `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=${page}&per_page=50`
+      );
+      const recs = Array.isArray(data?.records)
+        ? data.records
+        : Array.isArray(data?.orders)
+        ? data.orders
+        : Array.isArray(data)
+        ? data
+        : [];
+      const totalCount = Number(
+        data?.metadata?.total_count ??
+          data?.total_count ??
+          data?.total ??
+          data?.meta?.total ??
+          0
+      );
+      return { ok: true, records: recs, totalCount };
+    } catch {
+      return { ok: false, records: [], totalCount: 0 };
     }
-    return [];
   }
 
-  async function runCompletedArchive15MinSweep(allZoneIds) {
-    if (completedSyncing) return;
-    completedSyncing = true;
-    const cutoffMs = Date.now() - 2 * 3600 * 1000;
-    const spQuery = buildStartingPointQueryParams(allZoneIds);
+  async function findLastCompletedPageForDate(dateStr, hintLastPage = 1) {
+    const p1 = await fetchCompletedOrdersPageWithMeta(dateStr, 1);
+    if (!p1.ok || p1.records.length === 0) return { lastPage: 0, prefetched: new Map() };
 
-    try {
-      for (let pg = 1; pg <= 45; pg++) {
-        const recs = await fetchCompletedOrdersPage(pg, spQuery);
-        if (recs.length === 0) break;
+    const prefetched = new Map([[1, p1.records]]);
+    if (p1.totalCount > 0) {
+      return { lastPage: Math.max(1, Math.ceil(p1.totalCount / 50)), prefetched };
+    }
+    if (p1.records.length < 50) {
+      return { lastPage: 1, prefetched };
+    }
 
-        let oldestInPage = Infinity;
-        for (const r of recs) {
+    let low = 1;
+    let high = Math.max(2, hintLastPage);
+
+    // Probe upwards from hint or exponentially until we find an empty page
+    while (high <= 300) {
+      const pr = await fetchCompletedOrdersPageWithMeta(dateStr, high);
+      if (!pr.ok || pr.records.length === 0) {
+        break;
+      }
+      prefetched.set(high, pr.records);
+      if (pr.records.length < 50) {
+        return { lastPage: high, prefetched };
+      }
+      low = high;
+      high = high < 16 ? high * 2 : high + 24;
+    }
+
+    // Binary search between low (non-empty) and high (empty)
+    while (low + 1 < high) {
+      const mid = Math.floor((low + high) / 2);
+      const pr = await fetchCompletedOrdersPageWithMeta(dateStr, mid);
+      if (pr.ok && pr.records.length > 0) {
+        prefetched.set(mid, pr.records);
+        if (pr.records.length < 50) {
+          return { lastPage: mid, prefetched };
+        }
+        low = mid;
+      } else {
+        high = mid;
+      }
+    }
+
+    return { lastPage: low, prefetched };
+  }
+
+  async function ingestCompletedWindowBackwardsForDate(dateStr, fromMs, toMs, targetMap, hintPage = 1) {
+    const { lastPage, prefetched } = await findLastCompletedPageForDate(dateStr, hintPage);
+    if (lastPage <= 0) return 0;
+
+    let pg = lastPage;
+    while (pg >= 1) {
+      const batchPages = [];
+      for (let i = 0; i < 4 && pg >= 1; i++, pg--) {
+        batchPages.push(pg);
+      }
+
+      const batchResults = await Promise.all(
+        batchPages.map(async (pNum) => {
+          if (prefetched.has(pNum)) return { page: pNum, records: prefetched.get(pNum) };
+          const res = await fetchCompletedOrdersPageWithMeta(dateStr, pNum);
+          return { page: pNum, records: res.records };
+        })
+      );
+
+      let reachedOlderThanWindow = false;
+      for (const { records } of batchResults) {
+        if (!records || records.length === 0) continue;
+        let newestInPage = 0;
+        for (const r of records) {
           const ord = r?.order || r || {};
           const code = String(
             ord.confirmation_number ||
@@ -935,75 +1005,118 @@
               ""
           ).trim();
           const compMs = extractCompletedMsFromRecord(r);
-          if (compMs > 0) oldestInPage = Math.min(oldestInPage, compMs);
-          if (code && (!compMs || compMs >= cutoffMs)) {
-            sharedCompletedMap.set(code, {
-              ...r,
-              __completed_at_ms: compMs || Date.now()
-            });
+          if (compMs > newestInPage) newestInPage = compMs;
+          if (code && compMs >= fromMs && compMs <= toMs) {
+            targetMap.set(code, { ...r, __completed_at_ms: compMs });
           }
         }
-
-        if (oldestInPage !== Infinity && oldestInPage < cutoffMs) {
-          break;
+        if (newestInPage > 0 && newestInPage < fromMs) {
+          reachedOlderThanWindow = true;
         }
       }
 
+      if (reachedOlderThanWindow) break;
+    }
+
+    return lastPage;
+  }
+
+  async function runCompletedArchive15MinSweep() {
+    if (completedSyncing) return;
+    completedSyncing = true;
+    const now = Date.now();
+    const cutoffMs = now - 2 * 3600 * 1000;
+    const todayStr = getCairoDateStringForMs(now);
+    const cutoffDateStr = getCairoDateStringForMs(cutoffMs);
+
+    try {
+      const freshMap = new Map();
+      const detectedLastPage = await ingestCompletedWindowBackwardsForDate(
+        todayStr,
+        cutoffMs,
+        now + 10 * 60 * 1000,
+        freshMap,
+        lastKnownCompletedLastPage
+      );
+      if (detectedLastPage > 0) {
+        lastKnownCompletedLastPage = detectedLastPage;
+      }
+
+      if (cutoffDateStr !== todayStr) {
+        await ingestCompletedWindowBackwardsForDate(
+          cutoffDateStr,
+          cutoffMs,
+          now + 10 * 60 * 1000,
+          freshMap,
+          1
+        );
+      }
+
+      for (const [code, rec] of freshMap.entries()) {
+        sharedCompletedMap.set(code, rec);
+      }
       pruneOldCompletedRecords();
       completedLastSweepAt = Date.now();
+      completedLastTailSyncAt = completedLastSweepAt;
       await saveSharedCompletedArchiveToFb();
     } finally {
       completedSyncing = false;
     }
   }
 
-  async function captureRecentlyCompletedOrders(currentActiveAndDispRecords) {
-    const currentCodes = new Set();
-    for (const r of currentActiveAndDispRecords) {
-      const ord = r?.order || {};
-      const code = String(
-        ord.code ||
-          String(ord.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
-          ""
-      ).trim();
-      if (code) {
-        currentCodes.add(code);
-        prevActiveOrdersByCode.set(code, r);
+  async function runCompletedTailQuickRefresh() {
+    if (completedSyncing) return;
+    const now = Date.now();
+    const cutoffMs = now - 2 * 3600 * 1000;
+    const todayStr = getCairoDateStringForMs(now);
+
+    try {
+      let pg = Math.max(1, lastKnownCompletedLastPage);
+      const nextCheck = await fetchCompletedOrdersPageWithMeta(todayStr, pg + 1);
+      if (nextCheck.ok && nextCheck.records.length > 0) {
+        pg = pg + 1;
+        lastKnownCompletedLastPage = pg;
       }
-    }
 
-    const disappeared = [];
-    for (const [code, prevRec] of prevActiveOrdersByCode.entries()) {
-      if (!currentCodes.has(code)) {
-        prevActiveOrdersByCode.delete(code);
-        disappeared.push({ code, prevRec });
-      }
-    }
+      const pagesToPull = Array.from(new Set([pg, Math.max(1, pg - 1)]));
+      const results = await Promise.all(
+        pagesToPull.map((p) =>
+          p === pg && nextCheck.ok && nextCheck.records.length > 0
+            ? Promise.resolve(nextCheck)
+            : fetchCompletedOrdersPageWithMeta(todayStr, p)
+        )
+      );
 
-    if (disappeared.length === 0) return;
-
-    let addedAny = false;
-    for (const { code, prevRec } of disappeared.slice(0, 12)) {
-      try {
-        const det = await hurrierGet(`/hurrier/v2/orders/${encodeURIComponent(code)}`);
-        const st = String(det?.order?.status || det?.status || "").toLowerCase();
-        if (st === "completed" || st === "delivered") {
-          const compRec = buildCompletedRecordFromOrderDetail(det, prevRec);
-          sharedCompletedMap.set(code, compRec);
-          addedAny = true;
+      let addedNew = false;
+      for (const res of results) {
+        if (!res.ok || !Array.isArray(res.records)) continue;
+        for (const r of res.records) {
+          const ord = r?.order || r || {};
+          const code = String(
+            ord.confirmation_number ||
+              ord.code ||
+              String(ord.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+              ""
+          ).trim();
+          const compMs = extractCompletedMsFromRecord(r);
+          if (code && compMs >= cutoffMs && !sharedCompletedMap.has(code)) {
+            sharedCompletedMap.set(code, { ...r, __completed_at_ms: compMs });
+            addedNew = true;
+          }
         }
-      } catch {}
-    }
+      }
 
-    if (addedAny) {
-      await saveSharedCompletedArchiveToFb();
-    }
+      completedLastTailSyncAt = Date.now();
+      if (addedNew) {
+        await saveSharedCompletedArchiveToFb();
+      }
+    } catch {}
   }
 
   // ============================================================================
   // 8) ON-DEMAND REQUEST HANDLERS (Order Details + Notes, Courier Details, Rider Search, Completed Lookup)
   // ============================================================================
-  async function processOnDemandRequests(allZoneIds) {
+  async function processOnDemandRequests() {
     // A) Per-Order Detail + Deliveries + Dispatcher Notes Requests
     try {
       const reqs = await firebaseReq("GET", "/config/order_detail_reqs");
@@ -1017,12 +1130,8 @@
 
           const orderCode = String(req.orderCode || `HF_EG${code}`).trim();
           const [detRes, delRes, notesRes] = await Promise.allSettled([
-            hurrierGet(`/hurrier/v2/orders/${encodeURIComponent(code)}`).catch(() =>
-              hurrierGet(`/orders/${encodeURIComponent(code)}`)
-            ),
-            hurrierGet(`/hurrier/v2/orders/${encodeURIComponent(code)}/deliveries`).catch(() =>
-              hurrierGet(`/orders/${encodeURIComponent(code)}/deliveries`)
-            ),
+            hurrierGet(`/orders/${encodeURIComponent(code)}`),
+            hurrierGet(`/orders/${encodeURIComponent(code)}/deliveries`),
             hurrierGet(`/orders/dispatcher_notes?code=${encodeURIComponent(orderCode)}`).catch(() =>
               hurrierGet(`/hurrier/v1/orders/dispatcher_notes?code=${encodeURIComponent(orderCode)}`)
             )
@@ -1185,7 +1294,7 @@
             record = sharedCompletedMap.get(code);
           } else {
             try {
-              const det = await hurrierGet(`/hurrier/v2/orders/${encodeURIComponent(code)}`);
+              const det = await hurrierGet(`/orders/${encodeURIComponent(code)}`);
               const dOrder = det?.order || det || {};
               if (dOrder && (dOrder.id || dOrder.code)) {
                 found = true;
@@ -1223,47 +1332,30 @@
 
           const fromMs = Number(req.fromMs || 0);
           const toMs = Number(req.toMs || 0);
-          const matched = [];
-          const seenCodes = new Set();
+          const dateStr = req.dateStr || getCairoDateStringForMs(fromMs || Date.now());
+          const rangeMap = new Map();
 
           for (const [code, rec] of sharedCompletedMap.entries()) {
             const ms = extractCompletedMsFromRecord(rec);
             if (ms >= fromMs && ms <= toMs) {
-              seenCodes.add(code);
-              matched.push(rec);
+              rangeMap.set(code, rec);
             }
           }
 
-          const spQuery = buildStartingPointQueryParams(req.zoneIds || allZoneIds);
-          for (let pg = 1; pg <= 60; pg++) {
-            const recs = await fetchCompletedOrdersPage(pg, spQuery);
-            if (recs.length === 0) break;
-
-            let oldestInPage = Infinity;
-            for (const r of recs) {
-              const ord = r?.order || r || {};
-              const code = String(
-                ord.confirmation_number ||
-                  ord.code ||
-                  String(ord.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
-                  ""
-              ).trim();
-              const ms = extractCompletedMsFromRecord(r);
-              if (ms > 0) oldestInPage = Math.min(oldestInPage, ms);
-              if (code && !seenCodes.has(code) && ms >= fromMs && ms <= toMs) {
-                seenCodes.add(code);
-                matched.push({ ...r, __completed_at_ms: ms });
-              }
-            }
-            if (oldestInPage !== Infinity && oldestInPage < fromMs) break;
-          }
+          await ingestCompletedWindowBackwardsForDate(
+            dateStr,
+            fromMs,
+            toMs,
+            rangeMap,
+            dateStr === getCairoDateStringForMs(Date.now()) ? lastKnownCompletedLastPage : 1
+          );
 
           await firebaseReq(
             "PUT",
             `/session_bundles/comp_range_${encodeURIComponent(req.sessionId || sessKey)}`,
             {
               reqId: req.reqId,
-              records: matched,
+              records: Array.from(rangeMap.values()),
               updatedAt: Date.now()
             }
           );
@@ -1279,7 +1371,7 @@
       const fReq = await firebaseReq("GET", "/config/completed_force_sync_req");
       if (fReq && Number(fReq.requestedAt || 0) > lastHandledForceSweepTs) {
         lastHandledForceSweepTs = Number(fReq.requestedAt);
-        runCompletedArchive15MinSweep(allZoneIds).catch(() => {});
+        runCompletedArchive15MinSweep().catch(() => {});
       }
     } catch {}
   }
@@ -1344,7 +1436,7 @@
       const unionZoneIds = Array.from(unionZoneIdsSet);
 
       // Process on-demand requests even if 0 active sessions
-      await processOnDemandRequests(unionZoneIds);
+      await processOnDemandRequests();
 
       if (activeSessions.length === 0) {
         setBadge(
@@ -1355,8 +1447,10 @@
       }
 
       await loadInitialSharedCompletedArchive();
-      if (now - completedLastSweepAt >= 15 * 60 * 1000) {
-        runCompletedArchive15MinSweep(unionZoneIds).catch(() => {});
+      if (completedLastSweepAt === 0 || now - completedLastSweepAt >= 15 * 60 * 1000) {
+        runCompletedArchive15MinSweep().catch(() => {});
+      } else if (now - completedLastTailSyncAt >= 25 * 1000) {
+        runCompletedTailQuickRefresh().catch(() => {});
       }
 
       const spQuery = buildStartingPointQueryParams(unionZoneIds);
@@ -1419,12 +1513,6 @@
         }
       });
 
-      // Capture orders transitioning out of Active/Dispatched into Completed
-      captureRecentlyCompletedOrders([
-        ...globalTabRecords.Active,
-        ...globalTabRecords.Dispatched
-      ]).catch(() => {});
-
       // Fetch active couriers for all union starting points
       const allUnionCouriers = await fetchCouriersForStartingPoints(unionZoneIds);
 
@@ -1436,6 +1524,7 @@
         statsRes.value.cities.forEach((cityObj) => {
           const cityName = cityObj?.city_name || "Cairo";
           (cityObj?.zones || []).forEach((zGrp) => {
+            const parentZoneDelay = Number(zGrp?.stat?.delay ?? zGrp?.delay ?? 0);
             (zGrp?.starting_points || []).forEach((sp) => {
               if (sp?.id && sp?.name) {
                 const spIdNum = Number(sp.id);
@@ -1446,18 +1535,13 @@
                   name: spNameClean,
                   city: cityName
                 });
-                const rawDelayVal =
-                  sp?.delay ??
-                  sp?.stat?.delay ??
-                  sp?.stat?.avg_delay ??
-                  zGrp?.delay ??
-                  zGrp?.stat?.delay ??
-                  0;
+                const spOwnDelay = Number(sp?.delay ?? sp?.stat?.delay ?? sp?.stat?.avg_delay ?? 0);
+                const rawDelayVal = spOwnDelay > 0 ? spOwnDelay : parentZoneDelay;
                 allZoneStatsList.push({
                   id: spIdNum,
                   name: spNameClean,
                   city: cityName,
-                  delay: Math.round(Number(rawDelayVal || 0) * 10) / 10,
+                  delay: Math.round(rawDelayVal * 10) / 10,
                   stat: sp?.stat || {}
                 });
               }
