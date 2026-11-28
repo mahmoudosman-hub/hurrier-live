@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v10.14 -->
+<!-- Hurrier Live Operations Dashboard v10.16 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v10.14</title>
+  <title>Hurrier Live Operations Dashboard v10.16</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,14 +38,14 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v10.14...
+      Loading Hurrier Live Operations Dashboard v10.16...
     </div>
   </div>
 
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
-    const APP_VERSION = "10.14";
+    const APP_VERSION = "10.16";
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
     const FIREBASE_PROJECT_ID = "hurrier-live";
     const FIREBASE_AUTH_DOMAIN = "hurrier-live.firebaseapp.com";
@@ -869,6 +869,10 @@
         cachedEntry?.detail?.order || cachedEntry?.detail || orderItem?.raw?.order || {};
       const rawDeliveries = Array.isArray(cachedEntry?.deliveries?.deliveries)
         ? cachedEntry.deliveries.deliveries
+        : Array.isArray(cachedEntry?.deliveries)
+        ? cachedEntry.deliveries
+        : Array.isArray(cachedEntry?.deliveries?.records)
+        ? cachedEntry.deliveries.records
         : Array.isArray(dOrder?.deliveries)
         ? dOrder.deliveries
         : Array.isArray(cachedEntry?.detail?.deliveries)
@@ -1136,14 +1140,30 @@
         }))
         .filter((n) => n.note);
 
+      const hasValidDetailObj = Boolean(
+        cachedEntry?.detail &&
+          (cachedEntry.detail.order?.id ||
+            cachedEntry.detail.order?.code ||
+            cachedEntry.detail.id ||
+            cachedEntry.detail.code ||
+            cachedEntry.detail.status)
+      );
+
       return {
         id,
         orderCode,
         orderBadges,
         isLoadedFromApi: Boolean(
-          cachedEntry && (cachedEntry.detail || cachedEntry.deliveries || cachedEntry.notFound)
+          cachedEntry &&
+            (hasValidDetailObj ||
+              rawDeliveries.length > 0 ||
+              cachedEntry.deliveriesFetched ||
+              cachedEntry.notFound)
         ),
-        isNotFound: Boolean(cachedEntry?.notFound && !cachedEntry?.detail && !cachedEntry?.deliveries),
+        hasTransitionsLoaded: Boolean(
+          rawDeliveries.length > 0 || cachedEntry?.deliveriesFetched || cachedEntry?.notFound
+        ),
+        isNotFound: Boolean(cachedEntry?.notFound && !hasValidDetailObj && rawDeliveries.length === 0),
         status,
         statusSinceStr,
         platformName,
@@ -2084,18 +2104,34 @@
           };
 
           try {
+            let cachedUpdatedAt = 0;
+            let hasCompleteTransitions = false;
             if (!forceRefresh) {
               const quickRes = await dbFetch(`/order_details/${encodeURIComponent(code)}`);
               if (quickRes.ok) {
                 const quickData = await quickRes.json();
-                if (
-                  quickData &&
-                  (quickData.detail || quickData.deliveries || quickData.notFound)
-                ) {
-                  if (!isCancelled()) {
-                    setOrderDetailsCache((prev) => ({ ...prev, [code]: quickData }));
+                if (quickData && typeof quickData === "object") {
+                  cachedUpdatedAt = Number(quickData.updatedAt || 0);
+                  const dList = Array.isArray(quickData?.deliveries?.deliveries)
+                    ? quickData.deliveries.deliveries
+                    : Array.isArray(quickData?.deliveries)
+                    ? quickData.deliveries
+                    : [];
+                  hasCompleteTransitions = dList.some(
+                    (d) => Array.isArray(d?.transitions) && d.transitions.length > 0
+                  );
+                  if (quickData.detail || dList.length > 0 || quickData.notFound) {
+                    if (!isCancelled()) {
+                      setOrderDetailsCache((prev) => ({ ...prev, [code]: quickData }));
+                    }
                   }
-                  return;
+                  // If cache already has transitions and is fresh (< 8s) or this is just a hover prefetch, no need to re-fetch
+                  if (
+                    hasCompleteTransitions &&
+                    (!keepPollingWhileOpen || Date.now() - cachedUpdatedAt < 8000)
+                  ) {
+                    return;
+                  }
                 }
               }
             }
@@ -2116,7 +2152,11 @@
               const res = await dbFetch(`/order_details/${encodeURIComponent(code)}`);
               if (res.ok) {
                 const data = await res.json();
-                if (data && (data.detail || data.deliveries || data.notFound)) {
+                if (
+                  data &&
+                  Number(data.updatedAt || 0) > cachedUpdatedAt &&
+                  (data.detail || data.deliveries || data.notFound)
+                ) {
                   if (!isCancelled()) {
                     setOrderDetailsCache((prev) => ({ ...prev, [code]: data }));
                   }
@@ -6161,7 +6201,7 @@
                                     {del.events.length === 0 ? (
                                       <tr>
                                         <td colSpan={4} className="py-6 text-center text-gray-500">
-                                          {selectedOrderFullView.isLoadedFromApi
+                                          {selectedOrderFullView.hasTransitionsLoaded
                                             ? "لا توجد حركات مسجلة لهذه التوصيلة."
                                             : "⏳ جاري تحميل سجل الحركات الكامل..."}
                                         </td>
