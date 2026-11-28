@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.26
-// @description  [v10.26] True Active Hurrier Feeder Election (Fixes False Backup Standby When Employees View Dashboard)
+// @version      10.27
+// @description  [v10.27] Distributed Multi-Admin Active Feeders + Visibility-Aware Relay for View-Only Employees
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://*.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.26";
+  const SCRIPT_VERSION = "10.27";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -1410,6 +1410,7 @@
   const LOCAL_LOCK_KEY = "hurrier_live_sync_local_tab_lock";
   let ownsLocalTabLock = true;
   let isCurrentLeader = true;
+  let isRelayLeader = true;
   let latestUnionZoneIds = [];
   let latestActiveSessionsSnapshot = [];
 
@@ -1442,6 +1443,9 @@
           window.localStorage.removeItem(LOCAL_LOCK_KEY);
         }
       }
+    } catch {}
+    try {
+      firebaseReq("DELETE", `/config/feeders/${encodeURIComponent(FEEDER_ID)}`).catch(() => {});
     } catch {}
   });
 
@@ -1480,42 +1484,82 @@
 
     isMainLoopRunning = true;
     try {
-      const [sessionsRaw, feederRaw] = await Promise.all([
-        firebaseReq("GET", "/active_sessions").catch(() => ({})),
-        firebaseReq("GET", "/config/active_feeder").catch(() => null)
-      ]);
-      const sessionsObj = sessionsRaw || {};
+      const myEmail = String(getBridgedLeaderEmail() || "").trim().toLowerCase();
       const now = Date.now();
+
+      // Register this active Hurrier Admin feeder with tab visibility status
+      await firebaseReq("PUT", `/config/feeders/${encodeURIComponent(FEEDER_ID)}`, {
+        feederId: FEEDER_ID,
+        email: myEmail,
+        isVisible: !document.hidden,
+        updatedAt: now
+      }).catch(() => {});
+
+      const [sessionsRaw, feedersRaw] = await Promise.all([
+        firebaseReq("GET", "/active_sessions").catch(() => ({})),
+        firebaseReq("GET", "/config/feeders").catch(() => ({}))
+      ]);
+
+      const sessionsObj = sessionsRaw || {};
       const activeSessions = Object.values(sessionsObj).filter(
         (s) => s && s.sessionId && now - Number(s.lastSeen || 0) < 25000
       );
 
-      // True Feeder Election: only active Hurrier tabs compete; Dashboard-only viewers never steal leadership
-      const myEmail = String(getBridgedLeaderEmail() || "").toLowerCase();
-      const feederAgeMs = feederRaw && feederRaw.feederId ? now - Number(feederRaw.updatedAt || 0) : Infinity;
-      const anotherActiveFeederExists =
-        Boolean(feederRaw && feederRaw.feederId) &&
-        feederRaw.feederId !== FEEDER_ID &&
-        feederAgeMs < 8500;
-
-      if (anotherActiveFeederExists) {
-        isCurrentLeader = false;
-        setBadge(
-          "#0f766e",
-          `v${SCRIPT_VERSION} [Backup Standby] (${activeSessions.length} Viewers)`
-        );
-        return;
+      const feedersObj = feedersRaw && typeof feedersRaw === "object" ? feedersRaw : {};
+      const activeFeeders = [];
+      for (const [fKey, fVal] of Object.entries(feedersObj)) {
+        if (!fVal || !fVal.feederId) continue;
+        const age = now - Number(fVal.updatedAt || 0);
+        if (age < 9500) {
+          activeFeeders.push(fVal);
+        } else if (age > 18000) {
+          firebaseReq("DELETE", `/config/feeders/${encodeURIComponent(fKey)}`).catch(() => {});
+        }
+      }
+      if (!activeFeeders.some((f) => f.feederId === FEEDER_ID)) {
+        activeFeeders.push({
+          feederId: FEEDER_ID,
+          email: myEmail,
+          isVisible: !document.hidden,
+          updatedAt: now
+        });
       }
 
+      // Prioritize visible (non-throttled) Hurrier tabs for shared employee relay
+      activeFeeders.sort((a, b) => {
+        const visDiff = (b.isVisible ? 1 : 0) - (a.isVisible ? 1 : 0);
+        if (visDiff !== 0) return visDiff;
+        return String(a.feederId).localeCompare(String(b.feederId));
+      });
+
+      const primaryRelayFeeder = activeFeeders[0];
+      isRelayLeader = !primaryRelayFeeder || primaryRelayFeeder.feederId === FEEDER_ID;
       isCurrentLeader = true;
-      await firebaseReq("PUT", "/config/active_feeder", {
-        feederId: FEEDER_ID,
-        email: myEmail,
-        updatedAt: Date.now()
-      }).catch(() => {});
+
+      // Determine primary feeder per Admin email (in case same Admin opened 2 different browsers)
+      const activeFeederEmails = new Set(
+        activeFeeders.map((f) => String(f.email || "").trim().toLowerCase()).filter(Boolean)
+      );
+      const sameEmailFeeders = activeFeeders.filter(
+        (f) => String(f.email || "").trim().toLowerCase() === myEmail
+      );
+      const isPrimaryForMyEmail =
+        !myEmail || sameEmailFeeders.length === 0 || sameEmailFeeders[0].feederId === FEEDER_ID;
+
+      // Target sessions: (1) My own Admin dashboard sessions + (2) View-only employee sessions if I am Relay Leader
+      const targetSessions = activeSessions.filter((s) => {
+        const sEmail = String(s.email || "").trim().toLowerCase();
+        if (myEmail && sEmail === myEmail) {
+          return isPrimaryForMyEmail;
+        }
+        if (isRelayLeader && (!sEmail || !activeFeederEmails.has(sEmail))) {
+          return true;
+        }
+        return false;
+      });
 
       const unionZoneIdsSet = new Set();
-      for (const s of activeSessions) {
+      for (const s of targetSessions) {
         if (Array.isArray(s.zoneIds)) {
           s.zoneIds.forEach((zid) => {
             const n = Number(zid);
@@ -1529,26 +1573,30 @@
 
       if (activeSessions.length === 0 || unionZoneIds.length === 0) {
         setBadge(
-          "#15803d",
-          `v${SCRIPT_VERSION} [Primary Leader] Waiting for Active Dashboard...`
+          isRelayLeader ? "#15803d" : "#0d9488",
+          `v${SCRIPT_VERSION} [${isRelayLeader ? "Primary Relay" : "Admin Feeder"}] Waiting for Dashboard...`
         );
         return;
       }
 
-      // Check if user requested a forced completed archive refresh
-      try {
-        const forceReq = await firebaseReq("GET", "/config/completed_force_sync_req");
-        if (forceReq && Number(forceReq.requestedAt || 0) > lastCompletedSweepAt) {
-          sweepCompletedOrdersLast2Hours(true);
-        } else {
+      // Shared completed archive & range queries run on the Relay Leader (or initially if local map is empty)
+      if (isRelayLeader || completedArchiveMap.size === 0) {
+        try {
+          const forceReq = await firebaseReq("GET", "/config/completed_force_sync_req");
+          if (forceReq && Number(forceReq.requestedAt || 0) > lastCompletedSweepAt) {
+            sweepCompletedOrdersLast2Hours(true);
+          } else {
+            sweepCompletedOrdersLast2Hours(false);
+          }
+        } catch {
           sweepCompletedOrdersLast2Hours(false);
         }
-      } catch {
-        sweepCompletedOrdersLast2Hours(false);
       }
 
-      processCustomCompletedRangeRequests().catch(() => {});
-      processCompletedIdLookupRequests().catch(() => {});
+      if (isRelayLeader) {
+        processCustomCompletedRangeRequests().catch(() => {});
+        processCompletedIdLookupRequests().catch(() => {});
+      }
 
       const [queuedRes, dispatchedRes, activeRes, couriersData] = await Promise.all([
         fetchAllPagesForDeliveryStatus("queued", unionZoneIds),
@@ -1557,7 +1605,7 @@
         fetchCouriersAndStatsForZones(unionZoneIds)
       ]);
 
-      if (couriersData.dynamicZones.length > 0) {
+      if (isRelayLeader && couriersData.dynamicZones.length > 0) {
         firebaseReq("PUT", "/config/dynamic_zones_catalog", couriersData.dynamicZones).catch(
           () => {}
         );
@@ -1574,7 +1622,7 @@
       const allCompletedList = Array.from(completedArchiveMap.values());
 
       await Promise.all(
-        activeSessions.map(async (sess) => {
+        targetSessions.map(async (sess) => {
           const zIds = Array.isArray(sess.zoneIds) ? sess.zoneIds.map(Number) : [];
           const zSet = new Set(zIds);
 
@@ -1627,18 +1675,21 @@
         })
       );
 
-      await firebaseReq("PUT", "/config/active_feeder", {
-        feederId: FEEDER_ID,
-        email: myEmail,
-        updatedAt: Date.now()
-      }).catch(() => {});
-
-      setBadge(
-        "#15803d",
-        `v${SCRIPT_VERSION} [Primary Leader] Live (2s) • ${activeSessions.length} Viewer${
-          activeSessions.length > 1 ? "s" : ""
-        } • ${activeRes.records.length} Act • ${allCompletedList.length} Comp`
-      );
+      if (isRelayLeader) {
+        setBadge(
+          "#15803d",
+          `v${SCRIPT_VERSION} [Primary Relay] Live (2s) • ${activeFeeders.length} Admin${
+            activeFeeders.length > 1 ? "s" : ""
+          } • ${activeSessions.length} Viewers • ${activeRes.records.length} Act`
+        );
+      } else {
+        setBadge(
+          "#0d9488",
+          `v${SCRIPT_VERSION} [Active Admin Feeder] Live (2s) • ${targetSessions.length} Tab${
+            targetSessions.length > 1 ? "s" : ""
+          } • ${activeRes.records.length} Act`
+        );
+      }
     } catch (err) {
       setBadge("#b91c1c", `v${SCRIPT_VERSION} • Retry (${err?.message || "Sync"})`);
     } finally {
@@ -1653,7 +1704,7 @@
   // Dedicated 120ms Fast-Lane for On-Demand Order Details, Notes, Courier Profiles & Searches
   let isFastOnDemandRunning = false;
   setInterval(async () => {
-    if (isFastOnDemandRunning || !ownsLocalTabLock || !isCurrentLeader) return;
+    if (isFastOnDemandRunning || !ownsLocalTabLock || !readStoredAuthBridge()?.idToken) return;
     isFastOnDemandRunning = true;
     try {
       await processOnDemandRequests();
