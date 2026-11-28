@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v9.9 -->
+<!-- Hurrier Live Operations Dashboard v10.0 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v9.9</title>
+  <title>Hurrier Live Operations Dashboard v10.0</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -2247,7 +2247,7 @@
           const itemZones = Array.isArray(item.zonesList)
             ? item.zonesList.map((z) => normalizeText(z).toLowerCase()).filter(Boolean)
             : [normalizeText(item.zone).toLowerCase()].filter(Boolean);
-          if (itemZones.length === 0 || (itemZones.length === 1 && itemZones[0] === "-")) return false;
+          if (itemZones.length === 0 || (itemZones.length === 1 && itemZones[0] === "-")) return true;
 
           return itemZones.some((iz) => {
             if (hasManialSelected && iz.includes("manial")) return true;
