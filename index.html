@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v10.11 -->
+<!-- Hurrier Live Operations Dashboard v10.12 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v10.11</title>
+  <title>Hurrier Live Operations Dashboard v10.12</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,14 +38,14 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v10.11...
+      Loading Hurrier Live Operations Dashboard v10.12...
     </div>
   </div>
 
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
-    const APP_VERSION = "10.11";
+    const APP_VERSION = "10.12";
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
     const FIREBASE_PROJECT_ID = "hurrier-live";
     const FIREBASE_AUTH_DOMAIN = "hurrier-live.firebaseapp.com";
@@ -796,7 +796,8 @@
         order.scheduled_dropoff_at || order.scheduled_drop_off_at || order.scheduled_pickup_at || "";
       const parsedDeadlineMs = deadlineIso ? new Date(deadlineIso).getTime() : NaN;
       const deadlineMs = Number.isNaN(parsedDeadlineMs) ? Number.MAX_SAFE_INTEGER : parsedDeadlineMs;
-      const deadline = formatRelativeDeadline(deadlineIso, isPreorder);
+      // v10.12: Always compute relative delay/countdown in minutes even for Preorders so delayed preorders show in red & count in Delayed
+      const deadline = formatRelativeDeadline(deadlineIso, false);
 
       const rawStatus = String(rec?.status || order.status || tabName || "").toLowerCase();
       const courierName =
@@ -836,7 +837,8 @@
       const dropAddr = order.dropoff_address || order.drop_off_address || {};
 
       return {
-        uid: `${tabName}-${rec?.id || code}-${idx}`,
+        uid: `${tabName}-${rec?.id || code}-${rec?.courier_id || idx}`,
+        orderId: String(order.id || "").trim(),
         id: code || "-",
         orderCode: order.order_code || (code ? `HF_EG${code}` : ""),
         vo: String(order.vendor_order_number || "-"),
@@ -856,6 +858,7 @@
         orderValue: formatPiastersMoney(order.order_value ?? order.total),
         instructions,
         isSplit,
+        isPreorder,
         placedMs: Number.isNaN(placedMs) ? 0 : placedMs,
         raw: rec
       };
@@ -2375,14 +2378,37 @@
         [selectedZoneIds, selectedZoneNames]
       );
 
+      // v10.12: Collect parent order keys of all deliveries matching selected zones so split/multi-rider
+      // sibling rows (each with its own courier) are always retained together on the dashboard
+      const zoneMatchedParentOrderKeys = useMemo(() => {
+        const keys = new Set();
+        deliveries.forEach((d) => {
+          if (matchesZoneFilter(d)) {
+            if (d.orderId) keys.add(`oid:${d.orderId}`);
+            if (d.id && d.id !== "-") keys.add(`code:${d.id}`);
+          }
+        });
+        return keys;
+      }, [deliveries, matchesZoneFilter]);
+
+      const matchesZoneFilterWithSiblings = useCallback(
+        (item) => {
+          if (matchesZoneFilter(item)) return true;
+          if (item.orderId && zoneMatchedParentOrderKeys.has(`oid:${item.orderId}`)) return true;
+          if (item.id && item.id !== "-" && zoneMatchedParentOrderKeys.has(`code:${item.id}`)) return true;
+          return false;
+        },
+        [matchesZoneFilter, zoneMatchedParentOrderKeys]
+      );
+
       // Base deliveries for active tab
       const baseTabDeliveries = useMemo(() => {
         return deliveries.filter((d) => {
           if (d.tabName !== activeTab) return false;
           if (selectedCity !== "All Cities" && d.city !== selectedCity) return false;
-          return matchesZoneFilter(d);
+          return matchesZoneFilterWithSiblings(d);
         });
-      }, [deliveries, activeTab, selectedCity, matchesZoneFilter]);
+      }, [deliveries, activeTab, selectedCity, matchesZoneFilterWithSiblings]);
 
       // Status counts for current tab (for Status Filter Pills Bar)
       const tabStatusSummary = useMemo(() => {
@@ -2506,7 +2532,7 @@
         };
         deliveries.forEach((d) => {
           if (selectedCity !== "All Cities" && d.city !== selectedCity) return;
-          if (!matchesZoneFilter(d)) return;
+          if (!matchesZoneFilterWithSiblings(d)) return;
           if (counts[d.tabName] !== undefined) {
             counts[d.tabName] += 1;
           }
@@ -2517,7 +2543,7 @@
           if (tabCounts.Active !== undefined) counts.Active = tabCounts.Active;
         }
         return counts;
-      }, [deliveries, selectedCity, matchesZoneFilter, tabCounts]);
+      }, [deliveries, selectedCity, matchesZoneFilterWithSiblings, tabCounts]);
 
       useEffect(() => {
         if (completedSearchQuery.trim()) {
@@ -2790,7 +2816,7 @@
         const dispCnt = effectiveTabCounts["Dispatched"] || 0;
         const activeCnt = effectiveTabCounts["Active"] || 0;
         const delayedCnt = deliveries.filter(
-          (d) => matchesZoneFilter(d) && (d.deadline.includes("-") || d.deadline === "Late")
+          (d) => matchesZoneFilterWithSiblings(d) && (d.deadline.includes("-") || d.deadline === "Late")
         ).length;
 
         const matchingZonesStats = zoneStatsSnapshot.filter((zs) => {
@@ -4144,6 +4170,11 @@
                               {inst}
                             </span>
                           ))}
+                          {item.isPreorder && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-50 text-sky-700 border border-sky-200">
+                              🕒 Preorder
+                            </span>
+                          )}
                           {item.isSplit && (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200">
                               Split
@@ -4390,6 +4421,11 @@
                                   {inst}
                                 </span>
                               ))}
+                              {item.isPreorder && (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+                                  🕒 Preorder
+                                </span>
+                              )}
                               {item.isSplit && (
                                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
                                   Split
@@ -5566,7 +5602,7 @@
 
                           const riderActiveOrdersCount = deliveries.filter(
                             (d) =>
-                              matchesZoneFilter(d) &&
+                              matchesZoneFilterWithSiblings(d) &&
                               (String(d.courierId || "") === String(rider.courierId) ||
                                 normalizeText(d.courier).toLowerCase() === normalizeText(rider.name).toLowerCase())
                           ).length;
