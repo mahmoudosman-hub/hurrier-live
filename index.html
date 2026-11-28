@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v10.20 -->
+<!-- Hurrier Live Operations Dashboard v10.21 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v10.20</title>
+  <title>Hurrier Live Operations Dashboard v10.21</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,14 +38,14 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v10.20...
+      Loading Hurrier Live Operations Dashboard v10.21...
     </div>
   </div>
 
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
-    const APP_VERSION = "10.20";
+    const APP_VERSION = "10.21";
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
     const FIREBASE_PROJECT_ID = "hurrier-live";
     const FIREBASE_AUTH_DOMAIN = "hurrier-live.firebaseapp.com";
@@ -867,8 +867,24 @@
     }
 
     function buildFullOrderView(orderItem, cachedEntry) {
-      const dOrder =
-        cachedEntry?.detail?.order || cachedEntry?.detail || orderItem?.raw?.order || {};
+      const rawOrderFallback = orderItem?.raw?.order || {};
+      const detailOrderObj =
+        cachedEntry?.detail?.order ||
+        (cachedEntry?.detail && !cachedEntry.detail.order ? cachedEntry.detail : {}) ||
+        {};
+      const dOrder = {
+        ...rawOrderFallback,
+        ...detailOrderObj,
+        customer: {
+          ...(rawOrderFallback.customer || {}),
+          ...(detailOrderObj.customer || {})
+        },
+        vendor: {
+          ...(rawOrderFallback.vendor || {}),
+          ...(detailOrderObj.vendor || {})
+        }
+      };
+
       const rawDeliveries = Array.isArray(cachedEntry?.deliveries?.deliveries)
         ? cachedEntry.deliveries.deliveries
         : Array.isArray(cachedEntry?.deliveries)
@@ -881,9 +897,14 @@
         ? cachedEntry.detail.deliveries
         : [];
 
+      const firstRawDel = rawDeliveries[0] || {};
       const id = String(orderItem?.id || dOrder.code || "-");
       const orderCode = String(
         dOrder.order_code || orderItem?.orderCode || (id !== "-" ? `HF_EG${id}` : "")
+      );
+      const globalEntityMatch = /^([A-Z]{2,4}_[A-Z]{2})/i.exec(orderCode);
+      const globalEntityId = String(
+        dOrder.global_entity_id || (globalEntityMatch ? globalEntityMatch[1].toUpperCase() : "HF_EG")
       );
 
       const tags = Array.isArray(dOrder.tags)
@@ -907,14 +928,35 @@
       }
 
       const status = humanizeSnakeCase(dOrder.status || orderItem?.status || "Active");
-      const statusSinceStr = formatSinceTimestamp(dOrder.current_state_transition);
-      const platformName = dOrder.platform === "TB_OT" ? "talabat" : dOrder.platform || "talabat";
+      const statusSinceStr = formatSinceTimestamp(
+        dOrder.current_state_transition || dOrder.updated_at || orderItem?.raw?.order?.current_state_transition
+      );
+      const platformRaw = String(dOrder.platform || "talabat").trim();
+      const platformName =
+        platformRaw === "TB_OT" || platformRaw.toLowerCase() === "talabat" ? "talabat" : platformRaw;
       const vendorObj = dOrder.vendor || {};
       const vendorName = normalizeText(
-        vendorObj.vendor_name || dOrder.vendor_name || dOrder.restaurant_name || orderItem?.vendor || "-"
+        vendorObj.vendor_name ||
+          vendorObj.name ||
+          dOrder.vendor_name ||
+          dOrder.restaurant_name ||
+          orderItem?.vendor ||
+          "-"
       );
-      const vendorCode = String(vendorObj.vendor_code || dOrder.vendor_code || orderItem?.vendorCode || "-");
-      const vendorOrderNo = String(vendorObj.vendor_order_number || dOrder.vendor_order_number || orderItem?.vo || "-");
+      const vendorCode = String(
+        vendorObj.vendor_code ||
+          vendorObj.code ||
+          dOrder.vendor_code ||
+          orderItem?.vendorCode ||
+          "-"
+      );
+      const vendorOrderNo = String(
+        vendorObj.vendor_order_number ||
+          vendorObj.order_number ||
+          dOrder.vendor_order_number ||
+          orderItem?.vo ||
+          "-"
+      );
       const orderValue = formatPiastersMoney(
         dOrder.order_value ?? dOrder.total ?? dOrder.subtotal ?? orderItem?.raw?.order?.order_value ?? orderItem?.raw?.order?.total
       ) !== "-"
@@ -924,32 +966,81 @@
       const pickupObj = dOrder.pickup_address || orderItem?.raw?.order?.pickup_address || {};
       const pickupAddress =
         normalizeText(
-          [pickupObj.street_address, pickupObj.district, pickupObj.city_name]
+          [pickupObj.street_address, pickupObj.district, pickupObj.city_name || pickupObj.city]
             .filter(Boolean)
             .join(" • ")
         ) || "-";
 
-      const custObj = dOrder.customer || {};
-      const customerName = normalizeText(
-        custObj.customer_name || dOrder.customer_name || orderItem?.raw?.order?.customer_name || "Customer"
-      );
-      const customerPhone = normalizeText(
-        custObj.customer_phone_number || dOrder.customer_phone_number || ""
-      );
-
       const dropObj =
         dOrder.drop_off_address ||
         dOrder.dropoff_address ||
+        firstRawDel.drop_off_address ||
+        firstRawDel.dropoff_address ||
         orderItem?.raw?.order?.drop_off_address ||
         orderItem?.raw?.order?.dropoff_address ||
         {};
+
+      const custObj = dOrder.customer || {};
+      const delCustObj = firstRawDel.customer || orderItem?.raw?.customer || {};
+      const fullFirstLast = normalizeText(
+        [custObj.first_name || delCustObj.first_name, custObj.last_name || delCustObj.last_name]
+          .filter(Boolean)
+          .join(" ")
+      );
+      const rawCustomerName = normalizeText(
+        custObj.customer_name ||
+          custObj.name ||
+          custObj.full_name ||
+          fullFirstLast ||
+          dOrder.customer_name ||
+          dOrder.client_name ||
+          dOrder.recipient_name ||
+          dropObj.customer_name ||
+          dropObj.recipient_name ||
+          dropObj.contact_name ||
+          delCustObj.customer_name ||
+          delCustObj.name ||
+          firstRawDel.customer_name ||
+          orderItem?.raw?.customer_name ||
+          ""
+      );
+      const customerName = rawCustomerName || "Customer";
+
+      const customerPhone = normalizeText(
+        custObj.customer_phone_number ||
+          custObj.phone_number ||
+          custObj.phone ||
+          custObj.mobile ||
+          custObj.mobile_number ||
+          custObj.contact_phone ||
+          dOrder.customer_phone_number ||
+          dOrder.customer_phone ||
+          dOrder.phone_number ||
+          dOrder.phone ||
+          dOrder.mobile ||
+          dropObj.phone_number ||
+          dropObj.phone ||
+          dropObj.mobile ||
+          dropObj.contact_phone ||
+          delCustObj.phone_number ||
+          delCustObj.phone ||
+          firstRawDel.customer_phone_number ||
+          firstRawDel.customer_phone ||
+          orderItem?.raw?.customer_phone_number ||
+          ""
+      );
+
       const dropoffParts = [
         dropObj.street_address,
         dropObj.district,
-        dropObj.building ? `عقار ${dropObj.building}` : "",
+        dropObj.building || dropObj.building_number
+          ? `عقار ${dropObj.building || dropObj.building_number}`
+          : "",
         dropObj.floor ? `دور ${dropObj.floor}` : "",
-        dropObj.apartment_number ? `شقة ${dropObj.apartment_number}` : "",
-        dropObj.special_instructions
+        dropObj.apartment_number || dropObj.flat_number
+          ? `شقة ${dropObj.apartment_number || dropObj.flat_number}`
+          : "",
+        dropObj.special_instructions || dropObj.instructions || dropObj.notes
       ].filter(Boolean);
       const dropoffAddress = normalizeText(dropoffParts.join(" — ")) || "-";
 
@@ -1053,6 +1144,12 @@
 
       const rawItems = Array.isArray(dOrder?.detail?.order_items)
         ? dOrder.detail.order_items
+        : Array.isArray(dOrder?.order_items)
+        ? dOrder.order_items
+        : Array.isArray(dOrder?.items)
+        ? dOrder.items
+        : Array.isArray(cachedEntry?.detail?.order_items)
+        ? cachedEntry.detail.order_items
         : [];
       const items = rawItems.map((it, idx) => {
         const subList = Array.isArray(it.sub_items)
@@ -1062,15 +1159,15 @@
           : [];
         return {
           id: String(it.id || idx),
-          name: normalizeText(it.item || it.name || `Item #${idx + 1}`),
+          name: normalizeText(it.item || it.name || it.title || `Item #${idx + 1}`),
           subItems: subList,
-          quantity: Number(it.quantity ?? 1),
+          quantity: Number(it.quantity ?? it.qty ?? 1),
           rawVolume: Number(it.volume ?? 0) || 0,
           rawWeight: Number(it.weight ?? 0) || 0,
-          rawPrice: Number(it.price ?? 0) || 0,
+          rawPrice: Number(it.price ?? it.unit_price ?? it.total_price ?? 0) || 0,
           volumeFormatted: formatMetricNumber(it.volume),
           weightFormatted: formatMetricNumber(it.weight),
-          priceFormatted: formatHurrierDollarPrice(it.price)
+          priceFormatted: formatHurrierDollarPrice(it.price ?? it.unit_price ?? it.total_price ?? 0)
         };
       });
 
@@ -1101,6 +1198,67 @@
       };
 
       const timingObj = dOrder.timing || {};
+      const primaryTimings = orderItem?.raw?.primary_delivery_timings || dOrder.timings || {};
+
+      // Manhattan distance (e.g. "2.67 KM")
+      const rawDistMeters = Number(
+        dOrder.manhattan_distance ??
+          dOrder.distance ??
+          orderItem?.raw?.distance ??
+          orderItem?.raw?.primary_delivery?.delivery_distance ??
+          0
+      );
+      const manhattanDistance =
+        rawDistMeters > 0
+          ? `${(rawDistMeters / 1000).toFixed(2)} KM`
+          : orderItem?.distance && orderItem.distance !== "-"
+          ? String(orderItem.distance).toUpperCase()
+          : "-";
+
+      // Prep duration (TES)
+      let prepDuration = "-";
+      const explicitPrepSec =
+        dOrder.prep_duration ?? timingObj.prep_duration ?? dOrder.estimated_prep_time;
+      if (explicitPrepSec !== undefined && explicitPrepSec !== null && explicitPrepSec !== "") {
+        prepDuration = formatDurationSecondsToMin(explicitPrepSec);
+      } else {
+        const sentIso = dOrder.send_to_restaurant_at || dOrder.sent_to_vendor_at || dOrder.accepted_by_vendor_at;
+        const readyOrSchedIso =
+          dOrder.food_is_ready_at || timingObj.original_scheduled_pickup_at || dOrder.scheduled_pickup_at;
+        if (sentIso && readyOrSchedIso) {
+          const diffSec = Math.round((new Date(readyOrSchedIso).getTime() - new Date(sentIso).getTime()) / 1000);
+          if (!Number.isNaN(diffSec) && diffSec >= 0) {
+            prepDuration = `${Math.round(diffSec / 60)}m`;
+          }
+        }
+      }
+
+      // Courier delay
+      let courierDelay = "-";
+      const explicitCourierDelaySec =
+        primaryTimings.courier_late ?? dOrder.courier_delay ?? timingObj.courier_delay;
+      if (
+        explicitCourierDelaySec !== undefined &&
+        explicitCourierDelaySec !== null &&
+        explicitCourierDelaySec !== ""
+      ) {
+        courierDelay = formatDurationSecondsToMin(explicitCourierDelaySec);
+      } else {
+        const schedPickupIso = timingObj.original_scheduled_pickup_at || dOrder.scheduled_pickup_at;
+        const primaryDelObj = sortedDeliveries[0] || {};
+        const arrivedTrans = (Array.isArray(primaryDelObj.transitions) ? primaryDelObj.transitions : []).find(
+          (tr) => String(tr.to_state || "").toLowerCase() === "near_pickup"
+        );
+        if (schedPickupIso && arrivedTrans?.created_at) {
+          const diffSec = Math.round(
+            (new Date(arrivedTrans.created_at).getTime() - new Date(schedPickupIso).getTime()) / 1000
+          );
+          if (!Number.isNaN(diffSec)) {
+            courierDelay = `${Math.round(diffSec / 60)}m`;
+          }
+        }
+      }
+
       const timeChecks = [
         { label: "Placed At", value: formatExactTimeSeconds(dOrder.placed_at) },
         {
@@ -1162,6 +1320,7 @@
       return {
         id,
         orderCode,
+        globalEntityId,
         orderBadges,
         isLoadedFromApi: Boolean(
           cachedEntry &&
@@ -1181,6 +1340,18 @@
         vendorOrderNo,
         orderValue,
         distance: orderItem?.distance || "-",
+        manhattanDistance,
+        prepDuration,
+        courierDelay,
+        city: orderItem?.city || normalizeHurrierCity(dropObj.city || dropObj.city_name || "", []),
+        zones: orderItem?.zone || "-",
+        paymentMethod:
+          dOrder.is_cash_collection || orderItem?.instructions?.includes("Cash")
+            ? "Cash on Delivery"
+            : dOrder.is_card_on_delivery || orderItem?.instructions?.includes("Card")
+            ? "Card on Delivery"
+            : "Online Paid",
+        tagsList: tags,
         vendorName,
         pickupAddress,
         customerName,
@@ -1477,6 +1648,7 @@
 
       const [selectedOrder, setSelectedOrder] = useState(null);
       const [detailModalTab, setDetailModalTab] = useState("Deliveries");
+      const [isMoreDetailsOpen, setIsMoreDetailsOpen] = useState(false);
       const [orderDetailsCache, setOrderDetailsCache] = useState({});
       const [selectedCourier, setSelectedCourier] = useState(null);
       const [courierDetailsCache, setCourierDetailsCache] = useState({});
@@ -2210,6 +2382,7 @@
         if (!selectedOrder) return;
         let cancelled = false;
         setDetailModalTab("Deliveries");
+        setIsMoreDetailsOpen(false);
         requestOrderDetailsFromBridge(selectedOrder, {
           keepPollingWhileOpen: true,
           isCancelled: () => cancelled
@@ -6128,9 +6301,24 @@
                         <div className="p-4 rounded-xl border border-gray-200 bg-gray-50/40 space-y-1.5">
                           <div className="text-xs font-bold text-gray-500 uppercase">Customer Address</div>
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="text-sm font-bold text-gray-900">
-                              {selectedOrderFullView.customerName}
-                            </span>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="text-sm font-bold text-gray-900">
+                                {selectedOrderFullView.customerName}
+                              </span>
+                              {selectedOrderFullView.customerName &&
+                                selectedOrderFullView.customerName !== "Customer" && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      copyToClipboard("custName", selectedOrderFullView.customerName)
+                                    }
+                                    className="text-xs px-1.5 py-0.5 rounded border border-gray-200 text-gray-500 hover:text-gray-800 hover:bg-gray-100"
+                                    title="نسخ اسم العميل"
+                                  >
+                                    {copiedText === "custName" ? "✓" : "⧉"}
+                                  </button>
+                                )}
+                            </div>
                             {selectedOrderFullView.customerPhone && (
                               <div className="flex items-center gap-1.5">
                                 <a
@@ -6143,6 +6331,7 @@
                                   type="button"
                                   onClick={() => copyToClipboard("custPhone", selectedOrderFullView.customerPhone)}
                                   className="text-xs px-1.5 py-0.5 rounded border border-gray-200 text-gray-600 hover:bg-gray-100"
+                                  title="نسخ رقم العميل"
                                 >
                                   {copiedText === "custPhone" ? "✓" : "⧉"}
                                 </button>
@@ -6375,6 +6564,132 @@
                   </div>
 
                   <div className="lg:col-span-4 space-y-4">
+                    {/* Important Details Card (Matching Hurrier Native Layout) */}
+                    <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5 shadow-sm">
+                      <h3 className="text-base font-bold text-gray-900 pb-2">Important Details</h3>
+                      <div className="divide-y divide-gray-200 text-xs">
+                        <div className="py-3 flex items-start justify-between gap-2">
+                          <span className="text-gray-800 font-medium">Status</span>
+                          <div className="text-right">
+                            <div className="font-semibold text-gray-700">{selectedOrderFullView.status}</div>
+                            {selectedOrderFullView.statusSinceStr && (
+                              <div className="text-[11px] text-gray-500 mt-0.5">
+                                ({selectedOrderFullView.statusSinceStr})
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="py-3 flex items-center justify-between gap-2">
+                          <span className="text-gray-800 font-medium">Platform</span>
+                          <span className="font-extrabold text-sm tracking-tight text-[#ff5a00]">
+                            {selectedOrderFullView.platformName}
+                          </span>
+                        </div>
+
+                        <div className="py-3 flex items-center justify-between gap-2">
+                          <span className="text-gray-800 font-medium">Global Entity ID</span>
+                          <span className="font-mono font-semibold text-gray-600">
+                            {selectedOrderFullView.globalEntityId}
+                          </span>
+                        </div>
+
+                        <div className="py-3 flex items-center justify-between gap-2">
+                          <span className="text-gray-800 font-medium">Vendor code</span>
+                          <span className="font-mono font-semibold text-gray-600">
+                            {selectedOrderFullView.vendorCode}
+                          </span>
+                        </div>
+
+                        <div className="py-3 flex items-center justify-between gap-2">
+                          <span className="text-gray-800 font-medium">Vendor Order no.</span>
+                          <span className="font-mono font-semibold text-gray-600">
+                            {selectedOrderFullView.vendorOrderNo}
+                          </span>
+                        </div>
+
+                        <div className="py-3 flex items-center justify-between gap-2">
+                          <span className="text-gray-800 font-medium">Order Value</span>
+                          <span className="font-mono font-semibold text-gray-600">
+                            {selectedOrderFullView.itemsSummary.totalFormatted !== "$0.00"
+                              ? selectedOrderFullView.itemsSummary.totalFormatted
+                              : selectedOrderFullView.orderValue}
+                          </span>
+                        </div>
+
+                        <div className="py-3 flex items-center justify-between gap-2">
+                          <span className="text-gray-800 font-medium">Manhattan distance</span>
+                          <span className="font-mono font-semibold text-gray-600">
+                            {selectedOrderFullView.manhattanDistance}
+                          </span>
+                        </div>
+
+                        <div className="py-3 flex items-center justify-between gap-2">
+                          <span className="text-gray-800 font-medium">Prep duration (TES)</span>
+                          <span className="font-mono font-semibold text-gray-600">
+                            {selectedOrderFullView.prepDuration}
+                          </span>
+                        </div>
+
+                        <div className="py-3 flex items-center justify-between gap-2">
+                          <span className="text-gray-800 font-medium">Courier delay</span>
+                          <span className="font-mono font-semibold text-gray-600">
+                            {selectedOrderFullView.courierDelay}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-gray-200 mt-1">
+                        <button
+                          type="button"
+                          onClick={() => setIsMoreDetailsOpen((prev) => !prev)}
+                          className="w-full py-2 flex items-center justify-between text-sm font-bold text-gray-900 hover:text-blue-600 transition-colors"
+                        >
+                          <span>More Details</span>
+                          <span className="text-xs text-gray-500">
+                            {isMoreDetailsOpen ? "▲" : "▼"}
+                          </span>
+                        </button>
+
+                        {isMoreDetailsOpen && (
+                          <div className="pt-2 divide-y divide-gray-100 text-xs border-t border-gray-100">
+                            <div className="py-2 flex items-center justify-between gap-2">
+                              <span className="text-gray-500">Order Code</span>
+                              <span className="font-mono font-semibold text-gray-800">
+                                {selectedOrderFullView.orderCode}
+                              </span>
+                            </div>
+                            <div className="py-2 flex items-center justify-between gap-2">
+                              <span className="text-gray-500">City</span>
+                              <span className="font-semibold text-gray-800">
+                                {selectedOrderFullView.city}
+                              </span>
+                            </div>
+                            <div className="py-2 flex items-start justify-between gap-2">
+                              <span className="text-gray-500">Zones</span>
+                              <span className="font-semibold text-gray-800 text-right max-w-[65%]">
+                                {selectedOrderFullView.zones}
+                              </span>
+                            </div>
+                            <div className="py-2 flex items-center justify-between gap-2">
+                              <span className="text-gray-500">Payment</span>
+                              <span className="font-semibold text-gray-800">
+                                {selectedOrderFullView.paymentMethod}
+                              </span>
+                            </div>
+                            <div className="py-2 flex items-start justify-between gap-2">
+                              <span className="text-gray-500">Tags</span>
+                              <span className="font-mono text-[11px] text-gray-700 text-right max-w-[65%] break-words">
+                                {selectedOrderFullView.tagsList.length > 0
+                                  ? selectedOrderFullView.tagsList.join(", ")
+                                  : "-"}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
                     <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5 shadow-sm space-y-3">
                       <div className="flex items-center justify-between">
                         <h3 className="text-sm font-bold text-gray-900">🕒 Time Checks</h3>
