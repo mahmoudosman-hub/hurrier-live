@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.20
-// @description  [v10.20] Auto-Discover Hurrier BFF Order/Deliveries/Notes Endpoints + Passive Native Request Sniffer + Priority Yield on Completed Sweep
+// @version      10.21
+// @description  [v10.21] Direct /dispatcher-dashboard/orders/detail & detail/deliveries Endpoints for Customer, Order Items & Important Details
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.20";
+  const SCRIPT_VERSION = "10.21";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -1403,11 +1403,19 @@
             if (!checkedTransitionCodes.has(code)) checkedTransitionCodes.set(code, Date.now());
             const internalOid = String(prevRec?.order?.id || prevRec?.id || code).trim();
             try {
-              const hit = await fetchFirstValidOrderEndpoint(
-                () => `/${encodeURIComponent(internalOid)}`,
-                (r) => Boolean(r && (r.order || r.id || r.code || r.status))
-              );
-              const det = hit?.data || null;
+              let det = null;
+              try {
+                det = await hurrierGet(
+                  `/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(code)}`
+                );
+              } catch {}
+              if (!det || !(det.order || det.id || det.code || det.status)) {
+                const hit = await fetchFirstValidOrderEndpoint(
+                  () => `/${encodeURIComponent(internalOid)}`,
+                  (r) => Boolean(r && (r.order || r.id || r.code || r.status))
+                );
+                det = hit?.data || null;
+              }
               const dOrder = det?.order || det || {};
               const st = String(dOrder.status || "").toLowerCase();
               if (st === "completed" || st === "delivered") {
@@ -1681,6 +1689,19 @@
                 : [];
 
             const fetchOrderDetailAnyId = async () => {
+              const codesToTry = [];
+              if (code) codesToTry.push(code);
+              if (orderCode && !codesToTry.includes(orderCode)) codesToTry.push(orderCode);
+              for (const cVal of codesToTry) {
+                try {
+                  const res = await hurrierGetWithRetry(
+                    `/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(cVal)}`,
+                    1,
+                    180
+                  );
+                  if (isValidOrderObj(res)) return res;
+                } catch {}
+              }
               for (const probeId of idsToProbe) {
                 const hit = await fetchFirstValidOrderEndpoint(
                   () => `/${encodeURIComponent(probeId)}`,
@@ -1692,6 +1713,19 @@
             };
 
             const fetchOrderDeliveriesAnyId = async () => {
+              const codesToTry = [];
+              if (orderCode) codesToTry.push(orderCode);
+              if (code && !codesToTry.includes(code)) codesToTry.push(code);
+              for (const cVal of codesToTry) {
+                try {
+                  const res = await hurrierGetWithRetry(
+                    `/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(cVal)}`,
+                    1,
+                    180
+                  );
+                  if (extractDeliveriesList(res).length > 0) return res;
+                } catch {}
+              }
               for (const probeId of idsToProbe) {
                 const hit = await fetchFirstValidOrderEndpoint(
                   () => `/${encodeURIComponent(probeId)}/deliveries`,
@@ -1956,11 +1990,19 @@
             const internalOid = resolveInternalOrderId(code, "", "");
             const lookupId = internalOid || code;
             try {
-              const hit = await fetchFirstValidOrderEndpoint(
-                () => `/${encodeURIComponent(lookupId)}`,
-                (r) => Boolean(r && (r.order || r.id || r.code || r.confirmation_number || r.status))
-              );
-              const det = hit?.data || null;
+              let det = null;
+              try {
+                det = await hurrierGet(
+                  `/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(code)}`
+                );
+              } catch {}
+              if (!det || !(det.order || det.id || det.code || det.confirmation_number || det.status)) {
+                const hit = await fetchFirstValidOrderEndpoint(
+                  () => `/${encodeURIComponent(lookupId)}`,
+                  (r) => Boolean(r && (r.order || r.id || r.code || r.confirmation_number || r.status))
+                );
+                det = hit?.data || null;
+              }
               const dOrder = det?.order || det || {};
               if (dOrder && (dOrder.id || dOrder.code)) {
                 found = true;
