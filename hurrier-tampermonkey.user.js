@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.28
-// @description  [v10.28] Distributed Multi-Admin Active Feeders + 20s Stale Data Auto-Failover
+// @version      10.29
+// @description  [v10.29] Unified Version Sync + Zone Delay Minutes + 20s Stale Data Auto-Failover
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://*.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.28";
+  const SCRIPT_VERSION = "10.29";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -675,17 +675,21 @@
         const cName = cityObj.city_name || "Cairo";
         const zones = Array.isArray(cityObj?.zones) ? cityObj.zones : [];
         for (const zObj of zones) {
+          const parentZoneDelay = Math.round(Number(zObj?.stat?.delay || 0) * 10) / 10;
           const sps = Array.isArray(zObj?.starting_points) ? zObj.starting_points : [];
           for (const sp of sps) {
             const spId = Number(sp.id);
             if (!spId) continue;
             dynamicZones.push({ id: spId, name: sp.name, city: cName });
             const st = sp.stat || {};
+            const spDelay = Math.round(Number(st.delay || 0) * 10) / 10;
             zoneStats.push({
               id: spId,
               name: sp.name,
               city: cName,
-              delay: Math.round(Number(st.delay || 0) * 10) / 10,
+              zone_name: zObj.zone_name || "",
+              delay: spDelay > 0 ? spDelay : parentZoneDelay,
+              zone_delay: parentZoneDelay,
               stat: st
             });
           }
@@ -1281,39 +1285,26 @@
       if (cReq && cReq.courierId && Number(cReq.requestedAt || 0) > lastCourierReqTimestamp) {
         lastCourierReqTimestamp = Number(cReq.requestedAt);
         const cid = String(cReq.courierId).trim();
+        const cachedC = latestCachedCouriersById.get(cid);
         let detailData = null;
         let balanceVal = null;
 
-        const detailCandidates = [
-          `/dispatcher-dashboard/couriers/${encodeURIComponent(cid)}`,
-          `/couriers/${encodeURIComponent(cid)}`,
-          `/dispatcher-dashboard/couriers/detail?courier_id=${encodeURIComponent(cid)}`
-        ];
-        for (const p of detailCandidates) {
-          try {
-            const res = await hurrierGet(p);
-            if (res && (res.id || res.courier?.id || res.user_id || res.courier?.user_id)) {
-              detailData = res;
-              break;
-            }
-          } catch {}
+        if (!cachedC) {
+          const detailCandidates = [
+            `/dispatcher-dashboard/couriers/${encodeURIComponent(cid)}`,
+            `/couriers/${encodeURIComponent(cid)}`
+          ];
+          for (const p of detailCandidates) {
+            try {
+              const res = await hurrierGet(p);
+              if (res && (res.id || res.courier?.id || res.user_id || res.courier?.user_id)) {
+                detailData = res;
+                break;
+              }
+            } catch {}
+          }
         }
 
-        const balanceCandidates = [
-          `/dispatcher-dashboard/couriers/${encodeURIComponent(cid)}/balance`,
-          `/couriers/${encodeURIComponent(cid)}/balance`
-        ];
-        for (const bp of balanceCandidates) {
-          try {
-            const bRes = await hurrierGet(bp);
-            if (bRes && (bRes.balance !== undefined || bRes.amount !== undefined)) {
-              balanceVal = bRes.balance ?? bRes.amount;
-              break;
-            }
-          } catch {}
-        }
-
-        const cachedC = latestCachedCouriersById.get(cid);
         const unwrapped = detailData?.courier || detailData || cachedC || {};
         const norm = normalizeCourierObject({ courier: unwrapped }, cachedC?.starting_point_id);
 
@@ -1339,6 +1330,7 @@
           requestedAt: lastCourierReqTimestamp,
           updatedAt: Date.now()
         });
+        firebaseReq("DELETE", "/config/courier_detail_req").catch(() => {});
       }
     } catch {}
 
@@ -1673,6 +1665,7 @@
 
           const bundle = {
             sessionId: sess.sessionId,
+            scriptVersion: SCRIPT_VERSION,
             updatedAt: Date.now(),
             tabRecords: {
               Queued: sessQueued,
