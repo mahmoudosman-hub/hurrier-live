@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.23
-// @description  [v10.23] Complete Self-Contained Hurrier Live Sync + Ultra-Fast Order Transitions & Deliveries Loading
+// @version      10.25
+// @description  [v10.25] Complete Self-Contained Hurrier Live Sync + Multi-Page Active/Completed & Fast Transitions
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://*.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.23";
+  const SCRIPT_VERSION = "10.25";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -35,9 +35,10 @@
   const IS_HURRIER_HOST = location.hostname.includes("logisticsbackoffice.com");
 
   // ============================================================================
-  // 1) DASHBOARD -> TAMPERMONKEY AUTH TOKEN BRIDGE
+  // 1) DASHBOARD -> HURRIER AUTH BRIDGE SYNC
   // ============================================================================
   function syncAuthBridgeFromDashboardPage() {
+    if (!IS_DASHBOARD_HOST) return;
     try {
       const raw = window.localStorage.getItem(AUTH_BRIDGE_STORAGE_KEY);
       if (!raw) return;
@@ -50,17 +51,14 @@
 
   if (IS_DASHBOARD_HOST) {
     syncAuthBridgeFromDashboardPage();
-    setInterval(syncAuthBridgeFromDashboardPage, 2500);
+    setInterval(syncAuthBridgeFromDashboardPage, 4000);
     window.addEventListener("storage", (e) => {
-      if (e.key === AUTH_BRIDGE_STORAGE_KEY) {
-        syncAuthBridgeFromDashboardPage();
-      }
+      if (e.key === AUTH_BRIDGE_STORAGE_KEY) syncAuthBridgeFromDashboardPage();
     });
-  }
-
-  if (!IS_HURRIER_HOST) {
     return;
   }
+
+  if (!IS_HURRIER_HOST) return;
 
   // ============================================================================
   // 2) FLOATING STATUS & AUTO-UPDATE BADGE UI
@@ -200,9 +198,7 @@
         {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(
-            bridge.refreshToken
-          )}`
+          body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(bridge.refreshToken)}`
         }
       );
       if (!res.ok) return bridge?.idToken || "";
@@ -259,30 +255,9 @@
   // ============================================================================
   // 4) HURRIER BACKOFFICE API CLIENT (Exact 64-bit ID Preservation + JWT Auth)
   // ============================================================================
-  let capturedBearerToken = "";
-
-  try {
-    const origFetch = window.fetch;
-    window.fetch = function (...args) {
-      try {
-        const opts = args[1] || {};
-        const hdrs = opts.headers;
-        if (hdrs) {
-          const authVal =
-            typeof hdrs.get === "function"
-              ? hdrs.get("Authorization") || hdrs.get("authorization")
-              : hdrs.Authorization || hdrs.authorization;
-          if (authVal && String(authVal).startsWith("Bearer ")) {
-            capturedBearerToken = String(authVal).slice(7).trim();
-          }
-        }
-      } catch {}
-      return origFetch.apply(this, args);
-    };
-  } catch {}
+  const HURRIER_API_BASE = "https://eg.me.logisticsbackoffice.com/api";
 
   function getHurrierBearerToken() {
-    if (capturedBearerToken) return capturedBearerToken;
     const candidateKeys = [
       "dhhToken",
       "token",
@@ -294,9 +269,7 @@
     const extractJwt = (val) => {
       if (!val || typeof val !== "string") return "";
       const clean = val.replace(/^Bearer\s+/i, "").replace(/^"|"$/g, "").trim();
-      if (/^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(clean)) {
-        return clean;
-      }
+      if (/^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(clean)) return clean;
       const m = clean.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
       return m ? m[0] : "";
     };
@@ -314,76 +287,80 @@
         }
       } catch {}
     }
+    try {
+      const m = document.cookie.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/);
+      if (m) return m[0];
+    } catch {}
     return "";
   }
 
-  function parseJsonPreserveBigInts(rawText) {
-    if (!rawText) return null;
-    // Wrap 16-20 digit integer IDs in quotes so JS Number never loses precision on 64-bit Hurrier IDs
-    const safeText = rawText.replace(/:\s*(-?\d{16,20})(?=\s*[,}\]])/g, ':"$1"');
-    return JSON.parse(safeText);
+  function preserveLargeJsonIntegers(rawText) {
+    // Wrap 15+ digit numeric values in quotes so 64-bit order IDs never lose precision in JS
+    return String(rawText || "").replace(
+      /(:\s*)(\d{15,22})(?=\s*[,}\]])/g,
+      '$1"$2"'
+    );
   }
 
-  async function hurrierGet(apiPath) {
-    const cleanPath = apiPath.startsWith("/") ? apiPath : `/${apiPath}`;
-    const url = `https://eg.me.logisticsbackoffice.com/api${cleanPath}`;
-    const bearer = getHurrierBearerToken();
-    const headers = {
-      Accept: "application/json, text/plain, */*"
-    };
-    if (bearer) {
-      headers.Authorization = `Bearer ${bearer}`;
+  async function hurrierGet(path) {
+    const url = path.startsWith("http")
+      ? path
+      : `${HURRIER_API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+    const jwt = getHurrierBearerToken();
+    const headers = { Accept: "application/json" };
+    if (jwt) {
+      headers.Authorization = `Bearer ${jwt}`;
     }
     const res = await fetch(url, {
       method: "GET",
-      headers,
-      credentials: "include"
+      credentials: "include",
+      headers
     });
     if (!res.ok) {
-      const err = new Error(`HTTP_${res.status}`);
-      err.status = res.status;
-      throw err;
+      throw new Error(`HURRIER_${res.status}`);
     }
-    const txt = await res.text();
-    return parseJsonPreserveBigInts(txt);
+    const rawText = await res.text();
+    if (!rawText) return {};
+    return JSON.parse(preserveLargeJsonIntegers(rawText));
   }
 
-  async function hurrierGetWithRetry(apiPath, retries = 2, delayMs = 120) {
+  async function hurrierGetWithRetry(path, retries = 2, delayMs = 150) {
     let lastErr = null;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        return await hurrierGet(apiPath);
+        return await hurrierGet(path);
       } catch (err) {
         lastErr = err;
-        if (err && (err.status === 404 || err.status === 401 || err.status === 403)) {
+        const msg = String(err?.message || "");
+        if (msg === "HURRIER_404" || msg === "HURRIER_401" || msg === "HURRIER_403") {
           throw err;
         }
         if (attempt < retries) {
-          await new Promise((r) => setTimeout(r, delayMs));
+          await new Promise((r) => setTimeout(r, delayMs * (attempt + 1)));
         }
       }
     }
     throw lastErr;
   }
 
-  let discoveredOrderApiPrefix = "/dispatcher-dashboard/orders";
-
+  let discoveredOrderEndpointPrefix = "";
   async function fetchFirstValidOrderEndpoint(buildSuffixFn, validatorFn) {
     const prefixes = Array.from(
-      new Set([
-        discoveredOrderApiPrefix,
-        "/dispatcher-dashboard/orders",
-        "/hurrier/orders",
-        "/hurrier/v1/orders",
-        "/orders"
-      ])
+      new Set(
+        [
+          discoveredOrderEndpointPrefix,
+          "/dispatcher-dashboard/orders",
+          "/hurrier/orders",
+          "/hurrier/v1/orders",
+          "/orders"
+        ].filter(Boolean)
+      )
     );
     for (const prefix of prefixes) {
       try {
-        const suffix = buildSuffixFn(prefix);
-        const data = await hurrierGet(`${prefix}${suffix}`);
-        if (!validatorFn || validatorFn(data)) {
-          discoveredOrderApiPrefix = prefix;
+        const data = await hurrierGet(`${prefix}${buildSuffixFn()}`);
+        if (validatorFn(data)) {
+          discoveredOrderEndpointPrefix = prefix;
           return { prefix, data };
         }
       } catch {}
@@ -392,9 +369,10 @@
   }
 
   // ============================================================================
-  // 5) PRIORITY URGENT YIELD & ZONE HELPERS
+  // 5) SHARED HELPERS, PRIORITY YIELDING & CAIRO DATE/TIME UTILITIES
   // ============================================================================
   let priorityUrgentUntil = 0;
+  let isCompletedSweepRunning = false;
 
   function isPriorityUrgentActive() {
     return Date.now() < priorityUrgentUntil;
@@ -417,16 +395,71 @@
   }
 
   function buildStartingPointQueryParams(zoneIds) {
-    return (Array.isArray(zoneIds) ? zoneIds : [])
-      .map((id) => Number(id))
-      .filter((n) => Number.isInteger(n) && n > 0)
-      .map((id) => `starting_point_id%5B%5D=${encodeURIComponent(id)}`)
-      .join("&");
+    const clean = Array.from(
+      new Set((Array.isArray(zoneIds) ? zoneIds : []).map(Number).filter((n) => n > 0))
+    );
+    if (clean.length === 0) return "";
+    return clean.map((id) => `starting_point_id%5B%5D=${encodeURIComponent(id)}`).join("&");
+  }
+
+  function getCairoTodayDateStr() {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Africa/Cairo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(new Date());
+  }
+
+  function extractRecordCompletedMs(rec) {
+    const order = rec?.order || {};
+    const primaryDel = rec?.primary_delivery || {};
+    const timings = rec?.primary_delivery_timings || {};
+
+    const candidates = [
+      primaryDel.completed_at,
+      primaryDel.delivered_at,
+      primaryDel.dropped_off_at,
+      primaryDel.finished_at,
+      timings.completed_at,
+      timings.delivered_at,
+      timings.dropped_off_at,
+      order.current_state_transition,
+      order.completed_at,
+      order.delivered_at,
+      order.dropped_off_at,
+      order.finished_at,
+      rec?.completed_at,
+      rec?.delivered_at,
+      rec?.dropped_off_at
+    ];
+
+    for (const val of candidates) {
+      if (val) {
+        const ms =
+          typeof val === "number" ? (val > 1e12 ? val : val * 1000) : new Date(val).getTime();
+        if (!Number.isNaN(ms) && ms > 946684800000) return ms;
+      }
+    }
+
+    const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
+    const rawTotalTimeSec = Number(timings.total_time);
+    if (placedMs > 0 && !Number.isNaN(rawTotalTimeSec) && rawTotalTimeSec > 0) {
+      return placedMs + rawTotalTimeSec * 1000;
+    }
+
+    if (order.updated_at) {
+      const updMs = new Date(order.updated_at).getTime();
+      if (!Number.isNaN(updMs) && updMs > 946684800000) return updMs;
+    }
+    return placedMs || 0;
   }
 
   // ============================================================================
-  // 6) LIVE DELIVERIES FETCHER (Queued / Dispatched / Active)
+  // 6) LIVE DELIVERIES FETCHER (Queued / Dispatched / Active - All Pages)
   // ============================================================================
+  const lastKnownGoodStatusSnapshots = new Map();
+
   async function fetchAllPagesForDeliveryStatus(statusSlug, zoneIds) {
     const spQuery = buildStartingPointQueryParams(zoneIds);
     if (!spQuery) return { records: [], serverTotal: 0 };
@@ -437,49 +470,138 @@
 
     const p1 = await hurrierGetWithRetry(
       `/dispatcher-dashboard/deliveries/${statusSlug}?${spQuery}&page=1&per_page=50`,
-      1,
+      2,
       150
     );
     const firstRecords = Array.isArray(p1?.records) ? p1.records : [];
-    const totalCount = Number(p1?.total_count ?? p1?.meta?.total_count ?? firstRecords.length);
-    const totalPages = Math.min(
-      30,
-      Math.max(
-        1,
-        Number(p1?.total_pages ?? p1?.meta?.total_pages ?? Math.ceil(totalCount / 50))
-      )
+    const explicitTotalCount = Number(
+      p1?.total_count ?? p1?.meta?.total_count ?? p1?.pagination?.total_count ?? 0
+    );
+    const explicitTotalPages = Number(
+      p1?.total_pages ??
+        p1?.meta?.total_pages ??
+        p1?.pagination?.total_pages ??
+        (explicitTotalCount > 0 ? Math.ceil(explicitTotalCount / 50) : 0)
     );
 
     const allRecords = [...firstRecords];
-    let nextPage = 2;
-    while (nextPage <= totalPages) {
-      if (isPriorityUrgentActive()) {
-        await waitWhilePriorityUrgent(2200);
-      }
-      const batchPages = [];
-      for (let p = nextPage; p < nextPage + 4 && p <= totalPages; p++) {
-        batchPages.push(p);
-      }
-      const results = await Promise.all(
-        batchPages.map((pageNum) =>
-          hurrierGetWithRetry(
-            `/dispatcher-dashboard/deliveries/${statusSlug}?${spQuery}&page=${pageNum}&per_page=50`,
-            1,
-            150
-          ).catch(() => ({ records: [] }))
-        )
-      );
-      for (const r of results) {
-        if (Array.isArray(r?.records)) {
-          allRecords.push(...r.records);
+    const seenIds = new Set(
+      firstRecords.map((r) => String(r?.id || r?.order?.id || "")).filter(Boolean)
+    );
+    let hadFetchError = false;
+
+    const appendUniqueRecords = (recs) => {
+      for (const r of recs) {
+        const rid = String(r?.id || r?.order?.id || "");
+        if (rid) {
+          if (seenIds.has(rid)) continue;
+          seenIds.add(rid);
         }
+        allRecords.push(r);
       }
-      nextPage += batchPages.length;
+    };
+
+    if (explicitTotalPages > 1) {
+      const cappedPages = Math.min(45, explicitTotalPages);
+      let nextPage = 2;
+      while (nextPage <= cappedPages) {
+        if (isPriorityUrgentActive()) {
+          await waitWhilePriorityUrgent(2200);
+        }
+        const batchPages = [];
+        for (let p = nextPage; p < nextPage + 6 && p <= cappedPages; p++) {
+          batchPages.push(p);
+        }
+        const results = await Promise.all(
+          batchPages.map((pageNum) =>
+            hurrierGetWithRetry(
+              `/dispatcher-dashboard/deliveries/${statusSlug}?${spQuery}&page=${pageNum}&per_page=50`,
+              2,
+              150
+            ).catch(() => {
+              hadFetchError = true;
+              return null;
+            })
+          )
+        );
+        for (const r of results) {
+          if (r && Array.isArray(r.records)) {
+            appendUniqueRecords(r.records);
+          }
+        }
+        nextPage += batchPages.length;
+      }
+    } else if (firstRecords.length >= 50) {
+      // Hurrier API omits total_pages; probe in parallel batches of 6 until a short/empty page is reached
+      let nextPage = 2;
+      const maxPagesCap = 45;
+      let reachedEnd = false;
+      while (nextPage <= maxPagesCap && !reachedEnd) {
+        if (isPriorityUrgentActive()) {
+          await waitWhilePriorityUrgent(2200);
+        }
+        const batchPages = [];
+        for (let p = nextPage; p < nextPage + 6 && p <= maxPagesCap; p++) {
+          batchPages.push(p);
+        }
+        const results = await Promise.all(
+          batchPages.map((pageNum) =>
+            hurrierGetWithRetry(
+              `/dispatcher-dashboard/deliveries/${statusSlug}?${spQuery}&page=${pageNum}&per_page=50`,
+              2,
+              150
+            )
+              .then((data) => ({
+                pageNum,
+                ok: true,
+                records: Array.isArray(data?.records) ? data.records : []
+              }))
+              .catch(() => {
+                hadFetchError = true;
+                return { pageNum, ok: false, records: [] };
+              })
+          )
+        );
+        for (const res of results) {
+          if (!res.ok) continue;
+          if (res.records.length > 0) {
+            appendUniqueRecords(res.records);
+          }
+          if (res.records.length < 50) {
+            reachedEnd = true;
+          }
+        }
+        nextPage += batchPages.length;
+      }
+    }
+
+    const snapKey = `${statusSlug}:${spQuery}`;
+    const prevSnap = lastKnownGoodStatusSnapshots.get(snapKey);
+    if (
+      hadFetchError &&
+      prevSnap &&
+      prevSnap.records.length > allRecords.length &&
+      Date.now() - prevSnap.ts < 30000
+    ) {
+      return {
+        records: prevSnap.records,
+        serverTotal: prevSnap.serverTotal
+      };
+    }
+
+    const finalTotal =
+      explicitTotalCount > 0 ? Math.max(explicitTotalCount, allRecords.length) : allRecords.length;
+    if (!hadFetchError || allRecords.length >= (prevSnap?.records?.length || 0)) {
+      lastKnownGoodStatusSnapshots.set(snapKey, {
+        records: allRecords,
+        serverTotal: finalTotal,
+        ts: Date.now()
+      });
     }
 
     return {
       records: allRecords,
-      serverTotal: totalCount > 0 ? totalCount : allRecords.length
+      serverTotal: finalTotal
     };
   }
 
@@ -608,52 +730,64 @@
   // ============================================================================
   const completedArchiveMap = new Map();
   let lastCompletedSweepAt = 0;
-  let isCompletedSweepRunning = false;
 
-  function getCairoTodayDateStr() {
-    return new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Africa/Cairo",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit"
-    }).format(new Date());
-  }
+  async function findLastCompletedPageForDate(dateStr, p1Data = null) {
+    const p1 =
+      p1Data ||
+      (await hurrierGet(
+        `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=1&per_page=50`
+      ));
+    const explicitTotalCount = Number(
+      p1?.total_count ?? p1?.meta?.total_count ?? p1?.pagination?.total_count ?? 0
+    );
+    const explicitTotalPages = Number(
+      p1?.total_pages ??
+        p1?.meta?.total_pages ??
+        p1?.pagination?.total_pages ??
+        (explicitTotalCount > 0 ? Math.ceil(explicitTotalCount / 50) : 0)
+    );
+    if (explicitTotalPages > 1) return explicitTotalPages;
 
-  function extractRecordCompletedMs(rec) {
-    if (rec?.__completed_at_ms && Number(rec.__completed_at_ms) > 0) {
-      return Number(rec.__completed_at_ms);
+    const firstRecs = Array.isArray(p1?.records) ? p1.records : [];
+    if (firstRecs.length < 50) return 1;
+
+    // Exponential probe + binary search to find exact last page when total_pages is omitted
+    let lo = 1;
+    let hi = 64;
+    while (hi <= 32768) {
+      if (isPriorityUrgentActive()) {
+        await waitWhilePriorityUrgent(2200);
+      }
+      const probeRes = await hurrierGet(
+        `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(
+          dateStr
+        )}&page=${hi}&per_page=50`
+      ).catch(() => ({ records: [] }));
+      const recs = Array.isArray(probeRes?.records) ? probeRes.records : [];
+      if (recs.length === 0) break;
+      lo = hi;
+      if (recs.length < 50) return hi;
+      hi *= 2;
     }
-    const order = rec?.order || {};
-    const primaryDel = rec?.primary_delivery || {};
-    const timings = rec?.primary_delivery_timings || {};
-    const candidates = [
-      primaryDel.completed_at,
-      primaryDel.delivered_at,
-      primaryDel.dropped_off_at,
-      timings.completed_at,
-      timings.delivered_at,
-      order.current_state_transition,
-      order.completed_at,
-      order.delivered_at,
-      rec?.completed_at
-    ];
-    for (const val of candidates) {
-      if (val) {
-        const ms = typeof val === "number" ? (val > 1e12 ? val : val * 1000) : new Date(val).getTime();
-        if (!Number.isNaN(ms) && ms > 946684800000) {
-          rec.__completed_at_ms = ms;
-          return ms;
-        }
+
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi + 1) / 2);
+      if (isPriorityUrgentActive()) {
+        await waitWhilePriorityUrgent(2200);
+      }
+      const midRes = await hurrierGet(
+        `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(
+          dateStr
+        )}&page=${mid}&per_page=50`
+      ).catch(() => ({ records: [] }));
+      const recs = Array.isArray(midRes?.records) ? midRes.records : [];
+      if (recs.length > 0) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
       }
     }
-    const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
-    const totalTimeSec = Number(timings.total_time);
-    if (placedMs > 0 && !Number.isNaN(totalTimeSec) && totalTimeSec > 0) {
-      const ms = placedMs + totalTimeSec * 1000;
-      rec.__completed_at_ms = ms;
-      return ms;
-    }
-    return placedMs;
+    return lo;
   }
 
   async function sweepCompletedOrdersLast2Hours(force = false) {
@@ -674,11 +808,7 @@
       const p1 = await hurrierGet(
         `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(todayStr)}&page=1&per_page=50`
       );
-      const totalCount = Number(p1?.total_count ?? p1?.meta?.total_count ?? 0);
-      const totalPages = Math.max(
-        1,
-        Number(p1?.total_pages ?? p1?.meta?.total_pages ?? Math.ceil(totalCount / 50))
-      );
+      const totalPages = await findLastCompletedPageForDate(todayStr, p1);
 
       const processPageRecords = (recs) => {
         let anyInWindow = false;
@@ -698,7 +828,7 @@
       } else {
         let curPage = totalPages;
         let pagesScanned = 0;
-        while (curPage >= 1 && pagesScanned < 60) {
+        while (curPage >= 1 && pagesScanned < 80) {
           if (isPriorityUrgentActive()) {
             await waitWhilePriorityUrgent(2200);
           }
@@ -765,14 +895,7 @@
         processedRangeReqIds.add(req.reqId);
 
         const { reqId, sessionId, dateStr, fromMs, toMs } = req;
-        const p1 = await hurrierGet(
-          `/dispatcher-dashboard/orders/completed?date=${encodeURIComponent(dateStr)}&page=1&per_page=50`
-        );
-        const totalCount = Number(p1?.total_count ?? p1?.meta?.total_count ?? 0);
-        const totalPages = Math.max(
-          1,
-          Number(p1?.total_pages ?? p1?.meta?.total_pages ?? Math.ceil(totalCount / 50))
-        );
+        const totalPages = await findLastCompletedPageForDate(dateStr);
 
         // Binary search for page range around [fromMs, toMs]
         let lo = 1;
