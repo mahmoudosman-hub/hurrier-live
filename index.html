@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v10.0 -->
+<!-- Hurrier Live Operations Dashboard v10.2 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -948,8 +948,8 @@
                   subLabel: subParts.join(" • "),
                   courierName: evCourierName,
                   courierId: evCourierId,
-                  locUrl,
-                  isRemoved
+                  isRemoved,
+                  locUrl
                 };
               });
 
@@ -2777,9 +2777,11 @@
           });
         });
 
-        const matchingZonesStats = Array.from(byId.values()).sort((a, b) =>
-          normalizeText(a.name).localeCompare(normalizeText(b.name))
-        );
+        const matchingZonesStats = Array.from(byId.values()).sort((a, b) => {
+          const delayDiff = Number(b.delay || 0) - Number(a.delay || 0);
+          if (Math.abs(delayDiff) > 0.001) return delayDiff;
+          return normalizeText(a.name).localeCompare(normalizeText(b.name));
+        });
 
         const toggleZoneExpand = (zid) => {
           setCollapsedCourierZoneIds((prev) => {
@@ -2840,7 +2842,7 @@
                     return null;
                   }
 
-                  const activeOrdCnt = st.active_count ?? 0;
+                  const activeOrdCnt = (st.active_count ?? 0) + (st.dispatched_count ?? 0);
                   const workingAndEndingCnt =
                     (st.couriers_in_working ?? 0) + (st.couriers_in_ending ?? 0);
                   const queuedOrdCnt = st.queued_count ?? 0;
