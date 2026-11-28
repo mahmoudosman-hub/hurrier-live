@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v10.17 -->
+<!-- Hurrier Live Operations Dashboard v10.18 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v10.17</title>
+  <title>Hurrier Live Operations Dashboard v10.18</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,14 +38,14 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v10.17...
+      Loading Hurrier Live Operations Dashboard v10.18...
     </div>
   </div>
 
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
-    const APP_VERSION = "10.17";
+    const APP_VERSION = "10.18";
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
     const FIREBASE_PROJECT_ID = "hurrier-live";
     const FIREBASE_AUTH_DOMAIN = "hurrier-live.firebaseapp.com";
@@ -2083,13 +2083,26 @@
           const internalOrderId = String(
             orderItem?.orderId || orderItem?.raw?.order?.id || ""
           ).trim();
+          const vendorOrderNumber =
+            orderItem?.vo && orderItem.vo !== "-" ? String(orderItem.vo).trim() : "";
           const {
             keepPollingWhileOpen = false,
             forceRefresh = false,
             isCancelled = () => false
           } = opts;
 
-          if (!forceRefresh && orderDetailsCache[code]) return;
+          if (!forceRefresh && orderDetailsCache[code]) {
+            const memEntry = orderDetailsCache[code];
+            const memList = Array.isArray(memEntry?.deliveries?.deliveries)
+              ? memEntry.deliveries.deliveries
+              : Array.isArray(memEntry?.deliveries)
+              ? memEntry.deliveries
+              : [];
+            const memHasTransitions = memList.some(
+              (d) => Array.isArray(d?.transitions) && d.transitions.length > 0
+            );
+            if (memHasTransitions || memEntry?.notFound) return;
+          }
 
           const sendOrderDetailRequest = async () => {
             await dbFetch(`/config/order_detail_reqs/${encodeURIComponent(code)}`, {
@@ -2099,6 +2112,7 @@
                 code,
                 orderCode: orderItem.orderCode || `HF_EG${code}`,
                 internalOrderId,
+                vendorOrderNumber,
                 requestedAt: Date.now()
               })
             });
@@ -2126,10 +2140,9 @@
                       setOrderDetailsCache((prev) => ({ ...prev, [code]: quickData }));
                     }
                   }
-                  // If cache already has transitions and is fresh (< 8s) or this is just a hover prefetch, no need to re-fetch
                   if (
                     hasCompleteTransitions &&
-                    (!keepPollingWhileOpen || Date.now() - cachedUpdatedAt < 8000)
+                    (!keepPollingWhileOpen || Date.now() - cachedUpdatedAt < 15000)
                   ) {
                     return;
                   }
@@ -2143,7 +2156,7 @@
             const maxAttempts = keepPollingWhileOpen ? 100 : 14;
             for (let attempt = 0; attempt < maxAttempts; attempt++) {
               if (isCancelled()) return;
-              await new Promise((r) => setTimeout(r, 300));
+              await new Promise((r) => setTimeout(r, 250));
               if (isCancelled()) return;
 
               if (keepPollingWhileOpen && attempt > 0 && attempt % 10 === 0) {
@@ -2161,7 +2174,17 @@
                   if (!isCancelled()) {
                     setOrderDetailsCache((prev) => ({ ...prev, [code]: data }));
                   }
-                  return;
+                  const newDList = Array.isArray(data?.deliveries?.deliveries)
+                    ? data.deliveries.deliveries
+                    : Array.isArray(data?.deliveries)
+                    ? data.deliveries
+                    : [];
+                  if (
+                    newDList.some((d) => Array.isArray(d?.transitions) && d.transitions.length > 0) ||
+                    data.notFound
+                  ) {
+                    return;
+                  }
                 }
               }
             }
