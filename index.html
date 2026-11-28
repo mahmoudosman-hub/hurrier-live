@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v10.5 -->
+<!-- Hurrier Live Operations Dashboard v10.6 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v10.5</title>
+  <title>Hurrier Live Operations Dashboard v10.6</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,14 +38,14 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v10.5...
+      Loading Hurrier Live Operations Dashboard v10.6...
     </div>
   </div>
 
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
-    const APP_VERSION = "10.5";
+    const APP_VERSION = "10.6";
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
     const FIREBASE_PROJECT_ID = "hurrier-live";
     const FIREBASE_AUTH_DOMAIN = "hurrier-live.firebaseapp.com";
@@ -1865,7 +1865,7 @@
         setIsZoneSetupConfirmed(false);
       }, []);
 
-      // Instant Firebase Shared Completed Archive Hydration on Login/Reload (< 0.3s)
+      // Instant Firebase Shared 2h Completed Archive Hydration on Login/Reload (< 0.3s)
       useEffect(() => {
         if (authState !== "authorized" || !isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
         let cancelled = false;
@@ -1875,11 +1875,16 @@
             if (!res.ok || cancelled) return;
             const archiveObj = await res.json();
             if (archiveObj && typeof archiveObj === "object" && !cancelled) {
+              const cutoff2h = Date.now() - 2 * 3600 * 1000;
               const rawList = Object.values(archiveObj).filter((v) => v && typeof v === "object");
               if (rawList.length > 0) {
                 const mappedComp = rawList
                   .map(mapHurrierCompletedRecord)
-                  .filter((item) => !item.orderStatus.includes("cancel"));
+                  .filter(
+                    (item) =>
+                      !item.orderStatus.includes("cancel") &&
+                      item.completedTimestamp >= cutoff2h
+                  );
                 setCompletedOrders((prev) => (prev.length > 0 ? prev : mappedComp));
                 setIsCompletedLoading(false);
               }
@@ -1957,19 +1962,20 @@
           setDeliveries(mappedDeliveries);
 
           if (Array.isArray(bundle.completedRecords) && bundle.completedRecords.length > 0) {
+            const cutoff2h = Date.now() - 2 * 3600 * 1000;
             const mappedComp = bundle.completedRecords
               .map(mapHurrierCompletedRecord)
-              .filter((item) => !item.orderStatus.includes("cancel"));
-            setCompletedOrders((prev) => {
-              const byId = new Map();
-              prev.forEach((p) => {
-                if (p && p.id) byId.set(String(p.id), p);
-              });
-              mappedComp.forEach((m) => {
-                if (m && m.id) byId.set(String(m.id), m);
-              });
-              return Array.from(byId.values());
-            });
+              .filter(
+                (item) =>
+                  !item.orderStatus.includes("cancel") &&
+                  item.completedTimestamp >= cutoff2h
+              );
+            setCompletedOrders(mappedComp);
+          } else {
+            const cutoff2h = Date.now() - 2 * 3600 * 1000;
+            setCompletedOrders((prev) =>
+              prev.filter((item) => item.completedTimestamp >= cutoff2h)
+            );
           }
           setIsCompletedLoading(Boolean(bundle.completedSyncing));
           if (bundle.completedLastSweepAt) {
@@ -2257,6 +2263,17 @@
           });
         } catch {}
       }, [dbFetch]);
+
+      const handleResetCompletedFilter = useCallback(() => {
+        setCompletedFilterMode("rolling");
+        setCompletedHoursWindow(2);
+        setCustomCompletedDate(getCairoTodayDateString());
+        setCustomFromTime(getCairoTimeHHMM(-30));
+        setCustomToTime(getCairoTimeHHMM(0));
+        setCustomRangeOrders([]);
+        setCustomRangeMeta(null);
+        setCompletedPage(1);
+      }, []);
 
       const handleFetchCustomCompletedRange = useCallback(
         async (e) => {
@@ -3149,7 +3166,7 @@
 
         return (
           <div className="mt-4 space-y-4">
-            {/* Completed Orders Controls Bar (Unified 2h / 1h Shared Archive + Custom Time Range + Instant ID Lookup) */}
+            {/* Completed Orders Controls Bar (Unified 2h / 1h Shared Archive updated every 15m + Custom Time Range + Instant ID Lookup) */}
             <div className="p-4 rounded-xl bg-gray-50/80 border border-gray-200 space-y-3">
               <div className="flex flex-wrap items-end justify-between gap-3">
                 <div className="flex flex-wrap items-end gap-3 flex-1 min-w-[260px]">
@@ -3171,9 +3188,8 @@
                       }}
                       className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-bold text-gray-800 focus:outline-none focus:border-blue-500"
                     >
-                      <option value="1">آخر ساعة (1h • موحد ومحدث لحظياً)</option>
-                      <option value="2">آخر ساعتين (2h • موحد ومحدث لحظياً)</option>
-                      <option value="24">اليوم بالكامل (أرشيف اليوم المحفوظ)</option>
+                      <option value="1">آخر ساعة (1h • موحد ومحدث كل 15د)</option>
+                      <option value="2">آخر ساعتين (2h • موحد ومحدث كل 15د)</option>
                       <option value="custom">🕒 تحديد وقت مخصص (من - إلى)</option>
                     </select>
                   </div>
@@ -3249,9 +3265,7 @@
                     <div className="flex items-center gap-1.5 flex-wrap justify-end">
                       <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
                         <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        {completedHoursWindow === 24
-                          ? "موحد للكل • أرشيف اليوم بالكامل"
-                          : `موحد للكل • من ${windowStartLabel} حتى الآن (${completedHoursWindow}h)`}
+                        موحد للكل • من {windowStartLabel} حتى الآن ({completedHoursWindow}h)
                         {isCompletedLoading && visibleCompletedOrders.length === 0
                           ? " • جاري التحديث..."
                           : ""}
@@ -3272,21 +3286,18 @@
                       </span>
                       <button
                         type="button"
-                        onClick={() => {
-                          setCompletedFilterMode("rolling");
-                          setCompletedHoursWindow(2);
-                          setCompletedPage(1);
-                        }}
-                        className="px-2.5 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-100 text-gray-700 font-bold"
+                        onClick={handleResetCompletedFilter}
+                        className="px-2.5 py-1 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 font-bold transition-colors"
+                        title="إزالة فلتر الوقت المخصص والعودة إلى آخر ساعتين (2h)"
                       >
-                        العودة لآخر ساعتين (2h)
+                        ✕ إزالة الفلتر
                       </button>
                     </div>
                   )}
                   <div className="text-gray-500">
                     {completedFilterMode === "rolling" && completedLastSweepAt > 0 && (
                       <span className="mr-2 text-[11px] text-gray-400">
-                        آخر دورة: {formatShortTimeOnly(completedLastSweepAt)} •
+                        آخر دورة 15د: {formatShortTimeOnly(completedLastSweepAt)} •
                       </span>
                     )}
                     Page <strong className="text-gray-800">{completedPage}</strong> of{" "}
@@ -3296,57 +3307,63 @@
                 </div>
               </div>
 
-              {/* Always-Visible Custom Time Window Bar (Date + From Time + To Time) */}
-              <form
-                onSubmit={(e) => {
-                  setCompletedFilterMode("custom");
-                  handleFetchCustomCompletedRange(e);
-                }}
-                dir="rtl"
-                className="pt-3 border-t border-gray-200 flex flex-wrap items-end gap-3"
-              >
-                <div>
-                  <label className="block text-[11px] font-bold text-gray-700 mb-1">التاريخ</label>
-                  <input
-                    type="date"
-                    value={customCompletedDate}
-                    onChange={(e) => setCustomCompletedDate(e.target.value)}
-                    className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-mono focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-gray-700 mb-1">من الساعة (وقت التقفيل)</label>
-                  <input
-                    type="time"
-                    value={customFromTime}
-                    onChange={(e) => setCustomFromTime(e.target.value)}
-                    className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-mono focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-gray-700 mb-1">إلى الساعة (وقت التقفيل)</label>
-                  <input
-                    type="time"
-                    value={customToTime}
-                    onChange={(e) => setCustomToTime(e.target.value)}
-                    className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-mono focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={isCustomRangeLoading}
-                  className={`px-4 py-2 rounded-lg font-bold text-xs sm:text-sm text-white shadow-sm transition-colors ${
-                    isCustomRangeLoading
-                      ? "bg-blue-400 cursor-wait"
-                      : "bg-blue-600 hover:bg-blue-700"
-                  }`}
+              {/* Custom Time Window Bar (Shown when "custom" mode is selected) */}
+              {completedFilterMode === "custom" && (
+                <form
+                  onSubmit={handleFetchCustomCompletedRange}
+                  dir="rtl"
+                  className="pt-3 border-t border-gray-200 flex flex-wrap items-end gap-3"
                 >
-                  {isCustomRangeLoading ? "⏳ جاري سحب الفترة..." : "🔍 عرض الفترة المحددة"}
-                </button>
-                {customRangeMeta?.error && (
-                  <span className="text-xs font-bold text-red-600">{customRangeMeta.error}</span>
-                )}
-              </form>
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 mb-1">التاريخ</label>
+                    <input
+                      type="date"
+                      value={customCompletedDate}
+                      onChange={(e) => setCustomCompletedDate(e.target.value)}
+                      className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-mono focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 mb-1">من الساعة (وقت التقفيل)</label>
+                    <input
+                      type="time"
+                      value={customFromTime}
+                      onChange={(e) => setCustomFromTime(e.target.value)}
+                      className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-mono focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-gray-700 mb-1">إلى الساعة (وقت التقفيل)</label>
+                    <input
+                      type="time"
+                      value={customToTime}
+                      onChange={(e) => setCustomToTime(e.target.value)}
+                      className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-mono focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={isCustomRangeLoading}
+                    className={`px-4 py-2 rounded-lg font-bold text-xs sm:text-sm text-white shadow-sm transition-colors ${
+                      isCustomRangeLoading
+                        ? "bg-blue-400 cursor-wait"
+                        : "bg-blue-600 hover:bg-blue-700"
+                    }`}
+                  >
+                    {isCustomRangeLoading ? "⏳ جاري سحب الفترة..." : "🔍 عرض الفترة المحددة"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetCompletedFilter}
+                    className="px-3.5 py-2 rounded-lg font-bold text-xs sm:text-sm text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 transition-colors"
+                  >
+                    ✕ إزالة الفلتر
+                  </button>
+                  {customRangeMeta?.error && (
+                    <span className="text-xs font-bold text-red-600">{customRangeMeta.error}</span>
+                  )}
+                </form>
+              )}
 
               {/* Direct Order ID Lookup Feedback Banner */}
               {directCompletedLookup.query && directCompletedLookup.status !== "local" && (
@@ -3392,7 +3409,7 @@
             <div className={`${mobileViewMode === "cards" ? "block md:hidden" : "hidden"} space-y-2.5`}>
               {paginatedCompletedOrders.length === 0 ? (
                 <div className="p-8 text-center bg-white border border-gray-200 rounded-xl text-gray-500 text-xs">
-                  لا توجد أوردرات مكتملة (Completed Orders) في هذه الفترة مطابقة للبحث.
+                  لا توجد أوردرات مكتملة (Completed Orders) في آخر {completedHoursWindow} ساعة مطابقة للبحث.
                 </div>
               ) : (
                 paginatedCompletedOrders.map((item) => (
@@ -3462,13 +3479,13 @@
                   {isCompletedLoading && paginatedCompletedOrders.length === 0 ? (
                     <tr>
                       <td colSpan={16} className="py-12 text-center text-blue-600 font-semibold text-sm">
-                        ⏳ جاري تحميل الأوردرات المكتملة تلقائياً...
+                        ⏳ جاري تحميل الأوردرات المكتملة تلقائياً في آخر {completedHoursWindow} ساعة...
                       </td>
                     </tr>
                   ) : paginatedCompletedOrders.length === 0 ? (
                     <tr>
                       <td colSpan={16} className="py-12 text-center text-gray-500 text-sm">
-                        لا توجد أوردرات مكتملة (Completed Orders) في هذه الفترة مطابقة للبحث.
+                        لا توجد أوردرات مكتملة (Completed Orders) في آخر {completedHoursWindow} ساعة مطابقة للبحث.
                       </td>
                     </tr>
                   ) : (
