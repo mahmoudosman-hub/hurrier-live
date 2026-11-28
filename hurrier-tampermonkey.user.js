@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.8
-// @description  [v10.8] Exact-Match Mode: Server-Authoritative Counts + Trust-Server Zone Matching (no innocent order drops) + Split-Order Safe Dedup + Failed Page Auto-Retry + Rolling 2h Completed Archive
+// @version      10.9
+// @description  [v10.9] Near-Real-Time Completed Archive: 60s Delta Sync + Instant Delta On New Viewer + Live-Transition Catch x3 (15/tick) + Re-check Lost Transitions + Server-Authoritative Counts + Failed Page Auto-Retry + Rolling 2h Archive
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.8";
+  const SCRIPT_VERSION = "10.9";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -553,19 +553,23 @@
   let lastKnownActivePageCount = 1;
   const knownZonesCatalogMap = new Map();
   let lastCatalogSyncAt = 0;
-  // Shared Rolling 2-Hour Completed Orders Archive State (Updated every 15m: drops >2h & adds new)
+  // Shared Rolling 2-Hour Completed Orders Archive State
+  // v10.9: full sweep every 15m + near-real-time delta sync every 60s + instant delta on new viewer sessions
   const sharedCompletedMap = new Map();
   let completedArchiveLoadedFromFb = false;
   let completedSyncing = false;
   let completedLastSweepAt = 0;
   let completedNewestCachedMs = 0;
   let lastKnownCompletedLastPage = 1;
+  let lastCompletedDeltaSyncAt = 0;
   let lastHandledForceSweepTs = 0;
   let latestUnionZoneIds = [];
   let latestLiveZoneNameToId = new Map();
   let latestActiveSessionsSnapshot = [];
   const prevLiveOrdersMap = new Map();
-  const checkedTransitionCodes = new Set();
+  // v10.9: code -> first-checked ts. Failed/unknown-status checks are retried after 10 minutes
+  const checkedTransitionCodes = new Map();
+  const knownSessionIds = new Set();
 
   // Courier Cache & Throttling
   const couriersBySpCache = new Map();
@@ -969,6 +973,11 @@
           addedAny = true;
         }
       }
+      // v10.9: keep the newest cached completed timestamp fresh for the next delta window
+      for (const rec of deltaMap.values()) {
+        const ms = extractCompletedMsFromRecord(rec);
+        if (ms > completedNewestCachedMs) completedNewestCachedMs = ms;
+      }
       pruneOldCompletedRecords();
       if (addedAny) {
         await saveSharedCompletedArchiveToFb();
@@ -1093,23 +1102,30 @@
     }
 
     if (prevLiveOrdersMap.size > 0) {
+      const nowTs = Date.now();
+      // v10.9: purge stale check-marks so lost/failed transitions get re-checked instead of waiting for the 15m sweep
+      if (checkedTransitionCodes.size > 400) {
+        for (const [cCode, cTs] of checkedTransitionCodes.entries()) {
+          if (nowTs - cTs > 10 * 60 * 1000) checkedTransitionCodes.delete(cCode);
+        }
+      }
       const candidates = [];
       for (const [code, prevRec] of prevLiveOrdersMap.entries()) {
         if (
           !currentLiveCodes.has(code) &&
           !sharedCompletedMap.has(code) &&
-          !checkedTransitionCodes.has(code)
+          nowTs - (checkedTransitionCodes.get(code) || 0) > 10 * 60 * 1000
         ) {
           candidates.push({ code, prevRec });
         }
       }
 
       if (candidates.length > 0) {
-        const batch = candidates.slice(0, 5);
+        const batch = candidates.slice(0, 15);
         let caughtAny = false;
         await Promise.all(
           batch.map(async ({ code, prevRec }) => {
-            checkedTransitionCodes.add(code);
+            if (!checkedTransitionCodes.has(code)) checkedTransitionCodes.set(code, Date.now());
             try {
               const det = await hurrierGet(`/orders/${encodeURIComponent(code)}`);
               const dOrder = det?.order || det || {};
@@ -1678,10 +1694,43 @@
         return;
       }
 
-      // Rolling 2-hour Completed Archive: runs full refresh every 15 minutes (drops >2h old & adds new)
+      // Rolling 2-hour Completed Archive
       await loadInitialSharedCompletedArchive();
+
+      // v10.9: track viewer sessions — a brand-new session triggers an instant completed delta
+      // so its very first bundle is already complete instead of trickling in
+      let hasNewViewerSession = false;
+      for (const sess of activeSessions) {
+        if (!knownSessionIds.has(sess.sessionId)) {
+          knownSessionIds.add(sess.sessionId);
+          hasNewViewerSession = true;
+        }
+      }
+      if (knownSessionIds.size > activeSessions.length) {
+        for (const sid of Array.from(knownSessionIds)) {
+          if (!activeSessions.some((s) => s.sessionId === sid)) knownSessionIds.delete(sid);
+        }
+      }
+
+      // v10.9: keep the newest cached completed timestamp fresh (drives the delta window)
+      let newestCompletedMs = 0;
+      for (const rec of sharedCompletedMap.values()) {
+        const ms = extractCompletedMsFromRecord(rec);
+        if (ms > newestCompletedMs) newestCompletedMs = ms;
+      }
+      if (newestCompletedMs > completedNewestCachedMs) completedNewestCachedMs = newestCompletedMs;
+
       if (completedLastSweepAt === 0 || now - completedLastSweepAt >= 15 * 60 * 1000) {
         runCompletedArchive15MinSweep().catch(() => {});
+      } else if (
+        (hasNewViewerSession || now - lastCompletedDeltaSyncAt >= 60 * 1000) &&
+        !completedSyncing
+      ) {
+        // v10.9: near-real-time delta — pull only the tiny gap since the newest cached completed order
+        lastCompletedDeltaSyncAt = now;
+        const deltaFromMs =
+          completedNewestCachedMs > 0 ? completedNewestCachedMs - 90 * 1000 : now - 15 * 60 * 1000;
+        runCompletedSmartDeltaSync(deltaFromMs).catch(() => {});
       }
 
       const spQuery = buildStartingPointQueryParams(unionZoneIds);
