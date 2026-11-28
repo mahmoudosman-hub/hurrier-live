@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.27
-// @description  [v10.27] Distributed Multi-Admin Active Feeders + Visibility-Aware Relay for View-Only Employees
+// @version      10.28
+// @description  [v10.28] Distributed Multi-Admin Active Feeders + 20s Stale Data Auto-Failover
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://*.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.27";
+  const SCRIPT_VERSION = "10.28";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -1407,10 +1407,13 @@
   // ============================================================================
   const TAB_ID = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const FEEDER_ID = `feeder_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const FEEDER_STARTED_AT = Date.now();
+  const STALE_DATA_FAILOVER_MS = 20000;
   const LOCAL_LOCK_KEY = "hurrier_live_sync_local_tab_lock";
   let ownsLocalTabLock = true;
   let isCurrentLeader = true;
   let isRelayLeader = true;
+  let lastDataSuccessAt = 0;
   let latestUnionZoneIds = [];
   let latestActiveSessionsSnapshot = [];
 
@@ -1487,11 +1490,13 @@
       const myEmail = String(getBridgedLeaderEmail() || "").trim().toLowerCase();
       const now = Date.now();
 
-      // Register this active Hurrier Admin feeder with tab visibility status
+      // Register this active Hurrier Admin feeder with visibility & last real data fetch timestamp
       await firebaseReq("PUT", `/config/feeders/${encodeURIComponent(FEEDER_ID)}`, {
         feederId: FEEDER_ID,
         email: myEmail,
         isVisible: !document.hidden,
+        startedAt: FEEDER_STARTED_AT,
+        lastDataSuccessAt,
         updatedAt: now
       }).catch(() => {});
 
@@ -1505,28 +1510,48 @@
         (s) => s && s.sessionId && now - Number(s.lastSeen || 0) < 25000
       );
 
+      const isFeederDataHealthy = (fVal, refNow) => {
+        const lastOk = Number(fVal?.lastDataSuccessAt || 0);
+        if (lastOk > 0) {
+          return refNow - lastOk <= STALE_DATA_FAILOVER_MS;
+        }
+        const started = Number(fVal?.startedAt || fVal?.updatedAt || 0);
+        return refNow - started <= STALE_DATA_FAILOVER_MS;
+      };
+
       const feedersObj = feedersRaw && typeof feedersRaw === "object" ? feedersRaw : {};
       const activeFeeders = [];
       for (const [fKey, fVal] of Object.entries(feedersObj)) {
         if (!fVal || !fVal.feederId) continue;
         const age = now - Number(fVal.updatedAt || 0);
         if (age < 9500) {
-          activeFeeders.push(fVal);
+          activeFeeders.push({
+            ...fVal,
+            isHealthy: isFeederDataHealthy(fVal, now)
+          });
         } else if (age > 18000) {
           firebaseReq("DELETE", `/config/feeders/${encodeURIComponent(fKey)}`).catch(() => {});
         }
       }
       if (!activeFeeders.some((f) => f.feederId === FEEDER_ID)) {
-        activeFeeders.push({
+        const selfObj = {
           feederId: FEEDER_ID,
           email: myEmail,
           isVisible: !document.hidden,
+          startedAt: FEEDER_STARTED_AT,
+          lastDataSuccessAt,
           updatedAt: now
+        };
+        activeFeeders.push({
+          ...selfObj,
+          isHealthy: isFeederDataHealthy(selfObj, now)
         });
       }
 
-      // Prioritize visible (non-throttled) Hurrier tabs for shared employee relay
+      // Prioritize healthy (<20s data success) & visible Hurrier tabs for shared employee relay
       activeFeeders.sort((a, b) => {
+        const healthDiff = (b.isHealthy ? 1 : 0) - (a.isHealthy ? 1 : 0);
+        if (healthDiff !== 0) return healthDiff;
         const visDiff = (b.isVisible ? 1 : 0) - (a.isVisible ? 1 : 0);
         if (visDiff !== 0) return visDiff;
         return String(a.feederId).localeCompare(String(b.feederId));
@@ -1536,9 +1561,12 @@
       isRelayLeader = !primaryRelayFeeder || primaryRelayFeeder.feederId === FEEDER_ID;
       isCurrentLeader = true;
 
-      // Determine primary feeder per Admin email (in case same Admin opened 2 different browsers)
-      const activeFeederEmails = new Set(
-        activeFeeders.map((f) => String(f.email || "").trim().toLowerCase()).filter(Boolean)
+      // Only healthy feeders count as active providers for an Admin email; if an Admin's data stalls >20s, Relay Leader takes over
+      const healthyFeederEmails = new Set(
+        activeFeeders
+          .filter((f) => f.isHealthy)
+          .map((f) => String(f.email || "").trim().toLowerCase())
+          .filter(Boolean)
       );
       const sameEmailFeeders = activeFeeders.filter(
         (f) => String(f.email || "").trim().toLowerCase() === myEmail
@@ -1546,13 +1574,13 @@
       const isPrimaryForMyEmail =
         !myEmail || sameEmailFeeders.length === 0 || sameEmailFeeders[0].feederId === FEEDER_ID;
 
-      // Target sessions: (1) My own Admin dashboard sessions + (2) View-only employee sessions if I am Relay Leader
+      // Target sessions: (1) My own Admin dashboard sessions + (2) View-only or stalled-Admin sessions if I am Relay Leader
       const targetSessions = activeSessions.filter((s) => {
         const sEmail = String(s.email || "").trim().toLowerCase();
         if (myEmail && sEmail === myEmail) {
           return isPrimaryForMyEmail;
         }
-        if (isRelayLeader && (!sEmail || !activeFeederEmails.has(sEmail))) {
+        if (isRelayLeader && (!sEmail || !healthyFeederEmails.has(sEmail))) {
           return true;
         }
         return false;
@@ -1604,6 +1632,13 @@
         fetchAllPagesForDeliveryStatus("active", unionZoneIds),
         fetchCouriersAndStatsForZones(unionZoneIds)
       ]);
+
+      // Mark real data fetch success timestamp for 20-second health monitoring
+      lastDataSuccessAt = Date.now();
+      firebaseReq("PATCH", `/config/feeders/${encodeURIComponent(FEEDER_ID)}`, {
+        lastDataSuccessAt,
+        updatedAt: lastDataSuccessAt
+      }).catch(() => {});
 
       if (isRelayLeader && couriersData.dynamicZones.length > 0) {
         firebaseReq("PUT", "/config/dynamic_zones_catalog", couriersData.dynamicZones).catch(
@@ -1691,7 +1726,16 @@
         );
       }
     } catch (err) {
-      setBadge("#b91c1c", `v${SCRIPT_VERSION} • Retry (${err?.message || "Sync"})`);
+      const stalledSec =
+        lastDataSuccessAt > 0 ? Math.round((Date.now() - lastDataSuccessAt) / 1000) : 0;
+      if (stalledSec > 20) {
+        setBadge(
+          "#b91c1c",
+          `v${SCRIPT_VERSION} [Stalled ${stalledSec}s • Failover Active] Retrying...`
+        );
+      } else {
+        setBadge("#b91c1c", `v${SCRIPT_VERSION} • Retry (${err?.message || "Sync"})`);
+      }
     } finally {
       isMainLoopRunning = false;
     }
