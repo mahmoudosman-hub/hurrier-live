@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.5
-// @description  [v10.5] Smart Delta Completed Sync + Instant Firebase Archive Hydration + Live Transition Catcher + Unified Multi-Tab Handoff
+// @version      10.6
+// @description  [v10.6] Rolling 2h Completed Archive (15m Cycle Auto-Prune Old & Add New) + Instant Login Hydration + Status Filter Pills + Unified Multi-Tab Handoff
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.5";
+  const SCRIPT_VERSION = "10.6";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -552,12 +552,11 @@
   let lastKnownActivePageCount = 1;
   const knownZonesCatalogMap = new Map();
   let lastCatalogSyncAt = 0;
-  // Shared Full-Day & 2h Completed Orders Archive State
+  // Shared Rolling 2-Hour Completed Orders Archive State (Updated every 15m: drops >2h & adds new)
   const sharedCompletedMap = new Map();
   let completedArchiveLoadedFromFb = false;
   let completedSyncing = false;
   let completedLastSweepAt = 0;
-  let completedLastTailSyncAt = 0;
   let completedNewestCachedMs = 0;
   let lastKnownCompletedLastPage = 1;
   let lastHandledForceSweepTs = 0;
@@ -776,7 +775,7 @@
   }
 
   // ============================================================================
-  // 7) INSTANT PROGRESSIVE COMPLETED ARCHIVE + LIVE TRANSITION CATCHER
+  // 7) ROLLING 2H COMPLETED ARCHIVE (15-MIN CYCLE AUTO-PRUNE OLD & ADD NEW)
   // ============================================================================
   function getCairoDateStringForMs(ms) {
     return new Intl.DateTimeFormat("en-CA", {
@@ -862,19 +861,13 @@
     });
   }
 
-  // Keep all of today's completed orders for selected zones + rolling 2h across midnight
+  // Strict 2-hour rolling window rule: drop anything older than 2 hours, keep only latest 2h
   function pruneOldCompletedRecords() {
-    const now = Date.now();
-    const todayStr = getCairoDateStringForMs(now);
-    const rolling2hCutoff = now - 2 * 3600 * 1000;
+    const rolling2hCutoff = Date.now() - 2 * 3600 * 1000;
     for (const [code, rec] of sharedCompletedMap.entries()) {
       const ms = extractCompletedMsFromRecord(rec);
-      if (ms > 0) {
-        const isToday = getCairoDateStringForMs(ms) === todayStr;
-        const isRecent2h = ms >= rolling2hCutoff;
-        if (!isToday && !isRecent2h) {
-          sharedCompletedMap.delete(code);
-        }
+      if (ms > 0 && ms < rolling2hCutoff) {
+        sharedCompletedMap.delete(code);
       }
     }
   }
@@ -899,16 +892,16 @@
         }
         completedNewestCachedMs = maxMs;
         const now = Date.now();
-        // If Firebase archive already has today's orders up to < 15m ago, skip full 2h sweep and delta-sync only the gap
+        // If Firebase 2h archive is already fresh (< 15m old), hydrate immediately and delta-sync only the gap
         if (sharedCompletedMap.size > 0 && maxMs > 0 && now - maxMs < 15 * 60 * 1000) {
-          completedLastSweepAt = now;
+          completedLastSweepAt = maxMs;
           runCompletedSmartDeltaSync(maxMs - 2 * 60 * 1000).catch(() => {});
         }
       }
     } catch {}
   }
 
-  // Pulls ONLY the missing gap from newestCachedMs up to now (instead of re-scanning all 2 hours after logout/reload)
+  // Pulls ONLY the missing gap from newestCachedMs up to now (fast startup after logout/login without full re-scan)
   async function runCompletedSmartDeltaSync(fromCutoffMs) {
     if (completedSyncing) return;
     completedSyncing = true;
@@ -937,8 +930,6 @@
         }
       }
       pruneOldCompletedRecords();
-      completedLastSweepAt = Date.now();
-      completedLastTailSyncAt = completedLastSweepAt;
       if (addedAny) {
         await saveSharedCompletedArchiveToFb();
         await pushImmediateCompletedPatchToSessions();
@@ -1249,6 +1240,7 @@
     return lastPage;
   }
 
+  // Every 15 minutes: drop old orders (> 2h) and add newly completed orders in the rolling 2-hour window
   async function runCompletedArchive15MinSweep() {
     if (completedSyncing) return;
     completedSyncing = true;
@@ -1267,6 +1259,7 @@
         lastKnownCompletedLastPage,
         {
           onFirstBatch: async (partialMap) => {
+            pruneOldCompletedRecords();
             for (const [code, rec] of partialMap.entries()) {
               if (doesCompletedRecordMatchUnionZones(rec)) {
                 sharedCompletedMap.set(code, rec);
@@ -1291,6 +1284,8 @@
         );
       }
 
+      // Replace with clean 2-hour window (removes anything > 2h and keeps all newly completed orders)
+      sharedCompletedMap.clear();
       for (const [code, rec] of freshMap.entries()) {
         if (doesCompletedRecordMatchUnionZones(rec)) {
           sharedCompletedMap.set(code, rec);
@@ -1298,79 +1293,11 @@
       }
       pruneOldCompletedRecords();
       completedLastSweepAt = Date.now();
-      completedLastTailSyncAt = completedLastSweepAt;
       await saveSharedCompletedArchiveToFb();
+      await pushImmediateCompletedPatchToSessions();
     } finally {
       completedSyncing = false;
     }
-  }
-
-  async function runCompletedTailQuickRefresh() {
-    if (completedSyncing) return;
-    const now = Date.now();
-    const cutoffMs = now - 2 * 3600 * 1000;
-    const todayStr = getCairoDateStringForMs(now);
-
-    try {
-      let pg = Math.max(1, lastKnownCompletedLastPage);
-      while (pg < 4000) {
-        const nextCheck = await fetchCompletedOrdersPageWithMeta(todayStr, pg + 1);
-        if (nextCheck.ok && nextCheck.records.length > 0) {
-          pg = pg + 1;
-          lastKnownCompletedLastPage = pg;
-          for (const r of nextCheck.records) {
-            const ord = r?.order || r || {};
-            const code = String(
-              ord.confirmation_number ||
-                ord.code ||
-                String(ord.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
-                ""
-            ).trim();
-            const compMs = extractCompletedMsFromRecord(r);
-            if (code && compMs >= cutoffMs && !sharedCompletedMap.has(code) && doesCompletedRecordMatchUnionZones(r)) {
-              sharedCompletedMap.set(code, { ...r, __completed_at_ms: compMs });
-            }
-          }
-          if (nextCheck.records.length < 50) break;
-        } else {
-          break;
-        }
-      }
-
-      const pagesToPull = Array.from(new Set([pg, Math.max(1, pg - 1)]));
-      const results = await Promise.all(
-        pagesToPull.map((p) => fetchCompletedOrdersPageWithMeta(todayStr, p))
-      );
-
-      let addedNew = false;
-      for (const res of results) {
-        if (!res.ok || !Array.isArray(res.records)) continue;
-        for (const r of res.records) {
-          const ord = r?.order || r || {};
-          const code = String(
-            ord.confirmation_number ||
-              ord.code ||
-              String(ord.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
-              ""
-          ).trim();
-          const compMs = extractCompletedMsFromRecord(r);
-          if (
-            code &&
-            compMs >= cutoffMs &&
-            !sharedCompletedMap.has(code) &&
-            doesCompletedRecordMatchUnionZones(r)
-          ) {
-            sharedCompletedMap.set(code, { ...r, __completed_at_ms: compMs });
-            addedNew = true;
-          }
-        }
-      }
-
-      completedLastTailSyncAt = Date.now();
-      if (addedNew) {
-        await saveSharedCompletedArchiveToFb();
-      }
-    } catch {}
   }
 
   // ============================================================================
@@ -1562,8 +1489,11 @@
                 record = buildCompletedRecordFromOrderDetail(det, null);
                 if (status === "completed" || status === "delivered") {
                   status = "completed";
-                  sharedCompletedMap.set(code, record);
-                  saveSharedCompletedArchiveToFb().catch(() => {});
+                  const ms = extractCompletedMsFromRecord(record);
+                  if (ms >= Date.now() - 2 * 3600 * 1000) {
+                    sharedCompletedMap.set(code, record);
+                    saveSharedCompletedArchiveToFb().catch(() => {});
+                  }
                 }
               }
             } catch {}
@@ -1708,20 +1638,10 @@
         return;
       }
 
+      // Rolling 2-hour Completed Archive: runs full refresh every 15 minutes (drops >2h old & adds new)
       await loadInitialSharedCompletedArchive();
-      if (completedLastSweepAt === 0) {
-        if (
-          sharedCompletedMap.size > 0 &&
-          completedNewestCachedMs >= now - 2 * 3600 * 1000
-        ) {
-          runCompletedSmartDeltaSync(completedNewestCachedMs - 2 * 60 * 1000).catch(() => {});
-        } else {
-          runCompletedArchive15MinSweep().catch(() => {});
-        }
-      } else if (now - completedLastSweepAt >= 15 * 60 * 1000) {
+      if (completedLastSweepAt === 0 || now - completedLastSweepAt >= 15 * 60 * 1000) {
         runCompletedArchive15MinSweep().catch(() => {});
-      } else if (now - completedLastTailSyncAt >= 20 * 1000) {
-        runCompletedTailQuickRefresh().catch(() => {});
       }
 
       const spQuery = buildStartingPointQueryParams(unionZoneIds);
