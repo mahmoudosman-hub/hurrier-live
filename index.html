@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v10.23 -->
+<!-- Hurrier Live Operations Dashboard v10.25 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v10.23</title>
+  <title>Hurrier Live Operations Dashboard v10.25</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,14 +38,14 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v10.23...
+      Loading Hurrier Live Operations Dashboard v10.25...
     </div>
   </div>
 
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
-    const APP_VERSION = "10.23";
+    const APP_VERSION = "10.25";
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
     const FIREBASE_PROJECT_ID = "hurrier-live";
     const FIREBASE_AUTH_DOMAIN = "hurrier-live.firebaseapp.com";
@@ -409,7 +409,6 @@
         .trim()
         .replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "")
         .trim();
-      // v10.11: Hurrier order ids can be long internal ids (up to 19-20 digits) — accept them all
       return /^\d{7,20}(-\d+)?$/.test(clean);
     }
 
@@ -462,15 +461,6 @@
       return `${sign}${absMins}min`;
     }
 
-    function formatDiffBetweenIsos(scheduledIso, estimatedIso) {
-      if (!scheduledIso || !estimatedIso) return "";
-      const s = new Date(scheduledIso).getTime();
-      const e = new Date(estimatedIso).getTime();
-      if (Number.isNaN(s) || Number.isNaN(e)) return "";
-      const diffMins = Math.round((s - e) / 60000);
-      return `${diffMins}min`;
-    }
-
     function formatReadableTimestamp(isoDate) {
       if (!isoDate) return "-";
       const d = new Date(isoDate);
@@ -504,17 +494,6 @@
         hour: "numeric",
         minute: "2-digit",
         second: "2-digit",
-        hour12: true
-      });
-    }
-
-    function formatShortEstTime(val) {
-      if (!val) return "-";
-      const d = typeof val === "number" ? new Date(val > 1e12 ? val : val * 1000) : new Date(val);
-      if (Number.isNaN(d.getTime())) return String(val);
-      return d.toLocaleTimeString("en-US", {
-        hour: "2-digit",
-        minute: "2-digit",
         hour12: true
       });
     }
@@ -797,7 +776,6 @@
         order.scheduled_dropoff_at || order.scheduled_drop_off_at || order.scheduled_pickup_at || "";
       const parsedDeadlineMs = deadlineIso ? new Date(deadlineIso).getTime() : NaN;
       const deadlineMs = Number.isNaN(parsedDeadlineMs) ? Number.MAX_SAFE_INTEGER : parsedDeadlineMs;
-      // v10.12: Always compute relative delay/countdown in minutes even for Preorders so delayed preorders show in red & count in Delayed
       const deadline = formatRelativeDeadline(deadlineIso, false);
 
       const rawStatus = String(rec?.status || order.status || tabName || "").toLowerCase();
@@ -957,11 +935,22 @@
           orderItem?.vo ||
           "-"
       );
-      const orderValue = formatPiastersMoney(
-        dOrder.order_value ?? dOrder.total ?? dOrder.subtotal ?? orderItem?.raw?.order?.order_value ?? orderItem?.raw?.order?.total
-      ) !== "-"
-        ? formatPiastersMoney(dOrder.order_value ?? dOrder.total ?? dOrder.subtotal ?? orderItem?.raw?.order?.order_value ?? orderItem?.raw?.order?.total)
-        : orderItem?.orderValue || "-";
+      const orderValue =
+        formatPiastersMoney(
+          dOrder.order_value ??
+            dOrder.total ??
+            dOrder.subtotal ??
+            orderItem?.raw?.order?.order_value ??
+            orderItem?.raw?.order?.total
+        ) !== "-"
+          ? formatPiastersMoney(
+              dOrder.order_value ??
+                dOrder.total ??
+                dOrder.subtotal ??
+                orderItem?.raw?.order?.order_value ??
+                orderItem?.raw?.order?.total
+            )
+          : orderItem?.orderValue || "-";
 
       const pickupObj = dOrder.pickup_address || orderItem?.raw?.order?.pickup_address || {};
       const pickupAddress =
@@ -1206,7 +1195,6 @@
       const timingObj = dOrder.timing || {};
       const primaryTimings = orderItem?.raw?.primary_delivery_timings || dOrder.timings || {};
 
-      // Manhattan distance (e.g. "2.67 KM")
       const dteObj = dOrder?.estimations?.distance_and_time_estimated_dte || {};
       const rawDistMeters = Number(
         dOrder.manhattan_distance ??
@@ -1225,7 +1213,6 @@
           ? String(orderItem.distance).toUpperCase()
           : "-";
 
-      // Prep duration (TES)
       let prepDuration = "-";
       const explicitPrepSec =
         dOrder?.detail?.prep_duration ??
@@ -1246,7 +1233,6 @@
         }
       }
 
-      // Courier delay
       let courierDelay = "-";
       const explicitCourierDelaySec =
         dOrder.estimated_courier_delay ??
@@ -1409,15 +1395,6 @@
         return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
       }
       return "";
-    }
-
-    function isFutureOrActiveTimestamp(rawVal) {
-      if (!rawVal) return false;
-      const s = String(rawVal).trim();
-      if (!s || s.startsWith("0001-01-01")) return false;
-      if (/^\d{1,2}:\d{2}(\s*[AP]M)?$/i.test(s)) return true;
-      const d = typeof rawVal === "number" ? new Date(rawVal > 1e12 ? rawVal : rawVal * 1000) : new Date(s);
-      return !Number.isNaN(d.getTime()) && d.getTime() > Date.now() - 60 * 1000;
     }
 
     function extractCourierStatusDetails(fetchedCourierEntry, knownMeta, isRefreshingLive = false) {
@@ -1658,7 +1635,6 @@
       const [completedCityFilter, setCompletedCityFilter] = useState("All Cities");
       const [completedZoneFilter, setCompletedZoneFilter] = useState("SELECTED_ZONES");
       const [completedSearchQuery, setCompletedSearchQuery] = useState("");
-      const completedSearchAnchorRef = useRef(0);
       const [completedPage, setCompletedPage] = useState(1);
       const [completedJumpPage, setCompletedJumpPage] = useState("");
       const [isCompletedLoading, setIsCompletedLoading] = useState(false);
@@ -1833,7 +1809,6 @@
         }
       };
 
-      // On-demand Courier Detail Fetching (Uses exact /courier/detail?courier_id=... + /balance)
       const fetchCourierDetailsOnDemand = useCallback(
         async (courierId, courierName, forceRefresh = false) => {
           const cid = String(courierId || "").trim();
@@ -2100,7 +2075,6 @@
         setIsZoneSetupConfirmed(false);
       }, []);
 
-      // Instant Firebase Shared 2h Completed Archive Hydration on Login/Reload (< 0.3s)
       useEffect(() => {
         if (authState !== "authorized" || !isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
         let cancelled = false;
@@ -2131,7 +2105,6 @@
         };
       }, [authState, isZoneSetupConfirmed, selectedZoneIds, dbFetch]);
 
-      // Send Live Session Heartbeat to Firebase (/active_sessions/{sessionId})
       useEffect(() => {
         if (authState !== "authorized" || !isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
         let cancelled = false;
@@ -2162,7 +2135,6 @@
         };
       }, [authState, isZoneSetupConfirmed, selectedZoneIds, sessionId, currentUser, employeeName, activeTab, dbFetch]);
 
-      // Fetch Session Bundle from Firebase (/session_bundles/{sessionId})
       const fetchMySessionBundleFromFirebase = useCallback(async () => {
         if (authState !== "authorized" || !isZoneSetupConfirmed || selectedZoneIds.length === 0) return;
         try {
@@ -2271,7 +2243,6 @@
         return () => clearInterval(timer);
       }, [authState, isZoneSetupConfirmed, selectedZoneIds, fetchMySessionBundleFromFirebase]);
 
-      // On-demand Order Detail Fetching (Per-Order Queue + Fast 300ms Polling & Auto-Retry)
       const hoverPrefetchTimerRef = useRef(null);
 
       const requestOrderDetailsFromBridge = useCallback(
@@ -2430,7 +2401,6 @@
         }
       }, []);
 
-      // Live Rider Search
       const triggerLiveRiderSearch = useCallback(
         async (rawQuery) => {
           const q = String(rawQuery || "").trim();
@@ -2467,7 +2437,6 @@
         [dbFetch]
       );
 
-      // Clipboard helper (safe inside iframes)
       const copyToClipboard = useCallback((key, text) => {
         const str = String(text || "");
         if (!str) return;
@@ -2650,6 +2619,65 @@
         [customCompletedDate, customFromTime, customToTime, sessionId, selectedZoneIds, dbFetch]
       );
 
+      const handleDirectCompletedLookup = useCallback(
+        async (rawCode) => {
+          const clean = String(rawCode || "")
+            .trim()
+            .replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "")
+            .trim();
+          if (!clean) return;
+          setDirectCompletedLookup({ query: clean, loading: true, status: "", orderItem: null });
+          try {
+            await dbFetch(`/config/completed_id_reqs/${encodeURIComponent(clean)}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ code: clean, requestedAt: Date.now() })
+            });
+
+            for (let attempt = 0; attempt < 18; attempt++) {
+              await new Promise((r) => setTimeout(r, 400));
+              const res = await dbFetch(`/session_bundles/comp_id_${encodeURIComponent(clean)}`);
+              if (res.ok) {
+                const data = await res.json();
+                if (data && data.code === clean) {
+                  if (data.found && data.record) {
+                    const mapped = mapHurrierCompletedRecord(data.record);
+                    setDirectCompletedLookup({
+                      query: clean,
+                      loading: false,
+                      status: data.status || mapped.orderStatus || "completed",
+                      orderItem: mapped
+                    });
+                  } else {
+                    setDirectCompletedLookup({
+                      query: clean,
+                      loading: false,
+                      status: "not_found",
+                      orderItem: null
+                    });
+                  }
+                  return;
+                }
+              }
+            }
+            setDirectCompletedLookup({
+              query: clean,
+              loading: false,
+              status: "not_found",
+              orderItem: null
+            });
+          } catch {
+            setDirectCompletedLookup({
+              query: clean,
+              loading: false,
+              status: "not_found",
+              orderItem: null
+            });
+          }
+        },
+        [dbFetch]
+      );
+
       const matchesZoneFilter = useCallback(
         (item) => {
           if (selectedZoneIds.length === 0) return true;
@@ -2676,8 +2704,6 @@
         [selectedZoneIds, selectedZoneNames]
       );
 
-      // v10.12: Collect parent order keys of all deliveries matching selected zones so split/multi-rider
-      // sibling rows (each with its own courier) are always retained together on the dashboard
       const zoneMatchedParentOrderKeys = useMemo(() => {
         const keys = new Set();
         deliveries.forEach((d) => {
@@ -2699,7 +2725,18 @@
         [matchesZoneFilter, zoneMatchedParentOrderKeys]
       );
 
-      // Base deliveries for active tab
+      const effectiveTabCounts = useMemo(() => {
+        const counts = { Queued: 0, Dispatched: 0, Active: 0 };
+        deliveries.forEach((d) => {
+          if (selectedCity !== "All Cities" && d.city !== selectedCity) return;
+          if (!matchesZoneFilterWithSiblings(d)) return;
+          if (counts[d.tabName] !== undefined) {
+            counts[d.tabName] += 1;
+          }
+        });
+        return counts;
+      }, [deliveries, selectedCity, matchesZoneFilterWithSiblings]);
+
       const baseTabDeliveries = useMemo(() => {
         return deliveries.filter((d) => {
           if (d.tabName !== activeTab) return false;
@@ -2708,7 +2745,6 @@
         });
       }, [deliveries, activeTab, selectedCity, matchesZoneFilterWithSiblings]);
 
-      // Status counts for current tab (for Status Filter Pills Bar)
       const tabStatusSummary = useMemo(() => {
         const counts = {};
         baseTabDeliveries.forEach((d) => {
@@ -2789,264 +2825,67 @@
             cleanDigits.length >= 3 && cUserId && cUserId.includes(cleanDigits);
 
           return (
-            String(d.id || "").toLowerCase().includes(q) ||
-            String(d.orderCode || "").toLowerCase().includes(q) ||
-            String(d.vo || "").toLowerCase().includes(q) ||
-            String(d.vendor || "").toLowerCase().includes(q) ||
-            String(d.courier || "").toLowerCase().includes(q) ||
-            String(d.courierId || "").toLowerCase().includes(q) ||
-            String(d.zone || "").toLowerCase().includes(q) ||
             phoneMatched ||
-            userIdMatched
+            userIdMatched ||
+            d.id.toLowerCase().includes(q) ||
+            String(d.orderId || "").toLowerCase().includes(q) ||
+            d.vo.toLowerCase().includes(q) ||
+            d.vendor.toLowerCase().includes(q) ||
+            d.courier.toLowerCase().includes(q) ||
+            String(d.courierId || "").includes(cleanDigits) ||
+            d.zone.toLowerCase().includes(q) ||
+            d.status.toLowerCase().includes(q)
           );
         });
 
         if (orderSortMode === "live_first") {
-          const recentCutoff = Date.now() - 18 * 3600 * 1000;
-          return [...list].sort((a, b) => {
-            const aRecent = a.placedMs >= recentCutoff ? 1 : 0;
-            const bRecent = b.placedMs >= recentCutoff ? 1 : 0;
-            if (aRecent !== bRecent) return bRecent - aRecent;
-            return (a.deadlineMs || 0) - (b.deadlineMs || 0);
-          });
+          return [...list].sort((a, b) => (b.placedMs || 0) - (a.placedMs || 0));
         }
-
-        return list;
+        return [...list].sort((a, b) => (a.deadlineMs || 0) - (b.deadlineMs || 0));
       }, [
         baseTabDeliveries,
         activeQuickFilter,
-        activeStatusFilter,
         selectedMartBranch,
+        activeStatusFilter,
         searchQuery,
         knownCouriersMeta,
         orderSortMode
       ]);
 
-      const effectiveTabCounts = useMemo(() => {
-        const counts = {
-          Queued: 0,
-          Dispatched: 0,
-          Active: 0
-        };
-        deliveries.forEach((d) => {
-          if (selectedCity !== "All Cities" && d.city !== selectedCity) return;
-          if (!matchesZoneFilterWithSiblings(d)) return;
-          if (counts[d.tabName] !== undefined) {
-            counts[d.tabName] += 1;
-          }
-        });
-        if (selectedCity === "All Cities" && deliveries.length === 0 && tabCounts) {
-          if (tabCounts.Queued !== undefined) counts.Queued = tabCounts.Queued;
-          if (tabCounts.Dispatched !== undefined) counts.Dispatched = tabCounts.Dispatched;
-          if (tabCounts.Active !== undefined) counts.Active = tabCounts.Active;
-        }
-        return counts;
-      }, [deliveries, selectedCity, matchesZoneFilterWithSiblings, tabCounts]);
+      const matchedZoneCouriers = useMemo(() => {
+        const rawQ = searchQuery.trim();
+        if (!rawQ) return [];
+        const qLower = rawQ.toLowerCase();
+        const qPhone = normalizePhoneDigits(rawQ);
+        const cleanDigits = rawQ.replace(/^#/, "");
+        const zoneSet = new Set(selectedZoneIds.map(Number));
 
-      useEffect(() => {
-        if (completedSearchQuery.trim()) {
-          if (!completedSearchAnchorRef.current) {
-            completedSearchAnchorRef.current = Date.now();
-          }
-        } else {
-          completedSearchAnchorRef.current = 0;
-        }
-      }, [completedSearchQuery]);
-
-      const baseVisibleCompletedOrders = useMemo(() => {
-        const sourceOrders =
-          completedFilterMode === "custom" ? customRangeOrders : completedOrders;
-        const windowMs = Number(completedHoursWindow || 2) * 3600 * 1000;
-        const q = completedSearchQuery.trim().toLowerCase();
-        const isSearching = q.length > 0;
-        const anchorNow =
-          isSearching && completedSearchAnchorRef.current > 0
-            ? completedSearchAnchorRef.current
-            : Date.now();
-        const graceMs = isSearching ? 15 * 60 * 1000 : 0;
-        const cutoffMs = anchorNow - windowMs - graceMs;
-
-        const enriched = sourceOrders.map((item) => {
-          // v10.10: rich search blob — order id/code/VO, courier name + rider ID + user_id + phone,
-          // vendor + vendor code, city & zone names — so searching a Rider ID or phone actually matches
-          if (!item.__searchBlob || item.__blobMeta !== knownCouriersMeta) {
-            const cMeta = item.courierId ? knownCouriersMeta[item.courierId] : null;
-            const cPhone = String(cMeta?.phone || "");
-            let blob = [
-              item.id,
-              item.orderCode,
-              item.vo,
-              item.courier,
-              item.courierId,
-              cMeta?.userId,
-              cMeta?.phone,
-              item.vendor,
-              item.vendorCode,
-              item.city,
-              item.raw?.order?.id,
-              item.raw?.id,
-              ...(item.zonesList || [])
-            ]
-              .filter(Boolean)
-              .join(" ")
-              .toLowerCase();
-            const pDigits = cPhone.replace(/\D/g, "");
-            if (pDigits) blob += ` ${pDigits} ${pDigits.replace(/^20/, "")}`;
-            item.__searchBlob = blob;
-            item.__blobMeta = knownCouriersMeta;
-          }
-          const cachedDet = orderDetailsCache[item.id]?.detail?.order || orderDetailsCache[item.id]?.detail;
-          const exactIso = cachedDet?.current_state_transition;
-          if (exactIso) {
-            const exactMs = new Date(exactIso).getTime();
-            if (!Number.isNaN(exactMs) && exactMs > 946684800000 && exactMs !== item.completedTimestamp) {
-              return {
-                ...item,
-                completedTimestamp: exactMs,
-                completedAtFormatted: formatExactTimeSeconds(exactMs)
-              };
-            }
-          }
-          return item;
-        });
-
-        const filtered = enriched.filter((item) => {
-          if (item.orderStatus && item.orderStatus.includes("cancel")) return false;
-          if (completedFilterMode === "rolling") {
-            if (!item.completedTimestamp || item.completedTimestamp < cutoffMs) return false;
-          }
-
-          if (completedCityFilter !== "All Cities" && item.city !== completedCityFilter) {
+        const seen = new Set();
+        return activeCouriersList.filter((c) => {
+          const cid = String(c.id || c.courier_id || "");
+          if (!cid || seen.has(cid)) return false;
+          if (zoneSet.size > 0 && c.starting_point_id && !zoneSet.has(Number(c.starting_point_id))) {
             return false;
           }
+          const uid = String(c.user_id || "");
+          const name = normalizeText(c.name || c.courier_name || "").toLowerCase();
+          const cPhone = normalizePhoneDigits(c.phone_number || "");
 
-          if (completedZoneFilter === "SELECTED_ZONES") {
-            if (!matchesZoneFilter(item)) return false;
-          } else if (completedZoneFilter !== "ALL") {
-            const targetZ = normalizeText(completedZoneFilter).toLowerCase();
-            const itemZs = (item.zonesList || []).map((z) => normalizeText(z).toLowerCase());
-            if (!itemZs.some((z) => z === targetZ || z.includes(targetZ))) return false;
+          const phoneMatch =
+            (qPhone.core10 && cPhone.core10 === qPhone.core10) ||
+            (qPhone.rawDigits.length >= 7 && cPhone.rawDigits.includes(qPhone.rawDigits));
+          const idMatch =
+            (uid && (uid === cleanDigits || (cleanDigits.length >= 4 && uid.includes(cleanDigits)))) ||
+            (cid && cid === cleanDigits);
+          const nameMatch = name && !/^\d+$/.test(cleanDigits) && name.includes(qLower);
+
+          if (phoneMatch || idMatch || nameMatch) {
+            seen.add(cid);
+            return true;
           }
-
-          if (!q) return true;
-          return String(item.__searchBlob || "").includes(q);
+          return false;
         });
-
-        return filtered.sort((a, b) =>
-          completedSortAsc
-            ? a.completedTimestamp - b.completedTimestamp
-            : b.completedTimestamp - a.completedTimestamp
-        );
-      }, [
-        completedFilterMode,
-        customRangeOrders,
-        completedOrders,
-        orderDetailsCache,
-        completedHoursWindow,
-        completedCityFilter,
-        completedZoneFilter,
-        completedSearchQuery,
-        completedSortAsc,
-        matchesZoneFilter,
-        knownCouriersMeta
-      ]);
-
-      // Instant Direct Order ID Lookup when searching for an Order ID not in local window
-      useEffect(() => {
-        if (activeTab !== "Completed") return;
-        const rawQ = completedSearchQuery.trim();
-        if (!rawQ || !isExactOrderIdPattern(rawQ)) {
-          setDirectCompletedLookup({ query: "", loading: false, status: "", orderItem: null });
-          return;
-        }
-        const cleanCode = rawQ.replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "").trim();
-        if (baseVisibleCompletedOrders.some((o) => String(o.id) === cleanCode)) {
-          setDirectCompletedLookup({ query: cleanCode, loading: false, status: "local", orderItem: null });
-          return;
-        }
-
-        let cancelled = false;
-        const timer = setTimeout(async () => {
-          setDirectCompletedLookup({ query: cleanCode, loading: true, status: "", orderItem: null });
-          try {
-            const reqAt = Date.now();
-            await dbFetch(`/config/completed_id_reqs/${encodeURIComponent(cleanCode)}`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ code: cleanCode, requestedAt: reqAt })
-            });
-
-            for (let attempt = 0; attempt < 15; attempt++) {
-              if (cancelled) return;
-              await new Promise((r) => setTimeout(r, 500));
-              if (cancelled) return;
-              const res = await dbFetch(`/session_bundles/comp_id_${encodeURIComponent(cleanCode)}`);
-              if (res.ok) {
-                const data = await res.json();
-                if (data && data.code === cleanCode && Number(data.updatedAt || 0) >= reqAt - 3000) {
-                  if (!data.found) {
-                    setDirectCompletedLookup({
-                      query: cleanCode,
-                      loading: false,
-                      // v10.10: pass through "not_found" vs "lookup_error" honestly
-                      status: String(data.status || "not_found"),
-                      orderItem: null
-                    });
-                  } else {
-                    const mappedItem = data.record ? mapHurrierCompletedRecord(data.record) : null;
-                    setDirectCompletedLookup({
-                      query: cleanCode,
-                      loading: false,
-                      status: String(data.status || "completed"),
-                      orderItem: mappedItem
-                    });
-                  }
-                  return;
-                }
-              }
-            }
-            if (!cancelled) {
-              setDirectCompletedLookup((prev) => ({ ...prev, loading: false }));
-            }
-          } catch {
-            if (!cancelled) {
-              setDirectCompletedLookup((prev) => ({ ...prev, loading: false }));
-            }
-          }
-        }, 350);
-
-        return () => {
-          cancelled = true;
-          clearTimeout(timer);
-        };
-      }, [activeTab, completedSearchQuery, baseVisibleCompletedOrders, dbFetch]);
-
-      const visibleCompletedOrders = useMemo(() => {
-        if (
-          directCompletedLookup.orderItem &&
-          directCompletedLookup.status === "completed" &&
-          !baseVisibleCompletedOrders.some((o) => String(o.id) === String(directCompletedLookup.orderItem.id))
-        ) {
-          return [directCompletedLookup.orderItem, ...baseVisibleCompletedOrders];
-        }
-        return baseVisibleCompletedOrders;
-      }, [baseVisibleCompletedOrders, directCompletedLookup]);
-
-      const completedTotalPages = Math.max(1, Math.ceil(visibleCompletedOrders.length / 50));
-      const paginatedCompletedOrders = useMemo(() => {
-        const safeP = Math.min(completedPage, completedTotalPages);
-        const start = (safeP - 1) * 50;
-        return visibleCompletedOrders.slice(start, start + 50);
-      }, [visibleCompletedOrders, completedPage, completedTotalPages]);
-
-      const completedVisiblePages = useMemo(() => {
-        if (completedTotalPages <= 7) return Array.from({ length: completedTotalPages }, (_, i) => i + 1);
-        if (completedPage <= 4) return [1, 2, 3, 4, 5, "...", completedTotalPages];
-        if (completedPage >= completedTotalPages - 3) {
-          return [1, "...", completedTotalPages - 4, completedTotalPages - 3, completedTotalPages - 2, completedTotalPages - 1, completedTotalPages];
-        }
-        return [1, "...", completedPage - 1, completedPage, completedPage + 1, "...", completedTotalPages];
-      }, [completedPage, completedTotalPages]);
+      }, [searchQuery, activeCouriersList, selectedZoneIds]);
 
       const selectedOrderFullView = useMemo(() => {
         if (!selectedOrder) return null;
@@ -3056,861 +2895,502 @@
       const selectedCourierFullView = useMemo(() => {
         if (!selectedCourier) return null;
         const cid = String(selectedCourier.id || "");
-        const cleanSelName = normalizeText(selectedCourier.name || "").toLowerCase();
-        const metaById =
-          knownCouriersMeta[cid] ||
-          Object.values(knownCouriersMeta).find((m) => String(m?.userId || "") === cid) ||
-          (cleanSelName
-            ? Object.values(knownCouriersMeta).find(
-                (m) => m?.name && normalizeText(m.name).toLowerCase() === cleanSelName
-              )
-            : null);
-        const realCid = metaById?.courierId || cid;
         return buildFullCourierView(
-          { id: realCid, name: selectedCourier.name },
-          courierDetailsCache[cid] || courierDetailsCache[realCid],
-          metaById,
+          selectedCourier,
+          courierDetailsCache[cid],
+          knownCouriersMeta[cid],
           isCourierModalRefreshing
         );
       }, [selectedCourier, courierDetailsCache, knownCouriersMeta, isCourierModalRefreshing]);
 
-      // Instant Matched Riders in Selected Zones (Matches User ID, Courier ID, Phone, or Name across ALL statuses)
-      const matchedZoneCouriers = useMemo(() => {
-        const rawQ = searchQuery.trim();
-        if (rawQ.length < 3) return [];
-        const qLower = rawQ.toLowerCase();
-        const qPhone = normalizePhoneDigits(rawQ);
-        const cleanDigits = rawQ.replace(/^#/, "");
+      const handlePageChange = useCallback((p) => {
+        setCurrentPage(p);
+        if (mainContainerRef.current) {
+          mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
+        }
+      }, []);
 
-        return activeCouriersList.filter((c) => {
-          if (!c.user_id && !c.phone_number && !c.status) return false;
-          const uid = String(c.user_id || "");
-          const cid = String(c.id || c.courier_id || "");
-          const nameLower = normalizeText(c.name || c.courier_name || "").toLowerCase();
-          const cPhone = normalizePhoneDigits(c.phone_number || "");
-
-          if (uid && (uid === cleanDigits || (cleanDigits.length >= 4 && uid.includes(cleanDigits)))) {
-            return true;
-          }
-          if (cid && cid === cleanDigits) {
-            return true;
-          }
-          if (
-            (qPhone.core10 && cPhone.core10 === qPhone.core10) ||
-            (qPhone.rawDigits.length >= 7 && cPhone.rawDigits.includes(qPhone.rawDigits))
-          ) {
-            return true;
-          }
-          if (nameLower && !/^\d+$/.test(cleanDigits) && nameLower.includes(qLower)) {
-            return true;
-          }
-          return false;
-        });
-      }, [searchQuery, activeCouriersList]);
-
-      // --- RENDERERS FOR SPECIAL TABS ---
       const renderDashboardView = () => {
-        const queuedCnt = effectiveTabCounts["Queued"] || 0;
-        const dispCnt = effectiveTabCounts["Dispatched"] || 0;
-        const activeCnt = effectiveTabCounts["Active"] || 0;
-        const delayedCnt = deliveries.filter(
-          (d) => matchesZoneFilterWithSiblings(d) && (d.deadline.includes("-") || d.deadline === "Late")
+        const delayedCount = deliveries.filter(
+          (d) =>
+            matchesZoneFilterWithSiblings(d) &&
+            (d.deadline.includes("-") || d.deadline === "Late")
         ).length;
-
-        const matchingZonesStats = zoneStatsSnapshot.filter((zs) => {
-          const zName = normalizeText(zs.name).toLowerCase();
-          return selectedZoneIds.includes(Number(zs.id)) || selectedZoneNames.includes(zName);
-        });
+        const zoneSet = new Set(selectedZoneIds.map(Number));
+        const selectedStats = zoneStatsSnapshot.filter((z) => zoneSet.has(Number(z.id)));
 
         return (
-          <div className="mt-4 space-y-5">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div
-                onClick={() => {
-                  setActiveTab("Queued");
-                  setActiveStatusFilter("All");
-                }}
-                className="p-4 rounded-xl bg-amber-50/70 border border-amber-200 cursor-pointer hover:shadow-sm"
-              >
-                <div className="text-xs font-bold text-amber-800 uppercase">Queued</div>
-                <div className="text-2xl font-extrabold text-amber-900 mt-1">{queuedCnt}</div>
-              </div>
-              <div
-                onClick={() => {
-                  setActiveTab("Dispatched");
-                  setActiveStatusFilter("All");
-                }}
-                className="p-4 rounded-xl bg-blue-50/70 border border-blue-200 cursor-pointer hover:shadow-sm"
-              >
-                <div className="text-xs font-bold text-blue-800 uppercase">Dispatched</div>
-                <div className="text-2xl font-extrabold text-blue-900 mt-1">{dispCnt}</div>
-              </div>
-              <div
-                onClick={() => {
-                  setActiveTab("Active");
-                  setActiveStatusFilter("All");
-                }}
-                className="p-4 rounded-xl bg-emerald-50/70 border border-emerald-200 cursor-pointer hover:shadow-sm"
-              >
-                <div className="text-xs font-bold text-emerald-800 uppercase">Active</div>
-                <div className="text-2xl font-extrabold text-emerald-900 mt-1">{activeCnt}</div>
-              </div>
-              <div
-                onClick={() => {
-                  setActiveTab("Active");
-                  setActiveQuickFilter("Delayed");
-                  setActiveStatusFilter("All");
-                }}
-                className="p-4 rounded-xl bg-red-50/70 border border-red-200 cursor-pointer hover:shadow-sm"
-              >
-                <div className="text-xs font-bold text-red-800 uppercase">Delayed Orders</div>
-                <div className="text-2xl font-extrabold text-red-900 mt-1">{delayedCnt}</div>
-              </div>
+          <div className="space-y-5 pt-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {[
+                { label: "Queued", val: effectiveTabCounts.Queued || 0, color: "text-slate-800", bg: "bg-slate-50 border-slate-200", tab: "Queued" },
+                { label: "Dispatched", val: effectiveTabCounts.Dispatched || 0, color: "text-blue-700", bg: "bg-blue-50/70 border-blue-200", tab: "Dispatched" },
+                { label: "Active", val: effectiveTabCounts.Active || 0, color: "text-emerald-700", bg: "bg-emerald-50/70 border-emerald-200", tab: "Active" },
+                { label: "Delayed Now", val: delayedCount, color: "text-red-700", bg: "bg-red-50/70 border-red-200", tab: "Active" },
+                { label: "Completed (2h)", val: completedOrders.length, color: "text-indigo-700", bg: "bg-indigo-50/70 border-indigo-200", tab: "Completed" },
+                { label: "Active Couriers", val: activeCouriersList.length, color: "text-teal-700", bg: "bg-teal-50/70 border-teal-200", tab: "Active Couriers" }
+              ].map((kpi) => (
+                <button
+                  key={kpi.label}
+                  type="button"
+                  onClick={() => {
+                    setActiveTab(kpi.tab);
+                    if (kpi.label === "Delayed Now") setActiveQuickFilter("Delayed");
+                  }}
+                  className={`p-4 rounded-xl border text-left transition-all hover:shadow-sm ${kpi.bg}`}
+                >
+                  <div className="text-xs font-bold text-gray-500">{kpi.label}</div>
+                  <div className={`text-2xl font-extrabold mt-1 ${kpi.color}`}>{kpi.val}</div>
+                </button>
+              ))}
             </div>
 
-            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 font-bold text-sm text-gray-900">
-                Zone-by-Zone Live Breakdown ({matchingZonesStats.length} Zones)
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs whitespace-nowrap">
-                  <thead>
-                    <tr className="border-b border-gray-200 text-gray-500 font-bold uppercase bg-gray-50/60">
-                      <th className="py-3 px-4">STARTING POINT / ZONE</th>
-                      <th className="py-3 px-3">QUEUED</th>
-                      <th className="py-3 px-3">DISP</th>
-                      <th className="py-3 px-3">ACTIVE</th>
-                      <th className="py-3 px-3">WORKING RIDERS</th>
-                      <th className="py-3 px-3">ENDING</th>
-                      <th className="py-3 px-3">BREAK</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {matchingZonesStats.length === 0 ? (
-                      <tr>
-                        <td colSpan={7} className="py-8 text-center text-gray-500">
-                          جاري تحميل إحصائيات الزونات المختارة...
-                        </td>
-                      </tr>
-                    ) : (
-                      matchingZonesStats.map((zs) => {
-                        const st = zs.stat || {};
-                        return (
-                          <tr key={zs.id || zs.name} className="hover:bg-blue-50/30">
-                            <td className="py-3 px-4 font-bold text-gray-900">{zs.name}</td>
-                            <td className="py-3 px-3 font-mono">{st.queued_count ?? 0}</td>
-                            <td className="py-3 px-3 font-mono">{st.dispatched_count ?? 0}</td>
-                            <td className="py-3 px-3 font-mono font-bold text-blue-700">{st.active_count ?? 0}</td>
-                            <td className="py-3 px-3 font-mono font-bold text-emerald-700">{st.couriers_in_working ?? 0}</td>
-                            <td className="py-3 px-3 font-mono text-orange-700">{st.couriers_in_ending ?? 0}</td>
-                            <td className="py-3 px-3 font-mono text-gray-600">{st.couriers_in_break ?? 0}</td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5 shadow-sm space-y-3">
+              <h3 className="text-base font-bold text-gray-900">
+                Selected Starting Points Performance ({selectedStats.length})
+              </h3>
+              {selectedStats.length === 0 ? (
+                <div className="text-xs text-gray-500 py-4">
+                  جاري تحميل إحصائيات الزونات من Hurrier...
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {selectedStats.map((zs) => {
+                    const st = zs.stat || {};
+                    return (
+                      <div key={zs.id} className="p-3.5 rounded-xl border border-gray-200 bg-gray-50/50 space-y-2 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-gray-900 truncate">{zs.name}</span>
+                          <span
+                            className={`px-2 py-0.5 rounded font-bold ${
+                              zs.delay >= 15
+                                ? "bg-red-100 text-red-700"
+                                : zs.delay >= 8
+                                ? "bg-amber-100 text-amber-800"
+                                : "bg-emerald-100 text-emerald-700"
+                            }`}
+                          >
+                            Delay: {zs.delay}m
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center pt-1">
+                          <div className="p-1.5 rounded bg-white border border-gray-200">
+                            <div className="text-[10px] text-gray-400">Queued</div>
+                            <div className="font-bold text-gray-800">{st.queued_count ?? 0}</div>
+                          </div>
+                          <div className="p-1.5 rounded bg-white border border-gray-200">
+                            <div className="text-[10px] text-gray-400">Dispatched</div>
+                            <div className="font-bold text-blue-700">{st.dispatched_count ?? 0}</div>
+                          </div>
+                          <div className="p-1.5 rounded bg-white border border-gray-200">
+                            <div className="text-[10px] text-gray-400">Active</div>
+                            <div className="font-bold text-emerald-700">{st.active_count ?? 0}</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-gray-500 pt-1">
+                          <span>Working: <strong className="text-gray-800">{st.couriers_in_working ?? 0}</strong></span>
+                          <span>Break: <strong className="text-amber-700">{(st.couriers_in_break ?? 0) + (st.couriers_in_temp_break ?? 0)}</strong></span>
+                          <span>Ending: <strong className="text-gray-800">{st.couriers_in_ending ?? 0}</strong></span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         );
       };
 
       const renderActiveCouriersView = () => {
-        const rawQ = searchQuery.trim();
-        const qLower = rawQ.toLowerCase();
-        const qPhone = normalizePhoneDigits(rawQ);
-        const cleanDigits = rawQ.replace(/^#/, "");
+        const q = searchQuery.trim().toLowerCase();
+        const zoneMap = new Map();
+        effectiveZonesCatalog.forEach((z) => zoneMap.set(Number(z.id), z.name));
 
-        const doesCourierMatchQuery = (c) => {
-          if (!rawQ) return true;
-          const uid = String(c.user_id || "");
-          const cid = String(c.id || c.courier_id || "");
-          const name = normalizeText(c.name || c.courier_name || "").toLowerCase();
-          const cPhone = normalizePhoneDigits(c.phone_number || "");
-          if (uid && uid.includes(cleanDigits)) return true;
-          if (cid && cid.includes(cleanDigits)) return true;
-          if (
-            (qPhone.core10 && cPhone.core10 === qPhone.core10) ||
-            (qPhone.rawDigits.length >= 6 && cPhone.rawDigits.includes(qPhone.rawDigits))
-          ) {
-            return true;
-          }
-          if (name && name.includes(qLower)) return true;
-          return false;
-        };
-
-        const idSet = new Set(selectedZoneIds.map(Number));
-        const byId = new Map();
-
-        zoneStatsSnapshot.forEach((zs) => {
-          const zid = Number(zs.id);
-          const zName = normalizeText(zs.name).toLowerCase();
-          if (
-            selectedCity !== "All Cities" &&
-            zs.city &&
-            normalizeHurrierCity(zs.city, [zs.name]) !== selectedCity
-          ) {
-            return;
-          }
-          if (idSet.has(zid) || selectedZoneNames.includes(zName)) {
-            byId.set(zid, zs);
-          }
+        const filteredCouriers = activeCouriersList.filter((c) => {
+          if (!q) return true;
+          return (
+            String(c.name || "").toLowerCase().includes(q) ||
+            String(c.id || "").includes(q) ||
+            String(c.user_id || "").includes(q) ||
+            String(c.phone_number || "").includes(q) ||
+            String(c.status || "").toLowerCase().includes(q)
+          );
         });
 
-        effectiveZonesCatalog.forEach((catZ) => {
-          const zid = Number(catZ.id);
-          if (!idSet.has(zid) || byId.has(zid)) return;
-          if (
-            selectedCity !== "All Cities" &&
-            catZ.city &&
-            normalizeHurrierCity(catZ.city, [catZ.name]) !== selectedCity
-          ) {
-            return;
-          }
-          byId.set(zid, {
-            id: zid,
-            name: catZ.name,
-            city: catZ.city || "Cairo",
-            delay: 0,
-            stat: {}
-          });
+        const grouped = new Map();
+        filteredCouriers.forEach((c) => {
+          const zid = Number(c.starting_point_id || 0);
+          if (!grouped.has(zid)) grouped.set(zid, []);
+          grouped.get(zid).push(c);
         });
-
-        const matchingZonesStats = Array.from(byId.values()).sort((a, b) => {
-          const delayDiff = Number(b.delay || 0) - Number(a.delay || 0);
-          if (Math.abs(delayDiff) > 0.001) return delayDiff;
-          return normalizeText(a.name).localeCompare(normalizeText(b.name));
-        });
-
-        const toggleZoneExpand = (zid) => {
-          setCollapsedCourierZoneIds((prev) => {
-            const next = new Set(prev);
-            if (next.has(zid)) next.delete(zid);
-            else next.add(zid);
-            return next;
-          });
-        };
-
-        const vehicleOrderWeight = (vName) => {
-          const vl = String(vName || "").toLowerCase();
-          if (vl === "bike") return 1;
-          if (vl.includes("bicycle")) return 2;
-          if (vl.includes("e-bike") || vl.includes("ebike")) return 3;
-          if (vl.includes("car")) return 4;
-          if (vl.includes("walker")) return 5;
-          return 6;
-        };
-
-        const classifyHurrierBucket = (rawSt) => {
-          const s = String(rawSt || "working").toLowerCase();
-          if (s === "break" || s.includes("temp") || s === "not_working") return "Break";
-          if (s === "late") return "Late";
-          if (s === "ending") return "Ending";
-          if (s === "ready" || s === "starting") return "Starting";
-          return "Working";
-        };
-
-        const STATUS_ROWS_META = [
-          { key: "Break", label: "Break:", showTime: true, pillBg: "bg-[#6e6e6e] hover:bg-[#585858]" },
-          { key: "Late", label: "Late:", showTime: true, pillBg: "bg-[#db4437] hover:bg-[#c5372b]" },
-          { key: "Working", label: "Working:", showTime: false, pillBg: "bg-[#4caf50] hover:bg-[#3f9c43]" },
-          { key: "Ending", label: "Ending:", showTime: true, pillBg: "bg-[#6e6e6e] hover:bg-[#585858]" },
-          { key: "Starting", label: "Starting:", showTime: true, pillBg: "bg-[#db4437] hover:bg-[#c5372b]" }
-        ];
 
         return (
-          <div className="mt-4 space-y-4">
-            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm divide-y divide-gray-200">
-              {matchingZonesStats.length === 0 ? (
-                <div className="py-12 text-center text-gray-500 text-sm">
-                  جاري تحميل حالة جميع المناديب للزونات المختارة...
-                </div>
-              ) : (
-                matchingZonesStats.map((zs) => {
-                  const st = zs.stat || {};
-
-                  const allZoneCouriers = activeCouriersList.filter(
-                    (c) => Number(c.starting_point_id) === Number(zs.id)
-                  );
-
-                  const filteredZoneCouriers = rawQ
-                    ? allZoneCouriers.filter(doesCourierMatchQuery)
-                    : allZoneCouriers;
-
-                  if (rawQ && filteredZoneCouriers.length === 0) {
-                    return null;
-                  }
-
-                  const activeOrdCnt = (st.active_count ?? 0) + (st.dispatched_count ?? 0);
-                  const workingAndEndingCnt =
-                    (st.couriers_in_working ?? 0) + (st.couriers_in_ending ?? 0);
-                  const queuedOrdCnt = st.queued_count ?? 0;
-                  const delayMins =
-                    zs.delay !== undefined ? zs.delay : Math.round(Number(st.delay || 0) * 10) / 10;
-
-                  const isExpanded = Boolean(rawQ) || !collapsedCourierZoneIds.has(zs.id);
-
-                  const byVehicleMap = new Map();
-                  filteredZoneCouriers.forEach((c) => {
-                    const vName = normalizeText(c.vehicle_type || "Bike") || "Bike";
-                    if (!byVehicleMap.has(vName)) byVehicleMap.set(vName, []);
-                    byVehicleMap.get(vName).push(c);
-                  });
-                  const sortedVehicleGroups = Array.from(byVehicleMap.entries()).sort(
-                    (a, b) => vehicleOrderWeight(a[0]) - vehicleOrderWeight(b[0])
-                  );
-
-                  return (
-                    <div key={zs.id || zs.name} className="bg-white">
-                      <button
-                        type="button"
-                        onClick={() => toggleZoneExpand(zs.id)}
-                        className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50/80 transition-colors text-left"
-                      >
-                        <div className="flex flex-wrap items-center gap-1.5 text-[15px]">
-                          <span className="font-bold text-gray-900">{zs.name}</span>
-                          <span className="font-semibold text-gray-900">
-                            ({activeOrdCnt} / {workingAndEndingCnt} /{" "}
-                            <span className="text-gray-400">{queuedOrdCnt}</span>)
-                          </span>
-                          <span className="font-bold text-[#a9382b] ml-1">{delayMins}m</span>
-                        </div>
-                        <span className="text-gray-400 text-xs font-bold">
-                          {isExpanded ? "▲" : "▼"}
-                        </span>
-                      </button>
-
-                      {isExpanded && (
-                        <div className="px-6 pb-5 pt-1 bg-white space-y-5">
-                          {sortedVehicleGroups.length === 0 ? (
-                            <div className="text-[13px] text-gray-500 py-2 pl-2">
-                              No data
-                            </div>
-                          ) : (
-                            sortedVehicleGroups.map(([vName, vCouriers]) => {
-                              const buckets = {
-                                Break: [],
-                                Late: [],
-                                Working: [],
-                                Ending: [],
-                                Starting: []
-                              };
-                              vCouriers.forEach((c) => {
-                                buckets[classifyHurrierBucket(c.status)].push(c);
-                              });
-                              Object.values(buckets).forEach((arr) =>
-                                arr.sort((a, b) =>
-                                  normalizeText(a.name).localeCompare(normalizeText(b.name))
-                                )
-                              );
-
-                              return (
-                                <div key={`${zs.id}-${vName}`} className="space-y-2.5">
-                                  <div className="flex items-center gap-1.5 text-[13px] font-semibold text-gray-800">
-                                    <span>{vName.toLowerCase().includes("car") ? "🚗" : "🚴"}</span>
-                                    <span>{vName}</span>
-                                  </div>
-
-                                  <div className="space-y-2.5 pl-1">
-                                    {STATUS_ROWS_META.map((rowMeta) => {
-                                      const list = buckets[rowMeta.key] || [];
-                                      if (list.length === 0) return null;
-
-                                      if (!rowMeta.showTime) {
-                                        return (
-                                          <div key={rowMeta.key} className="space-y-1.5">
-                                            <div className="text-[13px] text-gray-800">
-                                              {rowMeta.label}
-                                            </div>
-                                            <div className="flex flex-wrap items-center gap-2">
-                                              {list.map((c, idx) => {
-                                                const cid = String(c.id || c.courier_id || idx);
-                                                const cName = normalizeText(
-                                                  c.name || c.courier_name || `Courier #${cid}`
-                                                );
-                                                const ordCnt = Number(c.active_orders_count ?? 0);
-                                                return (
-                                                  <button
-                                                    key={`${zs.id}-${cid}`}
-                                                    type="button"
-                                                    onMouseEnter={() => handleCourierHover(cid, cName)}
-                                                    onClick={(e) => openCourierModal(e, cid, cName)}
-                                                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-white text-[12px] font-medium transition-colors shadow-sm ${rowMeta.pillBg}`}
-                                                  >
-                                                    <span>{cName}</span>
-                                                    <span
-                                                      className={`font-bold ${
-                                                        ordCnt > 0 ? "text-[#ffeb3b]" : "text-white"
-                                                      }`}
-                                                    >
-                                                      {ordCnt}
-                                                    </span>
-                                                  </button>
-                                                );
-                                              })}
-                                            </div>
-                                          </div>
-                                        );
-                                      }
-
-                                      return (
-                                        <div
-                                          key={rowMeta.key}
-                                          className="flex flex-wrap items-center gap-x-2.5 gap-y-2 text-[13px]"
-                                        >
-                                          <span className="text-gray-800">{rowMeta.label}</span>
-                                          {list.map((c, idx) => {
-                                            const cid = String(c.id || c.courier_id || idx);
-                                            const cName = normalizeText(
-                                              c.name || c.courier_name || `Courier #${cid}`
-                                            );
-                                            const ordCnt = Number(c.active_orders_count ?? 0);
-                                            return (
-                                              <div
-                                                key={`${zs.id}-${cid}`}
-                                                className="inline-flex items-center gap-1.5"
-                                              >
-                                                {c.state_time_24h && (
-                                                  <span className="text-gray-500 text-[12px] font-mono">
-                                                    {c.state_time_24h}
-                                                  </span>
-                                                )}
-                                                <button
-                                                  type="button"
-                                                  onMouseEnter={() => handleCourierHover(cid, cName)}
-                                                  onClick={(e) => openCourierModal(e, cid, cName)}
-                                                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-white text-[12px] font-medium transition-colors shadow-sm ${rowMeta.pillBg}`}
-                                                >
-                                                  <span>{cName}</span>
-                                                  <span
-                                                    className={`font-bold ${
-                                                      ordCnt > 0 ? "text-[#ffeb3b]" : "text-white"
-                                                    }`}
-                                                  >
-                                                    {ordCnt}
-                                                  </span>
-                                                </button>
-                                              </div>
-                                            );
-                                          })}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              )}
+          <div className="space-y-4 pt-2">
+            <div className="text-xs text-gray-500">
+              Showing <strong className="text-gray-900">{filteredCouriers.length}</strong> couriers across{" "}
+              <strong className="text-gray-900">{grouped.size}</strong> zones
             </div>
+
+            {Array.from(grouped.entries()).map(([zid, list]) => {
+              const zName = zoneMap.get(zid) || `Starting Point #${zid}`;
+              const isCollapsed = collapsedCourierZoneIds.has(zid);
+              return (
+                <div key={zid} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCollapsedCourierZoneIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(zid)) next.delete(zid);
+                        else next.add(zid);
+                        return next;
+                      });
+                    }}
+                    className="w-full px-4 py-3 bg-slate-50 hover:bg-slate-100 border-b border-gray-200 flex items-center justify-between text-left"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-sm text-gray-900">{zName}</span>
+                      <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs font-bold">
+                        {list.length}
+                      </span>
+                    </div>
+                    <span className="text-xs text-gray-500 font-bold">{isCollapsed ? "▼ Show" : "▲ Hide"}</span>
+                  </button>
+
+                  {!isCollapsed && (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs whitespace-nowrap">
+                        <thead>
+                          <tr className="border-b border-gray-200 text-gray-500 font-bold uppercase bg-gray-50/60">
+                            <th className="py-2.5 px-4">COURIER</th>
+                            <th className="py-2.5 px-3">USER ID</th>
+                            <th className="py-2.5 px-3">PHONE</th>
+                            <th className="py-2.5 px-3">STATUS</th>
+                            <th className="py-2.5 px-3">VEHICLE / CONTRACT</th>
+                            <th className="py-2.5 px-3 text-center">ACTIVE ORDERS</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {list.map((c) => {
+                            const rawSt = String(c.status || "").toLowerCase();
+                            const badgeCls =
+                              rawSt === "working"
+                                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                : rawSt.includes("break") || rawSt.includes("temp")
+                                ? "bg-amber-50 text-amber-800 border-amber-200"
+                                : rawSt === "late"
+                                ? "bg-red-50 text-red-700 border-red-200"
+                                : "bg-gray-100 text-gray-700 border-gray-200";
+                            return (
+                              <tr
+                                key={`${zid}-${c.id}`}
+                                onClick={(e) => openCourierModal(e, c.id, c.name)}
+                                className="hover:bg-blue-50/40 cursor-pointer"
+                              >
+                                <td className="py-2.5 px-4 font-bold text-blue-600 hover:underline">
+                                  {c.name}
+                                </td>
+                                <td className="py-2.5 px-3 font-mono text-gray-700">#{c.user_id || c.id}</td>
+                                <td className="py-2.5 px-3 font-mono text-gray-800">{c.phone_number || "-"}</td>
+                                <td className="py-2.5 px-3">
+                                  <span className={`px-2.5 py-0.5 rounded-full font-bold border ${badgeCls}`}>
+                                    {humanizeSnakeCase(c.status || "working")}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-gray-600">
+                                  {c.vehicle_full} {c.contract_name ? `• ${c.contract_name}` : ""}
+                                </td>
+                                <td className="py-2.5 px-3 text-center font-bold text-gray-900">
+                                  {c.active_orders_count ?? 0}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         );
       };
 
       const renderCompletedOrdersView = () => {
-        const anchorNow =
-          completedSearchQuery.trim() && completedSearchAnchorRef.current > 0
-            ? completedSearchAnchorRef.current
-            : Date.now();
-        const windowStartLabel = formatShortTimeOnly(anchorNow - Number(completedHoursWindow || 2) * 3600 * 1000);
-        const selectModeVal =
-          completedFilterMode === "custom" ? "custom" : String(completedHoursWindow);
+        const q = completedSearchQuery.trim().toLowerCase();
+        const cutoffMs = Date.now() - completedHoursWindow * 3600 * 1000;
+
+        const sourceList =
+          completedFilterMode === "custom" ? customRangeOrders : completedOrders;
+
+        const filtered = sourceList
+          .filter((item) => {
+            if (completedFilterMode === "rolling" && item.completedTimestamp < cutoffMs) {
+              return false;
+            }
+            if (completedCityFilter !== "All Cities" && item.city !== completedCityFilter) {
+              return false;
+            }
+            if (completedZoneFilter === "SELECTED_ZONES" && !matchesZoneFilter(item)) {
+              return false;
+            }
+            if (!q) return true;
+            return (
+              item.id.toLowerCase().includes(q) ||
+              item.vo.toLowerCase().includes(q) ||
+              item.vendor.toLowerCase().includes(q) ||
+              item.courier.toLowerCase().includes(q) ||
+              item.zone.toLowerCase().includes(q)
+            );
+          })
+          .sort((a, b) =>
+            completedSortAsc
+              ? (a.completedTimestamp || 0) - (b.completedTimestamp || 0)
+              : (b.completedTimestamp || 0) - (a.completedTimestamp || 0)
+          );
+
+        const totalCompPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+        const safeCompPage = Math.min(completedPage, totalCompPages);
+        const pageItems = filtered.slice((safeCompPage - 1) * PAGE_SIZE, safeCompPage * PAGE_SIZE);
 
         return (
-          <div className="mt-4 space-y-4">
-            {/* Completed Orders Controls Bar (Unified 2h / 1h Shared Archive updated every 15m + Custom Time Range + Instant ID Lookup) */}
-            <div className="p-4 rounded-xl bg-gray-50/80 border border-gray-200 space-y-3">
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div className="flex flex-wrap items-end gap-3 flex-1 min-w-[260px]">
-                  <div>
-                    <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                      Time Window (Completed At)
-                    </label>
-                    <select
-                      value={selectModeVal}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        if (v === "custom") {
-                          setCompletedFilterMode("custom");
-                        } else {
+          <div className="space-y-3 pt-2">
+            {/* Frozen / Sticky Completed Toolbar */}
+            <div className="sticky top-[52px] sm:top-[58px] z-20 bg-white/95 backdrop-blur-sm -mx-3.5 sm:-mx-6 md:-mx-8 px-3.5 sm:px-6 md:px-8 pt-2 pb-2.5 border-b border-gray-200 shadow-[0_4px_10px_-4px_rgba(0,0,0,0.08)] space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                  {[
+                    { label: "Last 30m", hrs: 0.5 },
+                    { label: "Last 1h", hrs: 1 },
+                    { label: "Last 2h", hrs: 2 }
+                  ].map((w) => {
+                    const active = completedFilterMode === "rolling" && completedHoursWindow === w.hrs;
+                    return (
+                      <button
+                        key={w.label}
+                        type="button"
+                        onClick={() => {
                           setCompletedFilterMode("rolling");
-                          setCompletedHoursWindow(Number(v));
-                        }
-                        setCompletedPage(1);
-                      }}
-                      className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-bold text-gray-800 focus:outline-none focus:border-blue-500"
-                    >
-                      <option value="1">آخر ساعة (1h • موحد ومحدث كل 15د)</option>
-                      <option value="2">آخر ساعتين (2h • موحد ومحدث كل 15د)</option>
-                      <option value="custom">🕒 تحديد وقت مخصص (من - إلى)</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-gray-600 mb-1">City</label>
-                    <select
-                      value={completedCityFilter}
-                      onChange={(e) => {
-                        setCompletedCityFilter(e.target.value);
-                        setCompletedPage(1);
-                      }}
-                      className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-semibold text-gray-700 focus:outline-none focus:border-blue-500"
-                    >
-                      <option value="All Cities">All Cities</option>
-                      <option value="Cairo">Cairo</option>
-                      <option value="Alexandria">Alexandria</option>
-                    </select>
-                  </div>
-
-                  <div className="min-w-[200px]">
-                    <label className="block text-[11px] font-bold text-gray-600 mb-1">Zone</label>
-                    <select
-                      value={completedZoneFilter}
-                      onChange={(e) => {
-                        setCompletedZoneFilter(e.target.value);
-                        setCompletedPage(1);
-                      }}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-semibold text-gray-700 focus:outline-none focus:border-blue-500"
-                    >
-                      <option value="SELECTED_ZONES">زونات الداشبورد المختارة ({selectedZoneIds.length})</option>
-                      {effectiveZonesCatalog.filter((z) => selectedZoneIds.includes(Number(z.id))).map((z) => (
-                        <option key={z.id} value={z.name}>
-                          {z.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="flex-1 min-w-[220px]">
-                    <label className="block text-[11px] font-bold text-gray-600 mb-1">
-                      Search (بحث لحظي برقم الأوردر من اليوم كله أو VO أو الرايدر)
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        value={completedSearchQuery}
-                        onChange={(e) => {
-                          setCompletedSearchQuery(e.target.value);
+                          setCompletedHoursWindow(w.hrs);
                           setCompletedPage(1);
                         }}
-                        placeholder="اكتب Order ID (من أي وقت باليوم) أو VO أو اسم/رقم الرايدر أو التليفون..."
-                        className="w-full pl-3 pr-8 py-2 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm focus:outline-none focus:border-blue-500"
-                      />
-                      {completedSearchQuery && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setCompletedSearchQuery("");
-                            setCompletedPage(1);
-                          }}
-                          className="absolute right-2.5 top-2 text-gray-400 hover:text-gray-700 text-xs font-bold"
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                        className={`px-3 py-1 rounded-full font-semibold border ${
+                          active
+                            ? "bg-blue-600 text-white border-blue-600"
+                            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                        }`}
+                      >
+                        {w.label}
+                      </button>
+                    );
+                  })}
+
+                  <button
+                    type="button"
+                    onClick={() => setCompletedFilterMode("custom")}
+                    className={`px-3 py-1 rounded-full font-semibold border ${
+                      completedFilterMode === "custom"
+                        ? "bg-indigo-600 text-white border-indigo-600"
+                        : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                    }`}
+                  >
+                    📅 Custom Range
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleForceRefreshCompletedArchive}
+                    className="px-2.5 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 font-semibold text-gray-700"
+                  >
+                    {isCompletedLoading ? "⏳ Syncing..." : "↻ Sync Archive"}
+                  </button>
                 </div>
 
-                <div className="flex flex-col items-end gap-1 text-xs">
-                  {completedFilterMode === "rolling" ? (
-                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        موحد للكل • من {windowStartLabel} حتى الآن ({completedHoursWindow}h)
-                        {isCompletedLoading && visibleCompletedOrders.length === 0
-                          ? " • جاري التحديث..."
-                          : ""}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={handleForceRefreshCompletedArchive}
-                        className="px-2.5 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-100 text-gray-700 font-bold"
-                        title="تحديث أرشيف الساعتين المشترك الآن"
-                      >
-                        ↻ تحديث الأرشيف
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-bold">
-                        🕒 وضع الفترة المخصصة {customRangeMeta?.label ? `(${customRangeMeta.label})` : ""}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={handleResetCompletedFilter}
-                        className="px-2.5 py-1 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 font-bold transition-colors"
-                        title="إزالة فلتر الوقت المخصص والعودة إلى آخر ساعتين (2h)"
-                      >
-                        ✕ إزالة الفلتر
-                      </button>
-                    </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <input
+                    type="text"
+                    value={completedSearchQuery}
+                    onChange={(e) => {
+                      setCompletedSearchQuery(e.target.value);
+                      setCompletedPage(1);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && isExactOrderIdPattern(completedSearchQuery)) {
+                        handleDirectCompletedLookup(completedSearchQuery);
+                      }
+                    }}
+                    placeholder="Order ID, VO, Vendor, Courier..."
+                    className="px-3 py-1.5 border border-gray-300 rounded-lg w-56 focus:outline-none focus:border-blue-500"
+                  />
+                  {isExactOrderIdPattern(completedSearchQuery) && (
+                    <button
+                      type="button"
+                      onClick={() => handleDirectCompletedLookup(completedSearchQuery)}
+                      className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-bold"
+                    >
+                      {directCompletedLookup.loading ? "⏳..." : "🔍 Direct Lookup"}
+                    </button>
                   )}
-                  <div className="text-gray-500">
-                    {completedFilterMode === "rolling" && completedLastSweepAt > 0 && (
-                      <span className="mr-2 text-[11px] text-gray-400">
-                        آخر دورة 15د: {formatShortTimeOnly(completedLastSweepAt)} •
-                      </span>
-                    )}
-                    Page <strong className="text-gray-800">{completedPage}</strong> of{" "}
-                    <strong className="text-gray-800">{completedTotalPages}</strong> •{" "}
-                    <strong className="text-gray-800">{visibleCompletedOrders.length}</strong> orders
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCompletedSortAsc((prev) => !prev)}
+                    className="px-2.5 py-1.5 rounded border border-gray-300 bg-white font-semibold text-gray-700"
+                  >
+                    {completedSortAsc ? "Oldest First ↑" : "Newest First ↓"}
+                  </button>
+                  <span className="text-gray-500">
+                    Total: <strong className="text-gray-900">{filtered.length}</strong>
+                  </span>
                 </div>
               </div>
 
-              {/* Custom Time Window Bar (Shown when "custom" mode is selected) */}
               {completedFilterMode === "custom" && (
                 <form
                   onSubmit={handleFetchCustomCompletedRange}
-                  dir="rtl"
-                  className="pt-3 border-t border-gray-200 flex flex-wrap items-end gap-3"
+                  className="flex flex-wrap items-center gap-2 p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-200 text-xs"
                 >
-                  <div>
-                    <label className="block text-[11px] font-bold text-gray-700 mb-1">التاريخ</label>
-                    <input
-                      type="date"
-                      value={customCompletedDate}
-                      onChange={(e) => setCustomCompletedDate(e.target.value)}
-                      className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-mono focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-gray-700 mb-1">من الساعة (وقت التقفيل)</label>
-                    <input
-                      type="time"
-                      value={customFromTime}
-                      onChange={(e) => setCustomFromTime(e.target.value)}
-                      className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-mono focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-gray-700 mb-1">إلى الساعة (وقت التقفيل)</label>
-                    <input
-                      type="time"
-                      value={customToTime}
-                      onChange={(e) => setCustomToTime(e.target.value)}
-                      className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white text-xs sm:text-sm font-mono focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
+                  <span className="font-bold text-indigo-900">التاريخ:</span>
+                  <input
+                    type="date"
+                    value={customCompletedDate}
+                    onChange={(e) => setCustomCompletedDate(e.target.value)}
+                    className="px-2.5 py-1 border border-indigo-200 rounded bg-white"
+                  />
+                  <span className="font-bold text-indigo-900">من:</span>
+                  <input
+                    type="time"
+                    value={customFromTime}
+                    onChange={(e) => setCustomFromTime(e.target.value)}
+                    className="px-2.5 py-1 border border-indigo-200 rounded bg-white"
+                  />
+                  <span className="font-bold text-indigo-900">إلى:</span>
+                  <input
+                    type="time"
+                    value={customToTime}
+                    onChange={(e) => setCustomToTime(e.target.value)}
+                    className="px-2.5 py-1 border border-indigo-200 rounded bg-white"
+                  />
                   <button
                     type="submit"
                     disabled={isCustomRangeLoading}
-                    className={`px-4 py-2 rounded-lg font-bold text-xs sm:text-sm text-white shadow-sm transition-colors ${
-                      isCustomRangeLoading
-                        ? "bg-blue-400 cursor-wait"
-                        : "bg-blue-600 hover:bg-blue-700"
-                    }`}
+                    className="px-3.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
                   >
-                    {isCustomRangeLoading ? "⏳ جاري سحب الفترة..." : "🔍 عرض الفترة المحددة"}
+                    {isCustomRangeLoading ? "⏳ جاري السحب..." : "جلب الأوردرات"}
                   </button>
                   <button
                     type="button"
                     onClick={handleResetCompletedFilter}
-                    className="px-3.5 py-2 rounded-lg font-bold text-xs sm:text-sm text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 transition-colors"
+                    className="px-2.5 py-1 rounded-lg bg-white border border-gray-300 text-gray-700 font-semibold"
                   >
-                    ✕ إزالة الفلتر
+                    إلغاء
                   </button>
                   {customRangeMeta?.error && (
-                    <span className="text-xs font-bold text-red-600">{customRangeMeta.error}</span>
+                    <span className="text-red-600 font-bold">{customRangeMeta.error}</span>
                   )}
                 </form>
               )}
-
-              {/* Direct Order ID Lookup Feedback Banner */}
-              {directCompletedLookup.query && directCompletedLookup.status !== "local" && (
-                <div
-                  dir="rtl"
-                  className="px-3.5 py-2.5 rounded-lg bg-indigo-50/80 border border-indigo-200 flex flex-wrap items-center justify-between gap-2 text-xs"
-                >
-                  {directCompletedLookup.loading ? (
-                    <span className="font-bold text-indigo-700 animate-pulse">
-                      ⚡ جاري البحث المباشر عن الأوردر #{directCompletedLookup.query} في أرشيف اليوم بالكامل...
-                    </span>
-                  ) : directCompletedLookup.status === "completed" && directCompletedLookup.orderItem ? (
-                    <span className="font-bold text-emerald-800">
-                      ✓ تم العثور على الأوردر المكتمل #{directCompletedLookup.query} من أرشيف اليوم (مقفول الساعة{" "}
-                      {directCompletedLookup.orderItem.completedAtFormatted}).
-                    </span>
-                  ) : directCompletedLookup.status === "not_found" ? (
-                    <span className="font-semibold text-gray-700">
-                      لم يتم العثور على أوردر برقم #{directCompletedLookup.query} في Hurrier.
-                    </span>
-                  ) : directCompletedLookup.status === "lookup_error" ? (
-                    <span className="font-bold text-amber-800">
-                      ⚠️ حصل خطأ مؤقت أثناء البحث عن الأوردر #{directCompletedLookup.query} في هورير — استنى ثواني وجرّب تاني (اتأكد كمان إن تاب السكريبت فاتح وشغّال).
-                    </span>
-                  ) : directCompletedLookup.status ? (
-                    <div className="flex flex-wrap items-center justify-between w-full gap-2">
-                      <span className="font-bold text-amber-900">
-                        ℹ️ الأوردر #{directCompletedLookup.query} موجود ولكن حالته الحالية في Hurrier هي:{" "}
-                        <span className="underline">{humanizeSnakeCase(directCompletedLookup.status)}</span> (وليس Completed).
-                      </span>
-                      {directCompletedLookup.orderItem && (
-                        <button
-                          type="button"
-                          onClick={() => setSelectedOrder(directCompletedLookup.orderItem)}
-                          className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
-                        >
-                          فتح تفاصيل الأوردر
-                        </button>
-                      )}
-                    </div>
-                  ) : null}
-                </div>
-              )}
             </div>
 
-            {/* Mobile Completed Cards (< 768px) */}
-            <div className={`${mobileViewMode === "cards" ? "block md:hidden" : "hidden"} space-y-2.5`}>
-              {paginatedCompletedOrders.length === 0 ? (
-                <div className="p-8 text-center bg-white border border-gray-200 rounded-xl text-gray-500 text-xs">
-                  لا توجد أوردرات مكتملة (Completed Orders) في آخر {completedHoursWindow} ساعة مطابقة للبحث.
-                </div>
-              ) : (
-                paginatedCompletedOrders.map((item) => (
-                  <div
-                    key={`m-comp-${item.uid}`}
-                    onClick={() => setSelectedOrder(item)}
-                    className="p-3.5 rounded-xl bg-white border border-gray-200 shadow-sm space-y-2 text-xs active:bg-gray-50"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-indigo-600 text-sm">{item.id}</span>
-                      <span className="font-mono font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                        ✓ {item.completedAtFormatted}
-                      </span>
-                    </div>
-                    <div className="text-gray-800 font-semibold">
-                      🏪 {item.vendor} <span className="text-gray-400 font-normal">(VO #{item.vo})</span>
-                    </div>
-                    <div className="flex items-center justify-between text-[11px] text-gray-600">
-                      {item.courier && item.courier !== "-" ? (
-                        <button
-                          type="button"
-                          onClick={(e) => openCourierModal(e, item.courierId, item.courier)}
-                          className="truncate max-w-[65%] text-left text-blue-600 font-bold underline decoration-blue-300"
-                        >
-                          🚴‍♂️ {item.courier}
-                        </button>
-                      ) : (
-                        <span className="truncate max-w-[65%]">🚴‍♂️ -</span>
-                      )}
-                      <span className="font-mono">{item.distance} • {item.orderDuration}</span>
-                    </div>
+            {directCompletedLookup.query && (
+              <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-between text-xs">
+                {directCompletedLookup.loading ? (
+                  <span className="font-bold text-indigo-700 animate-pulse">
+                    ⏳ جاري البحث المباشر عن {directCompletedLookup.query} في Hurrier...
+                  </span>
+                ) : directCompletedLookup.orderItem ? (
+                  <div className="flex items-center gap-3">
+                    <span className="font-bold text-emerald-700">
+                      ✓ تم العثور على الأوردر ({directCompletedLookup.status}):
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedOrder(directCompletedLookup.orderItem)}
+                      className="px-3 py-1 rounded-lg bg-blue-600 text-white font-bold"
+                    >
+                      فتح تفاصيل {directCompletedLookup.orderItem.id}
+                    </button>
                   </div>
-                ))
-              )}
-            </div>
+                ) : (
+                  <span className="font-bold text-red-700">
+                    ✕ لم يتم العثور على أوردر برقم {directCompletedLookup.query}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDirectCompletedLookup({ query: "", loading: false, status: "", orderItem: null })
+                  }
+                  className="text-gray-500 font-bold px-2"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
 
-            {/* Desktop Completed Orders Table (>= 768px) */}
-            <div className={`${mobileViewMode === "cards" ? "hidden md:block" : "block"} w-full overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm`}>
+            <div className="w-full overflow-x-auto bg-white border border-gray-200 rounded-lg shadow-sm">
               <table className="w-full text-left text-xs whitespace-nowrap">
                 <thead>
-                  <tr className="border-b border-gray-200 text-gray-600 font-bold text-[11px] uppercase bg-gray-50/70">
-                    <th
-                      onClick={() => setCompletedSortAsc((prev) => !prev)}
-                      className="py-3.5 px-4 cursor-pointer hover:text-blue-600 select-none"
-                      title="ترتيب حسب وقت تقفيل الأوردر الفعلي (Completed At)"
-                    >
-                      COMPLETED AT {completedSortAsc ? "↑" : "↓"}
-                    </th>
-                    <th className="py-3.5 px-4">CONFIRMATION</th>
-                    <th className="py-3.5 px-3">CITY</th>
-                    <th className="py-3.5 px-3">ZONES</th>
-                    <th className="py-3.5 px-3">COURIER</th>
-                    <th className="py-3.5 px-3">BUSINESS</th>
-                    <th className="py-3.5 px-3">KM</th>
-                    <th className="py-3.5 px-3">ACCEPT TIME</th>
-                    <th className="py-3.5 px-3">RETAILER LATE</th>
-                    <th className="py-3.5 px-3">COURIER LATE</th>
-                    <th className="py-3.5 px-3">WAIT</th>
-                    <th className="py-3.5 px-3">DELIVERY LATE</th>
-                    <th className="py-3.5 px-3">TIME IN BAG</th>
-                    <th className="py-3.5 px-3">ORDER DURATION</th>
-                    <th className="py-3.5 px-3">PREORDER</th>
-                    <th className="py-3.5 px-4">DROPOFF ISSUE</th>
+                  <tr className="border-b border-gray-200 text-gray-500 font-bold uppercase bg-gray-50/70">
+                    <th className="py-3 px-4">ORDER</th>
+                    <th className="py-3 px-3">COMPLETED AT</th>
+                    <th className="py-3 px-3">COURIER</th>
+                    <th className="py-3 px-3">ZONE / DIST</th>
+                    <th className="py-3 px-3">ACCEPT</th>
+                    <th className="py-3 px-3">VENDOR LATE</th>
+                    <th className="py-3 px-3">COURIER LATE</th>
+                    <th className="py-3 px-3">DELIVERY LATE</th>
+                    <th className="py-3 px-3">DURATION</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 text-[13px]">
-                  {isCompletedLoading && paginatedCompletedOrders.length === 0 ? (
+                <tbody className="divide-y divide-gray-100">
+                  {pageItems.length === 0 ? (
                     <tr>
-                      <td colSpan={16} className="py-12 text-center text-blue-600 font-semibold text-sm">
-                        ⏳ جاري تحميل الأوردرات المكتملة تلقائياً في آخر {completedHoursWindow} ساعة...
-                      </td>
-                    </tr>
-                  ) : paginatedCompletedOrders.length === 0 ? (
-                    <tr>
-                      <td colSpan={16} className="py-12 text-center text-gray-500 text-sm">
-                        لا توجد أوردرات مكتملة (Completed Orders) في آخر {completedHoursWindow} ساعة مطابقة للبحث.
+                      <td colSpan={9} className="py-10 text-center text-gray-500">
+                        {isCompletedLoading
+                          ? "⏳ جاري سحب أوردرات Completed من Hurrier..."
+                          : "لا توجد أوردرات مكتملة في هذه الفترة الزمنية."}
                       </td>
                     </tr>
                   ) : (
-                    paginatedCompletedOrders.map((item) => (
+                    pageItems.map((item) => (
                       <tr
                         key={item.uid}
                         onMouseEnter={() => handleOrderRowHover(item)}
                         onMouseLeave={handleOrderRowLeave}
                         onClick={() => setSelectedOrder(item)}
-                        className="hover:bg-blue-50/30 transition-colors cursor-pointer"
+                        className="hover:bg-blue-50/30 cursor-pointer"
                       >
-                        <td className="py-3.5 px-4 align-top">
-                          <div className="font-bold text-emerald-700 font-mono">{item.completedAtFormatted}</div>
-                        </td>
-                        <td className="py-3.5 px-4 align-top">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-indigo-600 hover:underline font-semibold">{item.id}</span>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                copyToClipboard(`comp-${item.id}`, item.id);
-                              }}
-                              className="text-gray-400 hover:text-gray-700 text-xs px-1"
-                              title="Copy Confirmation Number"
-                            >
-                              {copiedText === `comp-${item.id}` ? "✓" : "⧉"}
-                            </button>
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-blue-600 text-sm">{item.id}</div>
+                          <div className="text-[11px] text-gray-500 truncate max-w-[230px]">
+                            VO #{item.vo} - {item.vendor}
                           </div>
-                          <div className="text-[11px] text-gray-500 mt-0.5">VO #{item.vo}</div>
                         </td>
-                        <td className="py-3.5 px-3 align-top text-gray-800">{item.city}</td>
-                        <td className="py-3.5 px-3 align-top max-w-[260px] truncate text-gray-700" title={item.zone}>
-                          {item.zone}
+                        <td className="py-3 px-3 font-mono font-semibold text-gray-800">
+                          {item.completedAtFormatted}
                         </td>
-                        <td className="py-3.5 px-3 align-top max-w-[210px] truncate">
-                          {item.courier && item.courier !== "-" ? (
-                            <button
-                              type="button"
-                              onMouseEnter={() => handleCourierHover(item.courierId, item.courier)}
-                              onClick={(e) => openCourierModal(e, item.courierId, item.courier)}
-                              className="text-blue-600 hover:underline font-medium truncate max-w-full text-left"
-                              title="اضغط لعرض User ID ورقم موبايل الرايدر"
-                            >
-                              {item.courier}
-                            </button>
-                          ) : (
-                            <span className="text-gray-500">-</span>
-                          )}
+                        <td className="py-3 px-3">
+                          <button
+                            type="button"
+                            onClick={(e) => openCourierModal(e, item.courierId, item.courier)}
+                            className="text-blue-600 hover:underline font-medium text-left"
+                          >
+                            {item.courier}
+                          </button>
                         </td>
-                        <td className="py-3.5 px-3 align-top max-w-[220px] truncate text-gray-800 font-medium" title={item.vendor}>
-                          {item.vendor}
+                        <td className="py-3 px-3">
+                          <div className="font-semibold text-gray-800 truncate max-w-[180px]">{item.zone}</div>
+                          <div className="text-[11px] text-gray-400">
+                            {item.distance} • {item.orderValue}
+                          </div>
                         </td>
-                        <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.distance}</td>
-                        <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.acceptTime}</td>
-                        <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.retailerLate}</td>
-                        <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.courierLate}</td>
-                        <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.waitTime}</td>
-                        <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.deliveryLate}</td>
-                        <td className="py-3.5 px-3 align-top font-mono text-gray-700">{item.timeInBag}</td>
-                        <td className="py-3.5 px-3 align-top font-mono font-semibold text-gray-800">{item.orderDuration}</td>
-                        <td className="py-3.5 px-3 align-top text-gray-700">{item.isPreorder ? "Yes" : "No"}</td>
-                        <td className="py-3.5 px-4 align-top text-gray-600">{item.dropoffIssue}</td>
+                        <td className="py-3 px-3 font-mono">{item.acceptTime}</td>
+                        <td className="py-3 px-3 font-mono">{item.retailerLate}</td>
+                        <td className="py-3 px-3 font-mono">{item.courierLate}</td>
+                        <td className="py-3 px-3 font-mono">{item.deliveryLate}</td>
+                        <td className="py-3 px-3 font-mono font-bold text-gray-900">{item.orderDuration}</td>
                       </tr>
                     ))
                   )}
@@ -3918,352 +3398,278 @@
               </table>
             </div>
 
-            <div className="pt-2 pb-6 flex flex-wrap items-center justify-between gap-3">
-              <div className="text-xs text-gray-500">
-                Showing <strong>{(completedPage - 1) * 50 + (paginatedCompletedOrders.length > 0 ? 1 : 0)}</strong>–
-                <strong>{(completedPage - 1) * 50 + paginatedCompletedOrders.length}</strong> of{" "}
-                <strong>{visibleCompletedOrders.length}</strong>
+            {totalCompPages > 1 && (
+              <div className="pt-2 pb-6 flex items-center justify-between text-xs">
+                <span className="text-gray-500">
+                  Page <strong>{safeCompPage}</strong> of <strong>{totalCompPages}</strong>
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    disabled={safeCompPage <= 1}
+                    onClick={() => setCompletedPage((p) => Math.max(1, p - 1))}
+                    className="px-3 py-1 rounded border border-gray-300 bg-white disabled:opacity-40"
+                  >
+                    Prev
+                  </button>
+                  <button
+                    type="button"
+                    disabled={safeCompPage >= totalCompPages}
+                    onClick={() => setCompletedPage((p) => Math.min(totalCompPages, p + 1))}
+                    className="px-3 py-1 rounded border border-gray-300 bg-white disabled:opacity-40"
+                  >
+                    Next
+                  </button>
+                </div>
               </div>
-
-              <div className="flex items-center gap-1 select-none">
-                <button
-                  type="button"
-                  disabled={completedPage <= 1}
-                  onClick={() => {
-                    setCompletedPage((p) => Math.max(1, p - 1));
-                    if (mainContainerRef.current) mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
-                  }}
-                  className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
-                    completedPage <= 1 ? "text-gray-300 cursor-not-allowed" : "text-gray-600 hover:bg-gray-100"
-                  }`}
-                >
-                  ‹
-                </button>
-
-                {completedVisiblePages.map((p, idx) =>
-                  p === "..." ? (
-                    <span key={`comp-dots-${idx}`} className="px-2 text-gray-400 text-sm">
-                      ...
-                    </span>
-                  ) : (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => {
-                        setCompletedPage(Number(p));
-                        if (mainContainerRef.current) mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
-                      }}
-                      className={`min-w-[36px] h-9 px-2.5 flex items-center justify-center text-sm transition-colors ${
-                        Number(completedPage) === Number(p)
-                          ? "border-b-2 border-blue-600 text-blue-600 font-bold"
-                          : "text-gray-700 hover:bg-gray-100 rounded font-medium"
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  )
-                )}
-
-                <button
-                  type="button"
-                  disabled={completedPage >= completedTotalPages}
-                  onClick={() => {
-                    setCompletedPage((p) => Math.min(completedTotalPages, p + 1));
-                    if (mainContainerRef.current) mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
-                  }}
-                  className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
-                    completedPage >= completedTotalPages
-                      ? "text-gray-300 cursor-not-allowed"
-                      : "text-gray-600 hover:bg-gray-100"
-                  }`}
-                >
-                  ›
-                </button>
-              </div>
-
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const num = Number(completedJumpPage);
-                  if (num >= 1) {
-                    setCompletedPage(Math.min(completedTotalPages, num));
-                    setCompletedJumpPage("");
-                    if (mainContainerRef.current) mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
-                  }
-                }}
-                className="flex items-center gap-1.5 text-xs"
-              >
-                <span className="text-gray-500">Go to:</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={completedTotalPages}
-                  value={completedJumpPage}
-                  onChange={(e) => setCompletedJumpPage(e.target.value)}
-                  placeholder="Page"
-                  className="w-16 px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:border-blue-500"
-                />
-                <button
-                  type="submit"
-                  className="px-2.5 py-1 rounded border border-gray-300 bg-white hover:bg-gray-50 font-semibold text-gray-700"
-                >
-                  Go
-                </button>
-              </form>
-            </div>
+            )}
           </div>
         );
       };
 
-      const totalItemsForPagination = filteredDeliveries.length;
-      const totalPages = Math.max(1, Math.ceil(totalItemsForPagination / PAGE_SIZE));
-
-      const paginatedDeliveries = useMemo(() => {
-        const safePage = Math.min(currentPage, totalPages);
-        const startIdx = (safePage - 1) * PAGE_SIZE;
-        return filteredDeliveries.slice(startIdx, startIdx + PAGE_SIZE);
-      }, [currentPage, totalPages, filteredDeliveries]);
-
-      const handlePageChange = useCallback(
-        (nextPage) => {
-          const clamped = Math.max(1, Math.min(totalPages, Number(nextPage) || 1));
-          setCurrentPage(clamped);
-          if (mainContainerRef.current) {
-            mainContainerRef.current.scrollTo({ top: 0, behavior: "smooth" });
-          }
-        },
-        [totalPages]
-      );
-
-      const visiblePageNumbers = useMemo(() => {
-        if (totalPages <= 7) {
-          return Array.from({ length: totalPages }, (_, i) => i + 1);
-        }
-        if (currentPage <= 4) {
-          return [1, 2, 3, 4, 5, "...", totalPages];
-        }
-        if (currentPage >= totalPages - 3) {
-          return [1, "...", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
-        }
-        return [1, "...", currentPage - 1, currentPage, currentPage + 1, "...", totalPages];
-      }, [currentPage, totalPages]);
-
       const renderDeliveriesTable = () => {
-        const lateCount = baseTabDeliveries.filter((d) => d.deadline.includes("-") || d.deadline === "Late").length;
+        const delayedCount = baseTabDeliveries.filter(
+          (d) => d.deadline.includes("-") || d.deadline === "Late"
+        ).length;
         const cashCount = baseTabDeliveries.filter((d) => d.instructions.includes("Cash")).length;
         const cardCount = baseTabDeliveries.filter((d) => d.instructions.includes("Card")).length;
-        const darkstoreCount = baseTabDeliveries.filter(
-          (d) => isTalabatMartVendor(d.vendor) || d.instructions.includes("Darkstores")
-        ).length;
-        const restaurantCount = baseTabDeliveries.filter((d) => {
+        const restCount = baseTabDeliveries.filter((d) => {
           const isDs = isTalabatMartVendor(d.vendor) || d.instructions.includes("Darkstores");
           return !isDs && (d.instructions.includes("Restaurants") || d.instructions.includes("Supermarket"));
         }).length;
+        const darkCount = baseTabDeliveries.filter(
+          (d) => isTalabatMartVendor(d.vendor) || d.instructions.includes("Darkstores")
+        ).length;
         const splitCount = baseTabDeliveries.filter((d) => d.isSplit).length;
-        const tabExactTotal = effectiveTabCounts[activeTab] ?? baseTabDeliveries.length;
-
-        const delayedWithRiderList = filteredDeliveries.filter(
-          (d) => (d.deadline.includes("-") || d.deadline === "Late") && hasValidAssignedRider(d)
-        );
-        const selectedWithRiderList = filteredDeliveries.filter(
-          (d) => selectedOrderUids.has(d.uid) && hasValidAssignedRider(d)
-        );
-        const pageSelectableItems = paginatedDeliveries.filter(hasValidAssignedRider);
-        const allPageSelected =
-          pageSelectableItems.length > 0 && pageSelectableItems.every((d) => selectedOrderUids.has(d.uid));
 
         const quickFilters = [
-          { id: "All", label: `All (${tabExactTotal})` },
-          { id: "Delayed", label: `Delayed (${lateCount})` },
+          { id: "All", label: `All (${baseTabDeliveries.length})` },
+          { id: "Delayed", label: `Delayed (${delayedCount})` },
           { id: "Cash", label: `Cash (${cashCount})` },
           { id: "Card", label: `Card (${cardCount})` },
-          { id: "Restaurants", label: `Restaurants (${restaurantCount})` },
-          { id: "Darkstores", label: `Darkstores - Talabat Mart (${darkstoreCount})` },
+          { id: "Restaurants", label: `Restaurants (${restCount})` },
+          { id: "Darkstores", label: `Darkstores - Talabat Mart (${darkCount})` },
           { id: "Split", label: `Split Orders (${splitCount})` }
         ];
 
+        const totalItemsForPagination = filteredDeliveries.length;
+        const totalPages = Math.max(1, Math.ceil(totalItemsForPagination / PAGE_SIZE));
+        const safeCurrentPage = Math.min(currentPage, totalPages);
+        const paginatedDeliveries = filteredDeliveries.slice(
+          (safeCurrentPage - 1) * PAGE_SIZE,
+          safeCurrentPage * PAGE_SIZE
+        );
+
+        const pageSelectableItems = paginatedDeliveries.filter(hasValidAssignedRider);
+        const allPageSelected =
+          pageSelectableItems.length > 0 &&
+          pageSelectableItems.every((d) => selectedOrderUids.has(d.uid));
+
+        const selectedWithRiderList = filteredDeliveries.filter(
+          (d) => selectedOrderUids.has(d.uid) && hasValidAssignedRider(d)
+        );
+        const delayedWithRiderList = filteredDeliveries.filter(
+          (d) => (d.deadline.includes("-") || d.deadline === "Late") && hasValidAssignedRider(d)
+        );
+
+        const visiblePageNumbers = [];
+        for (let p = 1; p <= totalPages; p++) {
+          if (
+            p === 1 ||
+            p === totalPages ||
+            (p >= safeCurrentPage - 2 && p <= safeCurrentPage + 2)
+          ) {
+            visiblePageNumbers.push(p);
+          } else if (visiblePageNumbers[visiblePageNumbers.length - 1] !== "...") {
+            visiblePageNumbers.push("...");
+          }
+        }
+
         return (
-          <div className="mt-4 space-y-3">
-            {/* Row 1: Primary Category Filters */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-gray-100">
-              <div className="flex flex-wrap items-center gap-1.5">
-                {quickFilters.map((qf) => {
-                  const active = activeQuickFilter === qf.id;
-                  return (
-                    <button
-                      key={qf.id}
-                      type="button"
-                      onClick={() => {
-                        setActiveQuickFilter(qf.id);
-                        setCurrentPage(1);
-                        if (qf.id !== "Darkstores") setSelectedMartBranch("ALL");
-                      }}
-                      className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
-                        active
-                          ? "bg-blue-600 text-white border-blue-600"
-                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-                      }`}
-                    >
-                      {qf.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                {selectedWithRiderList.length > 0 && (
-                  <div className="inline-flex items-center gap-1">
-                    <button
-                      type="button"
-                      disabled={copyingFollowupState === "loading:selected"}
-                      onClick={() => handleCopyBulkFollowup("selected", selectedWithRiderList)}
-                      className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-sm transition-colors flex items-center gap-1.5"
-                      title="نسخ كليشة متابعة الرايدر للأوردرات المحددة فقط"
-                    >
-                      {copyingFollowupState === "loading:selected"
-                        ? "⏳ جاري سحب أرقام الموبايل..."
-                        : copyingFollowupState?.startsWith("done:selected:")
-                        ? `✓ تم نسخ (${selectedWithRiderList.length}) أوردر`
-                        : `📋 نسخ المحدد (${selectedWithRiderList.length})`}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedOrderUids(new Set())}
-                      className="px-2 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 font-semibold"
-                      title="إلغاء تحديد الأوردرات"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                )}
-
-                {delayedWithRiderList.length > 0 && (
-                  <button
-                    type="button"
-                    disabled={copyingFollowupState === "loading:delayed"}
-                    onClick={() => handleCopyBulkFollowup("delayed", delayedWithRiderList)}
-                    className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold shadow-sm transition-colors flex items-center gap-1.5"
-                    title="نسخ كليشة متابعة الرايدر لكل الأوردرات المتأخرة المعروضة"
-                  >
-                    {copyingFollowupState === "loading:delayed"
-                      ? "⏳ جاري سحب الأرقام..."
-                      : copyingFollowupState?.startsWith("done:delayed:")
-                      ? `✓ تم نسخ المتأخرات (${delayedWithRiderList.length})`
-                      : `📋 نسخ كل المتأخرات (${delayedWithRiderList.length})`}
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    setOrderSortMode((prev) => (prev === "hurrier_order" ? "live_first" : "hurrier_order"))
-                  }
-                  className="px-2.5 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 font-semibold"
-                >
-                  {orderSortMode === "hurrier_order" ? "Order: Hurrier Default" : "Order: Live Today First"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setMobileViewMode((prev) => (prev === "cards" ? "table" : "cards"))}
-                  className="md:hidden px-2.5 py-1 rounded border border-gray-300 bg-white text-gray-700 font-bold"
-                >
-                  {mobileViewMode === "cards" ? "📊 جدول" : "📱 بطاقات"}
-                </button>
-                <div>
-                  Page <strong className="text-gray-800">{currentPage}</strong> of{" "}
-                  <strong className="text-gray-800">{totalPages}</strong>{" "}
-                  <span className="text-gray-400">
-                    ({paginatedDeliveries.length} rows • Total {totalItemsForPagination})
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Row 2: Live Status Filter Pills Bar (Accepted / Near Pickup / Picked Up / Left Pickup / Near Dropoff) */}
-            {tabStatusSummary.orderedStatuses.length > 0 && (
-              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-50/90 border border-gray-200">
+          <div className="space-y-3">
+            {/* Frozen / Sticky Toolbar: Category Filters + Bulk Copy + Live Status Pills */}
+            <div className="sticky top-[52px] sm:top-[58px] z-20 bg-white/95 backdrop-blur-sm -mx-3.5 sm:-mx-6 md:-mx-8 px-3.5 sm:px-6 md:px-8 pt-2 pb-2.5 border-b border-gray-200 shadow-[0_4px_10px_-4px_rgba(0,0,0,0.08)] space-y-2.5">
+              {/* Row 1: Primary Category Filters */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-gray-100">
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-gray-400 mr-1">
-                    STATUS:
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveStatusFilter("All");
-                      setCurrentPage(1);
-                    }}
-                    className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
-                      activeStatusFilter === "All"
-                        ? "bg-slate-900 text-white border-slate-900 shadow-sm"
-                        : "bg-white text-gray-700 border-gray-300 hover:bg-gray-100"
-                    }`}
-                  >
-                    All Statuses ({baseTabDeliveries.length})
-                  </button>
-
-                  {tabStatusSummary.orderedStatuses.map((stLabel) => {
-                    const stStyle = DELIVERY_STATUS_PILL_STYLES[stLabel] || {
-                      dot: "bg-slate-400",
-                      active: "bg-blue-600 text-white border-blue-600",
-                      idle: "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-                    };
-                    const isStActive = activeStatusFilter === stLabel;
-                    const cnt = tabStatusSummary.counts[stLabel] || 0;
+                  {quickFilters.map((qf) => {
+                    const active = activeQuickFilter === qf.id;
                     return (
                       <button
-                        key={stLabel}
+                        key={qf.id}
                         type="button"
                         onClick={() => {
-                          setActiveStatusFilter((prev) => (prev === stLabel ? "All" : stLabel));
+                          setActiveQuickFilter(qf.id);
                           setCurrentPage(1);
+                          if (qf.id !== "Darkstores") setSelectedMartBranch("ALL");
                         }}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
-                          isStActive ? `${stStyle.active} shadow-sm` : stStyle.idle
+                        className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                          active
+                            ? "bg-blue-600 text-white border-blue-600"
+                            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
                         }`}
                       >
-                        <span
-                          className={`w-2 h-2 rounded-full ${
-                            isStActive ? "bg-white" : stStyle.dot
-                          }`}
-                        />
-                        <span>
-                          {stLabel} ({cnt})
-                        </span>
+                        {qf.label}
                       </button>
                     );
                   })}
                 </div>
 
-                {activeStatusFilter !== "All" && (
-                  <div className="flex items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                  {selectedWithRiderList.length > 0 && (
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={copyingFollowupState === "loading:selected"}
+                        onClick={() => handleCopyBulkFollowup("selected", selectedWithRiderList)}
+                        className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-sm transition-colors flex items-center gap-1.5"
+                        title="نسخ كليشة متابعة الرايدر للأوردرات المحددة فقط"
+                      >
+                        {copyingFollowupState === "loading:selected"
+                          ? "⏳ جاري سحب أرقام الموبايل..."
+                          : copyingFollowupState?.startsWith("done:selected:")
+                          ? `✓ تم نسخ (${selectedWithRiderList.length}) أوردر`
+                          : `📋 نسخ المحدد (${selectedWithRiderList.length})`}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedOrderUids(new Set())}
+                        className="px-2 py-1 rounded-lg border border-gray-300 bg-white hover:bg-gray-100 text-gray-600 font-semibold"
+                        title="إلغاء تحديد الأوردرات"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
+
+                  {delayedWithRiderList.length > 0 && (
                     <button
                       type="button"
-                      onClick={() =>
-                        copyToClipboard(
-                          `status-ids-${activeStatusFilter}`,
-                          filteredDeliveries.map((d) => d.id).join("\n")
-                        )
-                      }
-                      className="px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold transition-colors"
+                      disabled={copyingFollowupState === "loading:delayed"}
+                      onClick={() => handleCopyBulkFollowup("delayed", delayedWithRiderList)}
+                      className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold shadow-sm transition-colors flex items-center gap-1.5"
+                      title="نسخ كليشة متابعة الرايدر لكل الأوردرات المتأخرة المعروضة"
                     >
-                      {copiedText === `status-ids-${activeStatusFilter}`
-                        ? `✓ تم نسخ (${filteredDeliveries.length})`
-                        : `📋 نسخ الأوردرات (${filteredDeliveries.length})`}
+                      {copyingFollowupState === "loading:delayed"
+                        ? "⏳ جاري سحب الأرقام..."
+                        : copyingFollowupState?.startsWith("done:delayed:")
+                        ? `✓ تم نسخ المتأخرات (${delayedWithRiderList.length})`
+                        : `📋 نسخ كل المتأخرات (${delayedWithRiderList.length})`}
                     </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOrderSortMode((prev) => (prev === "hurrier_order" ? "live_first" : "hurrier_order"))
+                    }
+                    className="px-2.5 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 font-semibold"
+                  >
+                    {orderSortMode === "hurrier_order" ? "Order: Hurrier Default" : "Order: Live Today First"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMobileViewMode((prev) => (prev === "cards" ? "table" : "cards"))}
+                    className="md:hidden px-2.5 py-1 rounded border border-gray-300 bg-white text-gray-700 font-bold"
+                  >
+                    {mobileViewMode === "cards" ? "📊 جدول" : "📱 بطاقات"}
+                  </button>
+                  <div>
+                    Page <strong className="text-gray-800">{safeCurrentPage}</strong> of{" "}
+                    <strong className="text-gray-800">{totalPages}</strong>{" "}
+                    <span className="text-gray-400">
+                      ({paginatedDeliveries.length} rows • Total {totalItemsForPagination})
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 2: Live Status Filter Pills Bar */}
+              {tabStatusSummary.orderedStatuses.length > 0 && (
+                <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-50/90 border border-gray-200">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-extrabold uppercase tracking-wider text-gray-400 mr-1">
+                      STATUS:
+                    </span>
                     <button
                       type="button"
                       onClick={() => {
                         setActiveStatusFilter("All");
                         setCurrentPage(1);
                       }}
-                      className="px-2.5 py-1 rounded-lg bg-white hover:bg-red-50 text-red-600 border border-gray-300 hover:border-red-200 text-xs font-bold transition-colors"
+                      className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                        activeStatusFilter === "All"
+                          ? "bg-slate-900 text-white border-slate-900 shadow-sm"
+                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-100"
+                      }`}
                     >
-                      ✕ مسح الحالة
+                      All Statuses ({baseTabDeliveries.length})
                     </button>
+
+                    {tabStatusSummary.orderedStatuses.map((stLabel) => {
+                      const stStyle = DELIVERY_STATUS_PILL_STYLES[stLabel] || {
+                        dot: "bg-slate-400",
+                        active: "bg-blue-600 text-white border-blue-600",
+                        idle: "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                      };
+                      const isStActive = activeStatusFilter === stLabel;
+                      const cnt = tabStatusSummary.counts[stLabel] || 0;
+                      return (
+                        <button
+                          key={stLabel}
+                          type="button"
+                          onClick={() => {
+                            setActiveStatusFilter((prev) => (prev === stLabel ? "All" : stLabel));
+                            setCurrentPage(1);
+                          }}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                            isStActive ? `${stStyle.active} shadow-sm` : stStyle.idle
+                          }`}
+                        >
+                          <span
+                            className={`w-2 h-2 rounded-full ${
+                              isStActive ? "bg-white" : stStyle.dot
+                            }`}
+                          />
+                          <span>
+                            {stLabel} ({cnt})
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
-                )}
-              </div>
-            )}
+
+                  {activeStatusFilter !== "All" && (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          copyToClipboard(
+                            `status-ids-${activeStatusFilter}`,
+                            filteredDeliveries.map((d) => d.id).join("\n")
+                          )
+                        }
+                        className="px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold transition-colors"
+                      >
+                        {copiedText === `status-ids-${activeStatusFilter}`
+                          ? `✓ تم نسخ (${filteredDeliveries.length})`
+                          : `📋 نسخ الأوردرات (${filteredDeliveries.length})`}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveStatusFilter("All");
+                          setCurrentPage(1);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-white hover:bg-red-50 text-red-600 border border-gray-300 hover:border-red-200 text-xs font-bold transition-colors"
+                      >
+                        ✕ مسح الحالة
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {activeQuickFilter === "Darkstores" && (
               <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-lg bg-amber-50/70 border border-amber-200 text-xs">
@@ -4744,18 +4150,18 @@
             {totalPages > 1 && (
               <div className="pt-3 pb-6 flex flex-wrap items-center justify-between gap-3">
                 <div className="text-xs text-gray-500">
-                  Showing <strong>{(currentPage - 1) * PAGE_SIZE + (paginatedDeliveries.length > 0 ? 1 : 0)}</strong>–
-                  <strong>{(currentPage - 1) * PAGE_SIZE + paginatedDeliveries.length}</strong> of{" "}
+                  Showing <strong>{(safeCurrentPage - 1) * PAGE_SIZE + (paginatedDeliveries.length > 0 ? 1 : 0)}</strong>–
+                  <strong>{(safeCurrentPage - 1) * PAGE_SIZE + paginatedDeliveries.length}</strong> of{" "}
                   <strong>{totalItemsForPagination}</strong>
                 </div>
 
                 <div className="flex items-center gap-1 select-none">
                   <button
                     type="button"
-                    disabled={currentPage <= 1}
-                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={safeCurrentPage <= 1}
+                    onClick={() => handlePageChange(safeCurrentPage - 1)}
                     className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
-                      currentPage <= 1 ? "text-gray-300 cursor-not-allowed" : "text-gray-600 hover:bg-gray-100"
+                      safeCurrentPage <= 1 ? "text-gray-300 cursor-not-allowed" : "text-gray-600 hover:bg-gray-100"
                     }`}
                   >
                     ‹
@@ -4772,7 +4178,7 @@
                         type="button"
                         onClick={() => handlePageChange(p)}
                         className={`min-w-[36px] h-9 px-2.5 flex items-center justify-center text-sm transition-colors ${
-                          Number(currentPage) === Number(p)
+                          Number(safeCurrentPage) === Number(p)
                             ? "border-b-2 border-blue-600 text-blue-600 font-bold"
                             : "text-gray-700 hover:bg-gray-100 rounded font-medium"
                         }`}
@@ -4784,10 +4190,10 @@
 
                   <button
                     type="button"
-                    disabled={currentPage >= totalPages}
-                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={safeCurrentPage >= totalPages}
+                    onClick={() => handlePageChange(safeCurrentPage + 1)}
                     className={`w-9 h-9 flex items-center justify-center rounded text-base font-bold transition-colors ${
-                      currentPage >= totalPages ? "text-gray-300 cursor-not-allowed" : "text-gray-600 hover:bg-gray-100"
+                      safeCurrentPage >= totalPages ? "text-gray-300 cursor-not-allowed" : "text-gray-600 hover:bg-gray-100"
                     }`}
                   >
                     ›
@@ -5741,9 +5147,9 @@
               </div>
             </header>
 
-            <main ref={mainContainerRef} className="flex-1 overflow-auto p-3.5 sm:p-6 md:p-8 pb-24 md:pb-8">
+            <main ref={mainContainerRef} className="flex-1 overflow-auto px-3.5 sm:px-6 md:px-8 pt-0 pb-24 md:pb-8">
               <div className="max-w-[1440px] mx-auto">
-                <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                <div className="sticky top-0 z-30 bg-white pt-3.5 sm:pt-5 pb-2.5 -mx-3.5 sm:-mx-6 md:-mx-8 px-3.5 sm:px-6 md:px-8 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3 mb-2">
                   <div className="flex flex-wrap items-center gap-3">
                     <h1 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">
                       {activeTab === "Active Couriers"
@@ -5783,7 +5189,6 @@
                   </button>
                 </div>
 
-                {/* Instant Matched Riders in Selected Zones (User ID / Phone / Name across all statuses) */}
                 {!riderSearchReq && activeTab !== "Active Couriers" && matchedZoneCouriers.length > 0 && (
                   <div className="mb-4 p-3.5 rounded-xl bg-emerald-50/60 border border-emerald-200 shadow-sm space-y-2.5">
                     <div className="text-xs font-bold text-emerald-900 flex items-center justify-between">
@@ -5838,7 +5243,6 @@
                   </div>
                 )}
 
-                {/* Live Rider Search Banner */}
                 {riderSearchReq && (
                   <div className="mb-4 p-4 rounded-xl bg-gradient-to-r from-slate-50 to-blue-50/60 border border-blue-200 shadow-sm space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -6188,7 +5592,6 @@
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-5">
-                  {/* Hurrier Dispatcher Notes Box (Full Width Top Section matching Hurrier UI) */}
                   <div className="lg:col-span-12 bg-[#fef9e7] rounded-xl border border-[#f3e5ab] p-4 sm:p-5 shadow-sm">
                     <div className="flex items-center justify-between pb-3 border-b border-[#efe0a6]">
                       <div className="flex items-center gap-2">
@@ -6586,7 +5989,6 @@
                   </div>
 
                   <div className="lg:col-span-4 space-y-4">
-                    {/* Important Details Card (Matching Hurrier Native Layout) */}
                     <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-5 shadow-sm">
                       <h3 className="text-base font-bold text-gray-900 pb-2">Important Details</h3>
                       <div className="divide-y divide-gray-200 text-xs">
