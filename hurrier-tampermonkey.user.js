@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.25
-// @description  [v10.25] Complete Self-Contained Hurrier Live Sync + Multi-Page Active/Completed & Fast Transitions
+// @version      10.26
+// @description  [v10.26] True Active Hurrier Feeder Election (Fixes False Backup Standby When Employees View Dashboard)
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://*.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.25";
+  const SCRIPT_VERSION = "10.26";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -1406,6 +1406,7 @@
   // 10) MULTI-TAB LOCK, LEADER ELECTION & MAIN 2-SECOND LIVE SYNC LOOP
   // ============================================================================
   const TAB_ID = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const FEEDER_ID = `feeder_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const LOCAL_LOCK_KEY = "hurrier_live_sync_local_tab_lock";
   let ownsLocalTabLock = true;
   let isCurrentLeader = true;
@@ -1479,27 +1480,39 @@
 
     isMainLoopRunning = true;
     try {
-      const sessionsObj = (await firebaseReq("GET", "/active_sessions")) || {};
+      const [sessionsRaw, feederRaw] = await Promise.all([
+        firebaseReq("GET", "/active_sessions").catch(() => ({})),
+        firebaseReq("GET", "/config/active_feeder").catch(() => null)
+      ]);
+      const sessionsObj = sessionsRaw || {};
       const now = Date.now();
       const activeSessions = Object.values(sessionsObj).filter(
         (s) => s && s.sessionId && now - Number(s.lastSeen || 0) < 25000
       );
 
-      // Leader election across multiple Admin browsers
+      // True Feeder Election: only active Hurrier tabs compete; Dashboard-only viewers never steal leadership
       const myEmail = String(getBridgedLeaderEmail() || "").toLowerCase();
-      const sortedEmails = Array.from(
-        new Set(activeSessions.map((s) => String(s.email || "").toLowerCase()).filter(Boolean))
-      ).sort();
-      const electedLeaderEmail = sortedEmails[0] || myEmail;
-      isCurrentLeader = !myEmail || !electedLeaderEmail || myEmail === electedLeaderEmail;
+      const feederAgeMs = feederRaw && feederRaw.feederId ? now - Number(feederRaw.updatedAt || 0) : Infinity;
+      const anotherActiveFeederExists =
+        Boolean(feederRaw && feederRaw.feederId) &&
+        feederRaw.feederId !== FEEDER_ID &&
+        feederAgeMs < 8500;
 
-      if (!isCurrentLeader) {
+      if (anotherActiveFeederExists) {
+        isCurrentLeader = false;
         setBadge(
           "#0f766e",
           `v${SCRIPT_VERSION} [Backup Standby] (${activeSessions.length} Viewers)`
         );
         return;
       }
+
+      isCurrentLeader = true;
+      await firebaseReq("PUT", "/config/active_feeder", {
+        feederId: FEEDER_ID,
+        email: myEmail,
+        updatedAt: Date.now()
+      }).catch(() => {});
 
       const unionZoneIdsSet = new Set();
       for (const s of activeSessions) {
@@ -1613,6 +1626,12 @@
           ).catch(() => {});
         })
       );
+
+      await firebaseReq("PUT", "/config/active_feeder", {
+        feederId: FEEDER_ID,
+        email: myEmail,
+        updatedAt: Date.now()
+      }).catch(() => {});
 
       setBadge(
         "#15803d",
