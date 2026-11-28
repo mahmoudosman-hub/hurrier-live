@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.3
-// @description  [v10.3] Fix Completed Orders Backward Tail Pagination + Fix Active Couriers Zone Delay + Remove 404 Endpoints
+// @version      10.4
+// @description  [v10.4] Instant Progressive Completed Orders Push + Live Active-to-Completed Catcher + Full-Day Zone Archive (Up to 4000 Pages)
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.3";
+  const SCRIPT_VERSION = "10.4";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -550,10 +550,9 @@
   const cachedTabRecordsMap = new Map();
   let lastFullActiveSweepAt = 0;
   let lastKnownActivePageCount = 1;
-  let lastCatalogSyncAt = 0;
   const knownZonesCatalogMap = new Map();
-
-  // Shared 2h Completed Orders Archive State
+  let lastCatalogSyncAt = 0;
+  // Shared Full-Day & 2h Completed Orders Archive State
   const sharedCompletedMap = new Map();
   let completedArchiveLoadedFromFb = false;
   let completedSyncing = false;
@@ -561,6 +560,11 @@
   let completedLastTailSyncAt = 0;
   let lastKnownCompletedLastPage = 1;
   let lastHandledForceSweepTs = 0;
+  let latestUnionZoneIds = [];
+  let latestLiveZoneNameToId = new Map();
+  let latestActiveSessionsSnapshot = [];
+  const prevLiveOrdersMap = new Map();
+  const checkedTransitionCodes = new Set();
 
   // Courier Cache & Throttling
   const couriersBySpCache = new Map();
@@ -771,7 +775,7 @@
   }
 
   // ============================================================================
-  // 7) UNIFIED 2-HOUR COMPLETED ARCHIVE (15-MIN FULL SWEEP + 25s TAIL REFRESH)
+  // 7) INSTANT PROGRESSIVE COMPLETED ARCHIVE + LIVE TRANSITION CATCHER
   // ============================================================================
   function getCairoDateStringForMs(ms) {
     return new Intl.DateTimeFormat("en-CA", {
@@ -824,12 +828,52 @@
     return 0;
   }
 
+  function doesCompletedRecordMatchUnionZones(rec) {
+    if (!Array.isArray(latestUnionZoneIds) || latestUnionZoneIds.length === 0) return true;
+    const idSet = new Set(latestUnionZoneIds.map(Number));
+    const nameSet = new Set();
+    knownZonesCatalogMap.forEach((z, zid) => {
+      if (idSet.has(zid)) nameSet.add(String(z.name).trim().toLowerCase());
+    });
+
+    const rawSps = Array.isArray(rec?.starting_points)
+      ? rec.starting_points
+      : Array.isArray(rec?.order?.drop_off_address?.starting_points)
+      ? rec.order.drop_off_address.starting_points
+      : Array.isArray(rec?.order?.dropoff_address?.starting_points)
+      ? rec.order.dropoff_address.starting_points
+      : [];
+
+    if (rawSps.length === 0) return true;
+
+    return rawSps.some((sp) => {
+      if (sp && typeof sp === "object" && sp.id && idSet.has(Number(sp.id))) return true;
+      const spName = String(typeof sp === "string" ? sp : sp?.name || "")
+        .trim()
+        .toLowerCase();
+      if (!spName) return false;
+      if (nameSet.has(spName)) return true;
+      const mappedId = latestLiveZoneNameToId.get(spName);
+      if (mappedId && idSet.has(mappedId)) return true;
+      const stripped = spName.replace(/\s+sp$/i, "").trim();
+      const mappedStripped = latestLiveZoneNameToId.get(`${stripped} sp`);
+      return Boolean(mappedStripped && idSet.has(mappedStripped));
+    });
+  }
+
+  // Keep all of today's completed orders for selected zones + rolling 2h across midnight
   function pruneOldCompletedRecords() {
-    const cutoff = Date.now() - 2 * 3600 * 1000;
+    const now = Date.now();
+    const todayStr = getCairoDateStringForMs(now);
+    const rolling2hCutoff = now - 2 * 3600 * 1000;
     for (const [code, rec] of sharedCompletedMap.entries()) {
       const ms = extractCompletedMsFromRecord(rec);
-      if (ms > 0 && ms < cutoff) {
-        sharedCompletedMap.delete(code);
+      if (ms > 0) {
+        const isToday = getCairoDateStringForMs(ms) === todayStr;
+        const isRecent2h = ms >= rolling2hCutoff;
+        if (!isToday && !isRecent2h) {
+          sharedCompletedMap.delete(code);
+        }
       }
     }
   }
@@ -854,11 +898,57 @@
     pruneOldCompletedRecords();
     const obj = {};
     for (const [code, rec] of sharedCompletedMap.entries()) {
-      obj[code] = rec;
+      if (doesCompletedRecordMatchUnionZones(rec)) {
+        obj[code] = rec;
+      }
     }
     try {
       await firebaseReq("PUT", "/config/shared_completed_archive", obj);
     } catch {}
+  }
+
+  async function pushImmediateCompletedPatchToSessions() {
+    if (!Array.isArray(latestActiveSessionsSnapshot) || latestActiveSessionsSnapshot.length === 0) {
+      return;
+    }
+    pruneOldCompletedRecords();
+    const allComp = Array.from(sharedCompletedMap.values());
+    await Promise.all(
+      latestActiveSessionsSnapshot.map(async (sess) => {
+        const sessZoneIdSet = new Set(sess.zoneIds.map(Number));
+        const sessZoneNameSet = new Set();
+        knownZonesCatalogMap.forEach((z, zid) => {
+          if (sessZoneIdSet.has(zid)) {
+            sessZoneNameSet.add(String(z.name).trim().toLowerCase());
+          }
+        });
+        const filtered = allComp.filter((rec) => {
+          const rawSps = Array.isArray(rec?.starting_points)
+            ? rec.starting_points
+            : Array.isArray(rec?.order?.drop_off_address?.starting_points)
+            ? rec.order.drop_off_address.starting_points
+            : Array.isArray(rec?.order?.dropoff_address?.starting_points)
+            ? rec.order.dropoff_address.starting_points
+            : [];
+          if (rawSps.length === 0) return true;
+          return rawSps.some((sp) => {
+            if (sp && typeof sp === "object" && sp.id && sessZoneIdSet.has(Number(sp.id))) return true;
+            const spName = String(typeof sp === "string" ? sp : sp?.name || "").trim().toLowerCase();
+            if (!spName) return false;
+            if (sessZoneNameSet.has(spName)) return true;
+            const mappedId = latestLiveZoneNameToId.get(spName);
+            return Boolean(mappedId && sessZoneIdSet.has(mappedId));
+          });
+        });
+        try {
+          await firebaseReq("PATCH", `/session_bundles/${encodeURIComponent(sess.sessionId)}`, {
+            completedRecords: filtered,
+            completedSyncing,
+            completedLastSweepAt
+          });
+        } catch {}
+      })
+    );
   }
 
   function buildCompletedRecordFromOrderDetail(detailRes, fallbackDeliveryRec = null) {
@@ -898,6 +988,76 @@
       },
       primary_delivery_timings: dOrder.timings || {}
     };
+  }
+
+  // Catch orders that disappear from Active/Dispatched and turn into Completed in real time
+  async function catchCompletedTransitionsFromLiveOrders(globalTabRecords) {
+    const currentLiveCodes = new Set();
+    for (const tabKey of ["Queued", "Dispatched", "Active"]) {
+      const list = Array.isArray(globalTabRecords[tabKey]) ? globalTabRecords[tabKey] : [];
+      for (const r of list) {
+        const ord = r?.order || {};
+        const code = String(
+          ord.code ||
+            ord.confirmation_number ||
+            String(ord.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+            ""
+        ).trim();
+        if (code) currentLiveCodes.add(code);
+      }
+    }
+
+    if (prevLiveOrdersMap.size > 0) {
+      const candidates = [];
+      for (const [code, prevRec] of prevLiveOrdersMap.entries()) {
+        if (
+          !currentLiveCodes.has(code) &&
+          !sharedCompletedMap.has(code) &&
+          !checkedTransitionCodes.has(code)
+        ) {
+          candidates.push({ code, prevRec });
+        }
+      }
+
+      if (candidates.length > 0) {
+        const batch = candidates.slice(0, 5);
+        let caughtAny = false;
+        await Promise.all(
+          batch.map(async ({ code, prevRec }) => {
+            checkedTransitionCodes.add(code);
+            try {
+              const det = await hurrierGet(`/orders/${encodeURIComponent(code)}`);
+              const dOrder = det?.order || det || {};
+              const st = String(dOrder.status || "").toLowerCase();
+              if (st === "completed" || st === "delivered") {
+                const compRec = buildCompletedRecordFromOrderDetail(det, prevRec);
+                sharedCompletedMap.set(code, compRec);
+                caughtAny = true;
+              }
+            } catch {}
+          })
+        );
+        if (caughtAny) {
+          saveSharedCompletedArchiveToFb().catch(() => {});
+          pushImmediateCompletedPatchToSessions().catch(() => {});
+        }
+      }
+    }
+
+    prevLiveOrdersMap.clear();
+    for (const tabKey of ["Dispatched", "Active"]) {
+      const list = Array.isArray(globalTabRecords[tabKey]) ? globalTabRecords[tabKey] : [];
+      for (const r of list) {
+        const ord = r?.order || {};
+        const code = String(
+          ord.code ||
+            ord.confirmation_number ||
+            String(ord.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+            ""
+        ).trim();
+        if (code) prevLiveOrdersMap.set(code, r);
+      }
+    }
   }
 
   // Hurrier's /dispatcher-dashboard/orders/completed?date=YYYY-MM-DD returns records sorted ASCENDING (00:00 AM first)
@@ -941,8 +1101,8 @@
     let low = 1;
     let high = Math.max(2, hintLastPage);
 
-    // Probe upwards from hint or exponentially until we find an empty page
-    while (high <= 300) {
+    // Exponential probe up to 4000 pages (200,000 daily orders) so afternoon/evening peaks are always reached
+    while (high <= 4000) {
       const pr = await fetchCompletedOrdersPageWithMeta(dateStr, high);
       if (!pr.ok || pr.records.length === 0) {
         break;
@@ -952,7 +1112,7 @@
         return { lastPage: high, prefetched };
       }
       low = high;
-      high = high < 16 ? high * 2 : high + 24;
+      high = high < 32 ? high * 2 : high + 60;
     }
 
     // Binary search between low (non-empty) and high (empty)
@@ -973,11 +1133,19 @@
     return { lastPage: low, prefetched };
   }
 
-  async function ingestCompletedWindowBackwardsForDate(dateStr, fromMs, toMs, targetMap, hintPage = 1) {
+  async function ingestCompletedWindowBackwardsForDate(
+    dateStr,
+    fromMs,
+    toMs,
+    targetMap,
+    hintPage = 1,
+    options = {}
+  ) {
     const { lastPage, prefetched } = await findLastCompletedPageForDate(dateStr, hintPage);
     if (lastPage <= 0) return 0;
 
     let pg = lastPage;
+    let batchIdx = 0;
     while (pg >= 1) {
       const batchPages = [];
       for (let i = 0; i < 4 && pg >= 1; i++, pg--) {
@@ -1015,6 +1183,12 @@
         }
       }
 
+      // Progressive Instant Push: immediately publish the newest tail batch so UI populates in <2s
+      if (batchIdx === 0 && typeof options.onFirstBatch === "function") {
+        await options.onFirstBatch(targetMap);
+      }
+      batchIdx++;
+
       if (reachedOlderThanWindow) break;
     }
 
@@ -1036,7 +1210,18 @@
         cutoffMs,
         now + 10 * 60 * 1000,
         freshMap,
-        lastKnownCompletedLastPage
+        lastKnownCompletedLastPage,
+        {
+          onFirstBatch: async (partialMap) => {
+            for (const [code, rec] of partialMap.entries()) {
+              if (doesCompletedRecordMatchUnionZones(rec)) {
+                sharedCompletedMap.set(code, rec);
+              }
+            }
+            await saveSharedCompletedArchiveToFb();
+            await pushImmediateCompletedPatchToSessions();
+          }
+        }
       );
       if (detectedLastPage > 0) {
         lastKnownCompletedLastPage = detectedLastPage;
@@ -1053,7 +1238,9 @@
       }
 
       for (const [code, rec] of freshMap.entries()) {
-        sharedCompletedMap.set(code, rec);
+        if (doesCompletedRecordMatchUnionZones(rec)) {
+          sharedCompletedMap.set(code, rec);
+        }
       }
       pruneOldCompletedRecords();
       completedLastSweepAt = Date.now();
@@ -1072,19 +1259,33 @@
 
     try {
       let pg = Math.max(1, lastKnownCompletedLastPage);
-      const nextCheck = await fetchCompletedOrdersPageWithMeta(todayStr, pg + 1);
-      if (nextCheck.ok && nextCheck.records.length > 0) {
-        pg = pg + 1;
-        lastKnownCompletedLastPage = pg;
+      while (pg < 4000) {
+        const nextCheck = await fetchCompletedOrdersPageWithMeta(todayStr, pg + 1);
+        if (nextCheck.ok && nextCheck.records.length > 0) {
+          pg = pg + 1;
+          lastKnownCompletedLastPage = pg;
+          for (const r of nextCheck.records) {
+            const ord = r?.order || r || {};
+            const code = String(
+              ord.confirmation_number ||
+                ord.code ||
+                String(ord.order_code || "").replace(/^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i, "") ||
+                ""
+            ).trim();
+            const compMs = extractCompletedMsFromRecord(r);
+            if (code && compMs >= cutoffMs && !sharedCompletedMap.has(code) && doesCompletedRecordMatchUnionZones(r)) {
+              sharedCompletedMap.set(code, { ...r, __completed_at_ms: compMs });
+            }
+          }
+          if (nextCheck.records.length < 50) break;
+        } else {
+          break;
+        }
       }
 
       const pagesToPull = Array.from(new Set([pg, Math.max(1, pg - 1)]));
       const results = await Promise.all(
-        pagesToPull.map((p) =>
-          p === pg && nextCheck.ok && nextCheck.records.length > 0
-            ? Promise.resolve(nextCheck)
-            : fetchCompletedOrdersPageWithMeta(todayStr, p)
-        )
+        pagesToPull.map((p) => fetchCompletedOrdersPageWithMeta(todayStr, p))
       );
 
       let addedNew = false;
@@ -1099,7 +1300,12 @@
               ""
           ).trim();
           const compMs = extractCompletedMsFromRecord(r);
-          if (code && compMs >= cutoffMs && !sharedCompletedMap.has(code)) {
+          if (
+            code &&
+            compMs >= cutoffMs &&
+            !sharedCompletedMap.has(code) &&
+            doesCompletedRecordMatchUnionZones(r)
+          ) {
             sharedCompletedMap.set(code, { ...r, __completed_at_ms: compMs });
             addedNew = true;
           }
@@ -1434,6 +1640,8 @@
       }
 
       const unionZoneIds = Array.from(unionZoneIdsSet);
+      latestUnionZoneIds = unionZoneIds;
+      latestActiveSessionsSnapshot = activeSessions;
 
       // Process on-demand requests even if 0 active sessions
       await processOnDemandRequests();
@@ -1449,7 +1657,7 @@
       await loadInitialSharedCompletedArchive();
       if (completedLastSweepAt === 0 || now - completedLastSweepAt >= 15 * 60 * 1000) {
         runCompletedArchive15MinSweep().catch(() => {});
-      } else if (now - completedLastTailSyncAt >= 25 * 1000) {
+      } else if (now - completedLastTailSyncAt >= 20 * 1000) {
         runCompletedTailQuickRefresh().catch(() => {});
       }
 
@@ -1513,12 +1721,16 @@
         }
       });
 
+      // Catch orders transitioning from Active/Dispatched to Completed in real time
+      catchCompletedTransitionsFromLiveOrders(globalTabRecords).catch(() => {});
+
       // Fetch active couriers for all union starting points
       const allUnionCouriers = await fetchCouriersForStartingPoints(unionZoneIds);
 
       // Parse zone stats & update dynamic zones catalog
       const allZoneStatsList = [];
       const liveZoneNameToId = new Map();
+      latestLiveZoneNameToId = liveZoneNameToId;
 
       if (statsRes.status === "fulfilled" && Array.isArray(statsRes.value?.cities)) {
         statsRes.value.cities.forEach((cityObj) => {
