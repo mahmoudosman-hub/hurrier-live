@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v10.2 -->
+<!-- Hurrier Live Operations Dashboard v10.4 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v10.3</title>
+  <title>Hurrier Live Operations Dashboard v10.4</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,14 +38,14 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v10.3...
+      Loading Hurrier Live Operations Dashboard v10.4...
     </div>
   </div>
 
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
-    const DASHBOARD_VERSION = "10.3";
+    const DASHBOARD_VERSION = "10.4";
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
     const FIREBASE_PROJECT_ID = "hurrier-live";
     const FIREBASE_AUTH_DOMAIN = "hurrier-live.firebaseapp.com";
@@ -2390,9 +2390,26 @@
       }, [completedSearchQuery]);
 
       const baseVisibleCompletedOrders = useMemo(() => {
-        const sourceOrders =
-          completedFilterMode === "custom" ? customRangeOrders : completedOrders;
+        let sourceOrders = completedOrders;
+        if (completedFilterMode === "custom") {
+          const byId = new Map();
+          completedOrders.forEach((o) => {
+            if (o?.id) byId.set(String(o.id), o);
+          });
+          customRangeOrders.forEach((o) => {
+            if (o?.id) byId.set(String(o.id), o);
+          });
+          sourceOrders = Array.from(byId.values());
+        }
         const windowMs = Number(completedHoursWindow || 2) * 3600 * 1000;
+        const customFromMs =
+          completedFilterMode === "custom"
+            ? parseCairoDateTimeToMs(customCompletedDate, customFromTime)
+            : 0;
+        const customToMs =
+          completedFilterMode === "custom"
+            ? parseCairoDateTimeToMs(customCompletedDate, customToTime) + 59999
+            : 0;
         const q = completedSearchQuery.trim().toLowerCase();
         const isSearching = q.length > 0;
         const anchorNow =
@@ -2422,6 +2439,14 @@
           if (item.orderStatus && item.orderStatus.includes("cancel")) return false;
           if (completedFilterMode === "rolling") {
             if (!item.completedTimestamp || item.completedTimestamp < cutoffMs) return false;
+          } else if (completedFilterMode === "custom" && customFromMs > 0 && customToMs >= customFromMs) {
+            if (
+              !item.completedTimestamp ||
+              item.completedTimestamp < customFromMs ||
+              item.completedTimestamp > customToMs
+            ) {
+              return false;
+            }
           }
 
           if (completedCityFilter !== "All Cities" && item.city !== completedCityFilter) {
@@ -2454,6 +2479,9 @@
         completedFilterMode,
         customRangeOrders,
         completedOrders,
+        customCompletedDate,
+        customFromTime,
+        customToTime,
         orderDetailsCache,
         completedHoursWindow,
         completedCityFilter,
@@ -3124,7 +3152,7 @@
                     <div className="flex items-center gap-1.5 flex-wrap justify-end">
                       <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
                         <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        موحد للكل • من {windowStartLabel} حتى الآن ({completedHoursWindow}h)
+                        موحد ومحدث لحظياً • من {windowStartLabel} حتى الآن ({completedHoursWindow}h)
                         {isCompletedLoading ? " • جاري التحديث..." : ""}
                       </span>
                       <button
