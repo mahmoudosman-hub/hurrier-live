@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.12
-// @description  [v10.12] Multi-Rider / Split Order Sibling Preservation (All Riders Shown) + Preorder Live Delay Countdown & Badge + Long Order-ID Lookup + Rich Completed Search + Rolling 2h Archive
+// @version      10.13
+// @description  [v10.13] Dedicated 400ms Fast-Lane Order Detail & Notes Fetcher (Parallel + Retry + Zero Null Overwrite) + Multi-Rider Sibling Preservation + Preorder Countdown + Rolling 2h Archive
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.12";
+  const SCRIPT_VERSION = "10.13";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -577,15 +577,27 @@
 
   // Processed Request Trackers
   const processedOrderDetailReqs = new Map();
+  const orderDetailAttemptCounts = new Map();
   let lastHandledCourierDetailTs = 0;
   let lastHandledRiderSearchId = "";
   const processedCompletedIdReqs = new Map();
   const processedCompletedRangeReqs = new Map();
 
-  function buildStartingPointQueryParams(zoneIds) {
-    const ids = Array.from(new Set((zoneIds || []).map(Number).filter((n) => n > 0)));
-    if (ids.length === 0) return "";
-    return ids.map((id) => `starting_point_id%5B%5D=${encodeURIComponent(id)}`).join("&");
+  async function hurrierGetWithRetry(path, maxRetries = 2, baseDelayMs = 250) {
+    let lastErr = null;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await hurrierGet(path);
+      } catch (err) {
+        lastErr = err;
+        const msg = String(err?.message || "");
+        if (msg.includes("HURRIER_404")) throw err;
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, baseDelayMs * (attempt + 1)));
+        }
+      }
+    }
+    throw lastErr || new Error("HURRIER_RETRY_FAILED");
   }
 
   async function fetchSingleDeliveryPage(basePathWithQuery, page) {
@@ -1362,36 +1374,113 @@
   // 8) ON-DEMAND REQUEST HANDLERS (Order Details + Notes, Courier Details, Rider Search, Completed Lookup)
   // ============================================================================
   async function processOnDemandRequests() {
-    // A) Per-Order Detail + Deliveries + Dispatcher Notes Requests
+    // A) Per-Order Detail + Deliveries + Dispatcher Notes Requests (Parallel + Retry + Zero Null Overwrite)
     try {
       const reqs = await firebaseReq("GET", "/config/order_detail_reqs");
       if (reqs && typeof reqs === "object") {
         const entries = Object.entries(reqs).filter(([, v]) => v && v.code);
-        for (const [key, req] of entries.slice(0, 6)) {
-          const code = String(req.code).trim();
-          const reqTs = Number(req.requestedAt || 0);
-          if (processedOrderDetailReqs.get(code) === reqTs) continue;
-          processedOrderDetailReqs.set(code, reqTs);
+        await Promise.all(
+          entries.slice(0, 6).map(async ([key, req]) => {
+            const code = String(req.code).trim();
+            const reqTs = Number(req.requestedAt || 0);
+            const reqSig = `${reqTs}`;
+            if (processedOrderDetailReqs.get(code) === reqSig) return;
+            processedOrderDetailReqs.set(code, reqSig);
 
-          const orderCode = String(req.orderCode || `HF_EG${code}`).trim();
-          const [detRes, delRes, notesRes] = await Promise.allSettled([
-            hurrierGet(`/orders/${encodeURIComponent(code)}`),
-            hurrierGet(`/orders/${encodeURIComponent(code)}/deliveries`),
-            hurrierGet(`/orders/dispatcher_notes?code=${encodeURIComponent(orderCode)}`).catch(() =>
-              hurrierGet(`/hurrier/v1/orders/dispatcher_notes?code=${encodeURIComponent(orderCode)}`)
-            )
-          ]);
+            const orderCode = String(req.orderCode || `HF_EG${code}`).trim();
+            const internalId = String(req.internalOrderId || "").trim();
 
-          const payload = {
-            code,
-            detail: detRes.status === "fulfilled" ? detRes.value : null,
-            deliveries: delRes.status === "fulfilled" ? delRes.value : null,
-            notes: notesRes.status === "fulfilled" ? notesRes.value : { dispatcher_notes: [] },
-            updatedAt: Date.now()
-          };
-          await firebaseReq("PUT", `/order_details/${encodeURIComponent(code)}`, payload);
-          firebaseReq("DELETE", `/config/order_detail_reqs/${encodeURIComponent(key)}`).catch(() => {});
-        }
+            const [detRes, delRes, notesRes] = await Promise.allSettled([
+              hurrierGetWithRetry(`/orders/${encodeURIComponent(code)}`, 2, 250).catch((err) => {
+                if (internalId && internalId !== code) {
+                  return hurrierGetWithRetry(`/orders/${encodeURIComponent(internalId)}`, 1, 250);
+                }
+                throw err;
+              }),
+              hurrierGetWithRetry(`/orders/${encodeURIComponent(code)}/deliveries`, 2, 250).catch(
+                (err) => {
+                  if (internalId && internalId !== code) {
+                    return hurrierGetWithRetry(
+                      `/orders/${encodeURIComponent(internalId)}/deliveries`,
+                      1,
+                      250
+                    );
+                  }
+                  throw err;
+                }
+              ),
+              hurrierGetWithRetry(
+                `/orders/dispatcher_notes?code=${encodeURIComponent(orderCode)}`,
+                1,
+                250
+              ).catch(() =>
+                hurrierGetWithRetry(
+                  `/hurrier/v1/orders/dispatcher_notes?code=${encodeURIComponent(orderCode)}`,
+                  1,
+                  250
+                )
+              )
+            ]);
+
+            const hasDetail = detRes.status === "fulfilled" && detRes.value;
+            const hasDeliveries = delRes.status === "fulfilled" && delRes.value;
+            const isGenuine404 =
+              detRes.status === "rejected" &&
+              String(detRes.reason?.message || "").includes("HURRIER_404") &&
+              delRes.status === "rejected" &&
+              String(delRes.reason?.message || "").includes("HURRIER_404");
+
+            if (!hasDetail && !hasDeliveries && !isGenuine404) {
+              // Transient error / rate-limit: do NOT overwrite with null; allow up to 3 automatic retries
+              const attemptKey = `${code}_${reqTs}`;
+              const tries = (orderDetailAttemptCounts.get(attemptKey) || 0) + 1;
+              orderDetailAttemptCounts.set(attemptKey, tries);
+              if (tries < 3) {
+                processedOrderDetailReqs.delete(code);
+              } else {
+                firebaseReq("DELETE", `/config/order_detail_reqs/${encodeURIComponent(key)}`).catch(
+                  () => {}
+                );
+              }
+              return;
+            }
+
+            // If order detail returned a canonical order_code and initial notes were empty, fetch notes with canonical order_code
+            let finalNotes =
+              notesRes.status === "fulfilled" && notesRes.value
+                ? notesRes.value
+                : { dispatcher_notes: [] };
+            const resolvedOrderCode = String(
+              detRes.value?.order?.order_code || detRes.value?.order_code || ""
+            ).trim();
+            if (
+              resolvedOrderCode &&
+              resolvedOrderCode !== orderCode &&
+              (!Array.isArray(finalNotes?.dispatcher_notes) ||
+                finalNotes.dispatcher_notes.length === 0)
+            ) {
+              try {
+                const retryNotes = await hurrierGet(
+                  `/orders/dispatcher_notes?code=${encodeURIComponent(resolvedOrderCode)}`
+                );
+                if (retryNotes) finalNotes = retryNotes;
+              } catch {}
+            }
+
+            const payload = {
+              code,
+              detail: hasDetail ? detRes.value : null,
+              deliveries: hasDeliveries ? delRes.value : null,
+              notes: finalNotes,
+              notFound: Boolean(isGenuine404 && !hasDetail && !hasDeliveries),
+              updatedAt: Date.now()
+            };
+            await firebaseReq("PUT", `/order_details/${encodeURIComponent(code)}`, payload);
+            firebaseReq("DELETE", `/config/order_detail_reqs/${encodeURIComponent(key)}`).catch(
+              () => {}
+            );
+          })
+        );
       }
     } catch {}
 
@@ -1695,9 +1784,6 @@
       const unionZoneIds = Array.from(unionZoneIdsSet);
       latestUnionZoneIds = unionZoneIds;
       latestActiveSessionsSnapshot = activeSessions;
-
-      // Process on-demand requests even if 0 active sessions
-      await processOnDemandRequests();
 
       if (activeSessions.length === 0) {
         setBadge(
@@ -2028,4 +2114,16 @@
     runSyncTick();
     setInterval(runSyncTick, 2000);
   }, 1200);
+
+  // Dedicated 400ms Fast-Lane for On-Demand Order Details, Notes, Courier Profiles & Searches
+  let isFastOnDemandRunning = false;
+  setInterval(async () => {
+    if (isFastOnDemandRunning || !ownsLocalTabLock || !isCurrentLeader) return;
+    isFastOnDemandRunning = true;
+    try {
+      await processOnDemandRequests();
+    } catch {} finally {
+      isFastOnDemandRunning = false;
+    }
+  }, 400);
 })();
