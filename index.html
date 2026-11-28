@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<!-- Hurrier Live Operations Dashboard v10.18 -->
+<!-- Hurrier Live Operations Dashboard v10.20 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v10.18</title>
+  <title>Hurrier Live Operations Dashboard v10.20</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -38,14 +38,14 @@
 <body>
   <div id="root">
     <div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#4b5563;">
-      Loading Hurrier Live Operations Dashboard v10.18...
+      Loading Hurrier Live Operations Dashboard v10.20...
     </div>
   </div>
 
   <script type="text/babel">
     const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
-    const APP_VERSION = "10.18";
+    const APP_VERSION = "10.20";
     const FIREBASE_DB_URL = "https://hurrier-live-default-rtdb.europe-west1.firebasedatabase.app";
     const FIREBASE_PROJECT_ID = "hurrier-live";
     const FIREBASE_AUTH_DOMAIN = "hurrier-live.firebaseapp.com";
@@ -839,6 +839,7 @@
 
       return {
         uid: `${tabName}-${rec?.id || code}-${rec?.courier_id || idx}`,
+        deliveryId: String(rec?.id || "").trim(),
         orderId: String(order.id || "").trim(),
         id: code || "-",
         orderCode: order.order_code || (code ? `HF_EG${code}` : ""),
@@ -910,14 +911,14 @@
       const platformName = dOrder.platform === "TB_OT" ? "talabat" : dOrder.platform || "talabat";
       const vendorObj = dOrder.vendor || {};
       const vendorName = normalizeText(
-        vendorObj.vendor_name || dOrder.restaurant_name || orderItem?.vendor || "-"
+        vendorObj.vendor_name || dOrder.vendor_name || dOrder.restaurant_name || orderItem?.vendor || "-"
       );
-      const vendorCode = String(vendorObj.vendor_code || orderItem?.vendorCode || "-");
-      const vendorOrderNo = String(vendorObj.vendor_order_number || orderItem?.vo || "-");
+      const vendorCode = String(vendorObj.vendor_code || dOrder.vendor_code || orderItem?.vendorCode || "-");
+      const vendorOrderNo = String(vendorObj.vendor_order_number || dOrder.vendor_order_number || orderItem?.vo || "-");
       const orderValue = formatPiastersMoney(
-        dOrder.order_value ?? dOrder.subtotal ?? orderItem?.raw?.order?.order_value
+        dOrder.order_value ?? dOrder.total ?? dOrder.subtotal ?? orderItem?.raw?.order?.order_value ?? orderItem?.raw?.order?.total
       ) !== "-"
-        ? formatPiastersMoney(dOrder.order_value ?? dOrder.subtotal ?? orderItem?.raw?.order?.order_value)
+        ? formatPiastersMoney(dOrder.order_value ?? dOrder.total ?? dOrder.subtotal ?? orderItem?.raw?.order?.order_value ?? orderItem?.raw?.order?.total)
         : orderItem?.orderValue || "-";
 
       const pickupObj = dOrder.pickup_address || orderItem?.raw?.order?.pickup_address || {};
@@ -930,9 +931,11 @@
 
       const custObj = dOrder.customer || {};
       const customerName = normalizeText(
-        custObj.customer_name || orderItem?.raw?.order?.customer_name || "Customer"
+        custObj.customer_name || dOrder.customer_name || orderItem?.raw?.order?.customer_name || "Customer"
       );
-      const customerPhone = normalizeText(custObj.customer_phone_number || "");
+      const customerPhone = normalizeText(
+        custObj.customer_phone_number || dOrder.customer_phone_number || ""
+      );
 
       const dropObj =
         dOrder.drop_off_address ||
@@ -1100,8 +1103,14 @@
       const timingObj = dOrder.timing || {};
       const timeChecks = [
         { label: "Placed At", value: formatExactTimeSeconds(dOrder.placed_at) },
-        { label: "Sent to Vendor", value: formatExactTimeSeconds(dOrder.send_to_restaurant_at) },
-        { label: "Vendor Confirmed", value: formatExactTimeSeconds(dOrder.restaurant_confirmed_at) },
+        {
+          label: "Sent to Vendor",
+          value: formatExactTimeSeconds(dOrder.send_to_restaurant_at || dOrder.sent_to_vendor_at)
+        },
+        {
+          label: "Vendor Confirmed",
+          value: formatExactTimeSeconds(dOrder.restaurant_confirmed_at || dOrder.accepted_by_vendor_at)
+        },
         { label: "Food / Order Ready", value: formatExactTimeSeconds(dOrder.food_is_ready_at) },
         {
           label: "Scheduled Pickup",
@@ -2083,6 +2092,9 @@
           const internalOrderId = String(
             orderItem?.orderId || orderItem?.raw?.order?.id || ""
           ).trim();
+          const deliveryId = String(
+            orderItem?.deliveryId || orderItem?.raw?.id || ""
+          ).trim();
           const vendorOrderNumber =
             orderItem?.vo && orderItem.vo !== "-" ? String(orderItem.vo).trim() : "";
           const {
@@ -2112,6 +2124,7 @@
                 code,
                 orderCode: orderItem.orderCode || `HF_EG${code}`,
                 internalOrderId,
+                deliveryId,
                 vendorOrderNumber,
                 requestedAt: Date.now()
               })
