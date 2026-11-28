@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://mahmoudosman-hub.github.io/hurrier-live/
-// @version      10.13
-// @description  [v10.13] Dedicated 400ms Fast-Lane Order Detail & Notes Fetcher (Parallel + Retry + Zero Null Overwrite) + Multi-Rider Sibling Preservation + Preorder Countdown + Rolling 2h Archive
+// @version      10.14
+// @description  [v10.14] Dedicated 400ms Fast-Lane Order Detail & Notes Fetcher (Parallel + Retry + Zero Null Overwrite) + Multi-Rider Sibling Preservation + Preorder Countdown + Rolling 2h Archive
 // @author       Mahmoud Mohammed
 // @match        https://eg.me.logisticsbackoffice.com/*
 // @match        https://mahmoudosman-hub.github.io/hurrier-live/*
@@ -24,7 +24,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "10.13";
+  const SCRIPT_VERSION = "10.14";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -582,6 +582,12 @@
   let lastHandledRiderSearchId = "";
   const processedCompletedIdReqs = new Map();
   const processedCompletedRangeReqs = new Map();
+
+  function buildStartingPointQueryParams(zoneIds) {
+    const ids = Array.from(new Set((zoneIds || []).map(Number).filter((n) => n > 0)));
+    if (ids.length === 0) return "";
+    return ids.map((id) => `starting_point_id%5B%5D=${encodeURIComponent(id)}`).join("&");
+  }
 
   async function hurrierGetWithRetry(path, maxRetries = 2, baseDelayMs = 250) {
     let lastErr = null;
