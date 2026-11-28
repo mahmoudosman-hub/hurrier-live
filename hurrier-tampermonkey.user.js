@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hurrier Live Sync
 // @namespace    https://hurrier-live.local/
-// @version      9.8
-// @description  [v9.8] Per-Order Detail Queue + Fast Mobile Order Sync
+// @version      9.9
+// @description  [v9.9] Shared 2h Completed Cloud Archive (15m Sync) + Custom Time Filter + Instant ID Lookup
 // @updateURL    https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @downloadURL  https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js
 // @match        https://eg.me.logisticsbackoffice.com/*
@@ -21,7 +21,7 @@
 (function () {
   "use strict";
 
-  const SCRIPT_VERSION = "9.8";
+  const SCRIPT_VERSION = "9.9";
   const GITHUB_SCRIPT_RAW_URL =
     "https://raw.githubusercontent.com/mahmoudosman-hub/hurrier-live/main/hurrier-tampermonkey.user.js";
   const FIREBASE_DB_URL =
@@ -32,7 +32,9 @@
   const SAME_PC_TAB_LOCK_KEY = "hurrier_live_same_pc_tab_lock_v2";
 
   const ROLLING_COMPLETED_WINDOW_MS = 2 * 3600 * 1000;
-  const ROLLING_COMPLETED_GRACE_MS = 20 * 60 * 1000;
+  const ROLLING_COMPLETED_GRACE_MS = 5 * 60 * 1000;
+  const COMPLETED_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
+  const SHARED_COMPLETED_ARCHIVE_PATH = "/session_bundles/__shared_completed_2h";
   const MANIAL_FAMILY_IDS = [10004, 10162, 10282, 10284, 10214, 10267];
 
   const IS_HURRIER_HOST = location.hostname === "eg.me.logisticsbackoffice.com";
@@ -875,14 +877,134 @@
   }
 
   // ============================================================================
-  // 9) ROLLING COMPLETED ORDERS ENGINE (Selected Zones Only + Exact Completed Time)
+  // 9) UNIFIED 2-HOUR SHARED COMPLETED ARCHIVE (15-Min Auto-Prune/Sync + Custom Time + ID Lookup)
   // ============================================================================
   const rollingCompletedPool = new Map();
   const completedExactTimeCache = new Map();
+  const coveredCompletedZonesSet = new Set();
   let isCompletedSyncInProgress = false;
+  let hasHydratedSharedCompleted = false;
   let lastCompletedSweepAt = 0;
-  let lastCompletedZonesSignature = "";
+  let lastForceCompletedReqHandledAt = 0;
+  let sharedArchiveDirty = false;
+  let lastSharedArchiveSaveAt = 0;
   let cachedLastCompletedPage = { dateStr: "", page: 1, ts: 0 };
+
+  function slimCompletedRecord(rec, completedAtMs) {
+    const o = rec?.order || {};
+    const pd = rec?.primary_delivery || {};
+    const pt = rec?.primary_delivery_timings || {};
+    const drop = o.drop_off_address || o.dropoff_address || {};
+    const rawSps = Array.isArray(rec?.starting_points)
+      ? rec.starting_points
+      : Array.isArray(drop.starting_points)
+      ? drop.starting_points
+      : Array.isArray(pd.starting_points)
+      ? pd.starting_points
+      : [];
+    const slimSps = rawSps
+      .map((sp) =>
+        typeof sp === "string"
+          ? sp
+          : sp && typeof sp === "object"
+          ? { id: Number(sp.id || 0), name: String(sp.name || "") }
+          : null
+      )
+      .filter(Boolean);
+
+    return {
+      starting_points: slimSps,
+      __completed_at_ms: Number(completedAtMs || rec?.__completed_at_ms || 0),
+      order: {
+        id: o.id || "",
+        code: o.code || "",
+        order_code: o.order_code || "",
+        confirmation_number: o.confirmation_number || "",
+        vendor_order_number: o.vendor_order_number || "",
+        vendor_name: o.vendor_name || o.restaurant_name || "",
+        vendor_code: o.vendor_code || "",
+        status: o.status || "completed",
+        placed_at: o.placed_at || "",
+        current_state_transition: o.current_state_transition || "",
+        total: o.total ?? o.order_value ?? 0,
+        order_value: o.order_value ?? o.total ?? 0,
+        is_preorder: Boolean(o.is_preorder || o.is_pre_order),
+        deliveries_dropoff_issues: o.deliveries_dropoff_issues || "",
+        drop_off_address: {
+          city: drop.city || drop.city_name || "",
+          starting_points: slimSps
+        }
+      },
+      primary_delivery: {
+        courier_name: pd.courier_name || rec?.courier_name || "",
+        courier_id: pd.courier_id || rec?.courier_id || null,
+        delivery_distance: Number(pd.delivery_distance ?? rec?.distance ?? 0)
+      },
+      primary_delivery_timings: {
+        accepting_time: pt.accepting_time ?? null,
+        vendor_late: pt.vendor_late ?? null,
+        courier_late: pt.courier_late ?? null,
+        wait_pickup_time: pt.wait_pickup_time ?? null,
+        delivery_late: pt.delivery_late ?? null,
+        time_in_bag: pt.time_in_bag ?? null,
+        total_time: pt.total_time ?? null
+      }
+    };
+  }
+
+  function pruneRollingCompletedPool() {
+    const pruneCutoffMs = Date.now() - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
+    for (const [code, rec] of rollingCompletedPool.entries()) {
+      if (Number(rec?.__completed_at_ms || 0) < pruneCutoffMs) {
+        rollingCompletedPool.delete(code);
+      }
+    }
+  }
+
+  async function hydrateSharedCompletedArchiveIfNeeded() {
+    if (hasHydratedSharedCompleted) return;
+    hasHydratedSharedCompleted = true;
+    try {
+      const archive = await firebaseReq("GET", SHARED_COMPLETED_ARCHIVE_PATH);
+      if (!archive || typeof archive !== "object") return;
+      const cutoffMs = Date.now() - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
+      const recs = Array.isArray(archive.records) ? archive.records : [];
+      for (const r of recs) {
+        const code = getCompletedRecordCode(r);
+        const ms = Number(r?.__completed_at_ms || 0);
+        if (code && ms >= cutoffMs) {
+          rollingCompletedPool.set(code, r);
+          completedExactTimeCache.set(code, { cancelled: false, ms });
+        }
+      }
+      if (Array.isArray(archive.coveredZoneIds)) {
+        archive.coveredZoneIds.forEach((zid) => {
+          const n = Number(zid);
+          if (n > 0) coveredCompletedZonesSet.add(n);
+        });
+      }
+      if (archive.lastSweepAt && Number(archive.lastSweepAt) > 0) {
+        lastCompletedSweepAt = Number(archive.lastSweepAt);
+      }
+    } catch {}
+  }
+
+  async function persistSharedCompletedArchive() {
+    pruneRollingCompletedPool();
+    const sortedRecords = Array.from(rollingCompletedPool.values())
+      .sort((a, b) => Number(b.__completed_at_ms || 0) - Number(a.__completed_at_ms || 0))
+      .slice(0, 1500);
+    sharedArchiveDirty = false;
+    lastSharedArchiveSaveAt = Date.now();
+    try {
+      await firebaseReq("PUT", SHARED_COMPLETED_ARCHIVE_PATH, {
+        updatedAt: Date.now(),
+        lastSweepAt: lastCompletedSweepAt || Date.now(),
+        coveredZoneIds: Array.from(coveredCompletedZonesSet),
+        records: sortedRecords
+      });
+    } catch {}
+  }
 
   function getCairoDateStringsForWindow() {
     const now = new Date();
@@ -985,6 +1107,23 @@
     if (completedExactTimeCache.has(code)) {
       return completedExactTimeCache.get(code);
     }
+    if (rec?.__completed_at_ms && Number(rec.__completed_at_ms) > 946684800000) {
+      const resObj = { cancelled: false, ms: Number(rec.__completed_at_ms) };
+      completedExactTimeCache.set(code, resObj);
+      return resObj;
+    }
+
+    const order = rec?.order || {};
+    const timings = rec?.primary_delivery_timings || {};
+    const isPre = Boolean(order.is_preorder || order.is_pre_order);
+    const placedMs = order.placed_at ? new Date(order.placed_at).getTime() : 0;
+    const totalSec = Number(timings.total_time);
+    if (!isPre && placedMs > 946684800000 && !Number.isNaN(totalSec) && totalSec > 0) {
+      const fastMs = placedMs + Math.round(totalSec) * 1000;
+      const fastObj = { cancelled: false, ms: fastMs };
+      completedExactTimeCache.set(code, fastObj);
+      return fastObj;
+    }
 
     try {
       const det = await hurrierGet(`/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(code)}`);
@@ -1003,21 +1142,19 @@
       }
     } catch {}
 
-    const placedIso = rec?.order?.placed_at || "";
-    const fallbackMs = placedIso ? new Date(placedIso).getTime() : 0;
-    return fallbackMs > 946684800000 ? { cancelled: false, ms: fallbackMs } : null;
+    return placedMs > 946684800000 ? { cancelled: false, ms: placedMs } : null;
   }
 
-  async function ingestCompletedRecordsBatch(recs, unionZoneIds, hasManialUnion, hasTahrirUnion) {
+  async function ingestCompletedRecordsBatch(recs, targetZoneIds, hasManial, hasTahrir) {
     const cutoffMs = Date.now() - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
     const zoneMatched = recs.filter((rec) => {
       const st = String(rec?.order?.status || rec?.status || "completed").toLowerCase();
       if (st.includes("cancel")) return false;
-      return doesRecordMatchSessionZones(rec, unionZoneIds, hasManialUnion, hasTahrirUnion);
+      return doesRecordMatchSessionZones(rec, targetZoneIds, hasManial, hasTahrir);
     });
 
-    for (let i = 0; i < zoneMatched.length; i += 8) {
-      const chunk = zoneMatched.slice(i, i + 8);
+    for (let i = 0; i < zoneMatched.length; i += 10) {
+      const chunk = zoneMatched.slice(i, i + 10);
       await Promise.allSettled(
         chunk.map(async (rec) => {
           const code = getCompletedRecordCode(rec);
@@ -1028,10 +1165,7 @@
             return;
           }
           if (exact.ms >= cutoffMs) {
-            rollingCompletedPool.set(code, {
-              ...rec,
-              __completed_at_ms: exact.ms
-            });
+            rollingCompletedPool.set(code, slimCompletedRecord(rec, exact.ms));
           }
         })
       );
@@ -1070,6 +1204,7 @@
 
     if (disappeared.length === 0) return;
 
+    let addedAny = false;
     await Promise.allSettled(
       disappeared.slice(0, 8).map(async ({ code, prevRec }) => {
         try {
@@ -1079,47 +1214,54 @@
           if (st !== "completed") return;
           const trIso = dOrder?.current_state_transition || dOrder?.event_timestamp || "";
           const trMs = trIso ? new Date(trIso).getTime() : Date.now();
+          const placedMs = dOrder?.placed_at ? new Date(dOrder.placed_at).getTime() : 0;
+          const durSec =
+            trMs > 0 && placedMs > 0 && trMs >= placedMs ? Math.round((trMs - placedMs) / 1000) : null;
           completedExactTimeCache.set(code, { cancelled: false, ms: trMs });
-          const synthRec = {
-            order: {
-              ...(prevRec?.order || {}),
-              ...dOrder,
-              confirmation_number: code,
-              status: "completed",
-              drop_off_address: {
-                ...(dOrder?.drop_off_address || prevRec?.order?.dropoff_address || {}),
-                starting_points: prevRec?.starting_points || []
+          const synthRec = slimCompletedRecord(
+            {
+              starting_points: prevRec?.starting_points || [],
+              order: {
+                ...(prevRec?.order || {}),
+                ...dOrder,
+                confirmation_number: code,
+                status: "completed",
+                drop_off_address: {
+                  ...(dOrder?.drop_off_address || prevRec?.order?.dropoff_address || {}),
+                  starting_points: prevRec?.starting_points || []
+                }
+              },
+              primary_delivery: {
+                courier_name: prevRec?.courier_name || dOrder?.assigned_couriers?.[0]?.name || "",
+                courier_id: prevRec?.courier_id || dOrder?.assigned_couriers?.[0]?.id || null,
+                delivery_distance: prevRec?.distance || 0
+              },
+              primary_delivery_timings: {
+                total_time: durSec
               }
             },
-            primary_delivery: {
-              courier_name: prevRec?.courier_name || "",
-              courier_id: prevRec?.courier_id || null,
-              delivery_distance: prevRec?.distance || 0
-            },
-            primary_delivery_timings: {},
-            __completed_at_ms: trMs
-          };
+            trMs
+          );
           rollingCompletedPool.set(code, synthRec);
+          addedAny = true;
         } catch {}
       })
     );
+
+    if (addedAny) {
+      sharedArchiveDirty = true;
+    }
   }
 
-  async function syncRollingCompletedOrdersPool(
-    unionZoneIds,
-    hasManialUnion,
-    hasTahrirUnion,
-    isFullSweep
-  ) {
+  async function syncRollingCompletedOrdersPool(targetZoneIds, hasManial, hasTahrir, allUnionZoneIds) {
     const dates = getCairoDateStringsForWindow();
-    const placedStopCutoffMs = Date.now() - 4.5 * 3600 * 1000;
+    const placedStopCutoffMs = Date.now() - 3.5 * 3600 * 1000;
 
     for (const dateStr of dates) {
       const lastPage = await findLastCompletedPageForDate(dateStr);
       if (lastPage <= 0) continue;
 
-      const maxPagesToScan = isFullSweep ? 45 : 8;
-      const minPage = Math.max(1, lastPage - maxPagesToScan + 1);
+      const minPage = Math.max(1, lastPage - 250 + 1);
 
       for (let p = lastPage; p >= minPage; p -= 5) {
         const batchPages = [];
@@ -1132,12 +1274,7 @@
         const flatRecs = pageArrays.flat();
         if (flatRecs.length === 0) break;
 
-        await ingestCompletedRecordsBatch(
-          flatRecs,
-          unionZoneIds,
-          hasManialUnion,
-          hasTahrirUnion
-        );
+        await ingestCompletedRecordsBatch(flatRecs, targetZoneIds, hasManial, hasTahrir);
 
         let oldestPlacedInBatch = Infinity;
         for (const r of flatRecs) {
@@ -1147,41 +1284,196 @@
         if (oldestPlacedInBatch < placedStopCutoffMs) {
           break;
         }
+        await new Promise((r) => setTimeout(r, 60));
       }
     }
 
-    const pruneCutoffMs = Date.now() - (ROLLING_COMPLETED_WINDOW_MS + ROLLING_COMPLETED_GRACE_MS);
-    for (const [code, rec] of rollingCompletedPool.entries()) {
-      if (Number(rec?.__completed_at_ms || 0) < pruneCutoffMs) {
-        rollingCompletedPool.delete(code);
-      }
-    }
+    allUnionZoneIds.forEach((zid) => coveredCompletedZonesSet.add(Number(zid)));
+    lastCompletedSweepAt = Date.now();
+    await persistSharedCompletedArchive();
   }
 
-  function triggerRollingCompletedSyncIfNeeded(unionZoneIds, hasManialUnion, hasTahrirUnion) {
-    if (isCompletedSyncInProgress) return;
-    const sig = Array.from(unionZoneIds).sort((a, b) => a - b).join(",");
-    const zonesChanged = sig !== lastCompletedZonesSignature;
+  function triggerRollingCompletedSyncIfNeeded(
+    unionZoneIds,
+    hasManialUnion,
+    hasTahrirUnion,
+    forceManual = false
+  ) {
+    pruneRollingCompletedPool();
     const now = Date.now();
 
-    if (!zonesChanged && now - lastCompletedSweepAt < 15000) return;
+    if (!isCompletedSyncInProgress && sharedArchiveDirty && now - lastSharedArchiveSaveAt >= 8000) {
+      persistSharedCompletedArchive().catch(() => {});
+    }
 
-    const isFullSweep = zonesChanged || rollingCompletedPool.size === 0;
-    lastCompletedZonesSignature = sig;
-    lastCompletedSweepAt = now;
+    if (isCompletedSyncInProgress) return;
+
+    const uncoveredIds = Array.from(unionZoneIds).filter(
+      (zid) => !coveredCompletedZonesSet.has(Number(zid))
+    );
+    const is15MinDue =
+      lastCompletedSweepAt === 0 || now - lastCompletedSweepAt >= COMPLETED_SWEEP_INTERVAL_MS;
+
+    if (!forceManual && !is15MinDue && uncoveredIds.length === 0) {
+      return;
+    }
+
+    const sweepZonesSet =
+      forceManual || is15MinDue ? new Set(unionZoneIds) : new Set(uncoveredIds);
+    const sweepHasManial = MANIAL_FAMILY_IDS.some((id) => sweepZonesSet.has(id));
+    const sweepHasTahrir = sweepZonesSet.has(10022) || sweepZonesSet.has(10163);
+
     isCompletedSyncInProgress = true;
-
-    syncRollingCompletedOrdersPool(unionZoneIds, hasManialUnion, hasTahrirUnion, isFullSweep)
+    syncRollingCompletedOrdersPool(sweepZonesSet, sweepHasManial, sweepHasTahrir, unionZoneIds)
       .catch(() => {})
       .finally(() => {
         isCompletedSyncInProgress = false;
       });
   }
 
+  // Custom Time Window Search (On-Demand Binary Search by Timestamp)
+  const handledCustomRangeReqsMap = new Map();
+  let activeCustomRangeWorkers = 0;
+
+  async function findUpperPageForTimestamp(dateStr, lastPage, maxAllowedPlacedMs) {
+    let lo = 1;
+    let hi = lastPage;
+    let bestPage = lastPage;
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const recs = await fetchCompletedPage(dateStr, mid);
+      if (recs.length === 0) {
+        hi = mid - 1;
+        continue;
+      }
+      let minPlaced = Infinity;
+      for (const r of recs) {
+        const pMs = r?.order?.placed_at ? new Date(r.order.placed_at).getTime() : 0;
+        if (pMs > 0 && pMs < minPlaced) minPlaced = pMs;
+      }
+      if (minPlaced <= maxAllowedPlacedMs) {
+        bestPage = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return bestPage;
+  }
+
+  async function executeCustomCompletedRangeSearch(rangeReq) {
+    activeCustomRangeWorkers++;
+    try {
+      const sessId = String(rangeReq.sessionId || "").trim();
+      const dateStr = String(rangeReq.dateStr || "").trim();
+      const fromMs = Number(rangeReq.fromMs || 0);
+      const toMs = Number(rangeReq.toMs || 0);
+      const zoneSet = new Set(
+        (Array.isArray(rangeReq.zoneIds) ? rangeReq.zoneIds : []).map(Number).filter((n) => n > 0)
+      );
+      const hasManial = MANIAL_FAMILY_IDS.some((id) => zoneSet.has(id));
+      const hasTahrir = zoneSet.has(10022) || zoneSet.has(10163);
+
+      const matchedByCode = new Map();
+
+      const scanDatePages = async (dStr, isPrevNightTail) => {
+        const lastPage = await findLastCompletedPageForDate(dStr);
+        if (lastPage <= 0) return;
+
+        const startPage = isPrevNightTail
+          ? lastPage
+          : await findUpperPageForTimestamp(dStr, lastPage, toMs + 5 * 60 * 1000);
+        const maxScan = isPrevNightTail ? 20 : 85;
+        const minPage = Math.max(1, startPage - maxScan + 1);
+        const stopPlacedMs = fromMs - 2.5 * 3600 * 1000;
+
+        for (let p = startPage; p >= minPage; p -= 5) {
+          const batchPages = [];
+          for (let k = 0; k < 5 && p - k >= minPage; k++) {
+            batchPages.push(p - k);
+          }
+          const pageArrays = await Promise.all(
+            batchPages.map((pg) => fetchCompletedPage(dStr, pg))
+          );
+          const flatRecs = pageArrays.flat();
+          if (flatRecs.length === 0) break;
+
+          const zoneFiltered = flatRecs.filter((rec) => {
+            const st = String(rec?.order?.status || rec?.status || "completed").toLowerCase();
+            if (st.includes("cancel")) return false;
+            return doesRecordMatchSessionZones(rec, zoneSet, hasManial, hasTahrir);
+          });
+
+          for (let i = 0; i < zoneFiltered.length; i += 10) {
+            const chunk = zoneFiltered.slice(i, i + 10);
+            await Promise.allSettled(
+              chunk.map(async (rec) => {
+                const code = getCompletedRecordCode(rec);
+                if (!code || matchedByCode.has(code)) return;
+                const exact = await resolveExactCompletedTimeMs(rec);
+                if (exact && !exact.cancelled && exact.ms >= fromMs && exact.ms <= toMs) {
+                  matchedByCode.set(code, slimCompletedRecord(rec, exact.ms));
+                }
+              })
+            );
+          }
+
+          let maxPlacedInBatch = 0;
+          for (const r of flatRecs) {
+            const pMs = r?.order?.placed_at ? new Date(r.order.placed_at).getTime() : 0;
+            if (pMs > maxPlacedInBatch) maxPlacedInBatch = pMs;
+          }
+          if (maxPlacedInBatch > 0 && maxPlacedInBatch < stopPlacedMs) {
+            break;
+          }
+        }
+      };
+
+      if (dateStr && fromMs > 0 && toMs >= fromMs) {
+        await scanDatePages(dateStr, false);
+        const cairoHourOfFrom = parseInt(
+          new Intl.DateTimeFormat("en-GB", {
+            timeZone: "Africa/Cairo",
+            hour: "2-digit",
+            hour12: false
+          }).format(new Date(fromMs)),
+          10
+        );
+        if (cairoHourOfFrom < 3) {
+          const prevDateStr = new Intl.DateTimeFormat("en-CA", {
+            timeZone: "Africa/Cairo",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit"
+          }).format(new Date(fromMs - 12 * 3600 * 1000));
+          if (prevDateStr && prevDateStr !== dateStr) {
+            await scanDatePages(prevDateStr, true);
+          }
+        }
+      }
+
+      const finalList = Array.from(matchedByCode.values()).sort(
+        (a, b) => Number(b.__completed_at_ms || 0) - Number(a.__completed_at_ms || 0)
+      );
+
+      await firebaseReq("PUT", `/session_bundles/comp_range_${encodeURIComponent(sessId)}`, {
+        reqId: rangeReq.reqId,
+        records: finalList,
+        updatedAt: Date.now()
+      });
+      firebaseReq("DELETE", `/config/completed_range_reqs/${encodeURIComponent(sessId)}`).catch(
+        () => {}
+      );
+    } catch {} finally {
+      activeCustomRangeWorkers = Math.max(0, activeCustomRangeWorkers - 1);
+    }
+  }
+
   // ============================================================================
-  // 10) FAST ON-DEMAND WATCHER (Order Details, Exact Courier Detail + Balance, Rider Search)
+  // 10) FAST ON-DEMAND WATCHER (Order Details + Notes, Completed ID Lookup, Courier Detail + Balance, Rider Search)
   // ============================================================================
   const handledOrderReqsMap = new Map();
+  const handledCompletedIdReqsMap = new Map();
   let lastCourierReqHandledAt = 0;
   let lastRiderSearchReqId = "";
   let isOnDemandBusy = false;
@@ -1363,10 +1655,12 @@
       if (freshOrderReqs.length > 0) {
         await Promise.allSettled(
           freshOrderReqs.slice(0, 6).map(async ({ code, orderCode }) => {
+            const fullOrderCode =
+              /^(HF_[A-Z]{2}|ODR_[A-Z]{2})/i.test(orderCode) ? orderCode : `HF_EG${code}`;
             const [detRes, delivRes, notesRes] = await Promise.allSettled([
               hurrierGet(`/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(code)}`),
-              hurrierGet(`/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(orderCode)}`),
-              hurrierGet(`/dispatcher-dashboard/orders/dispatcher_notes?code=${encodeURIComponent(orderCode)}`)
+              hurrierGet(`/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(fullOrderCode)}`),
+              hurrierGet(`/dispatcher-dashboard/orders/dispatcher_notes?code=${encodeURIComponent(fullOrderCode)}`)
             ]);
             await firebaseReq("PUT", `/order_details/${encodeURIComponent(code)}`, {
               detail: detRes.status === "fulfilled" ? detRes.value : null,
@@ -1377,6 +1671,152 @@
             firebaseReq("DELETE", `/config/order_detail_reqs/${encodeURIComponent(code)}`).catch(() => {});
           })
         );
+      }
+
+      // Direct Completed Order ID Lookup (Any time of day in < 1 second)
+      const compIdReqsObj =
+        cfg.completed_id_reqs && typeof cfg.completed_id_reqs === "object"
+          ? cfg.completed_id_reqs
+          : {};
+      const freshCompIdCodes = [];
+      for (const item of Object.values(compIdReqsObj)) {
+        const code = String(item?.code || "").trim();
+        const reqAt = Number(item?.requestedAt || 0);
+        if (!code || now - reqAt > 60000) continue;
+        if (reqAt > Number(handledCompletedIdReqsMap.get(code) || 0)) {
+          handledCompletedIdReqsMap.set(code, reqAt);
+          freshCompIdCodes.push(code);
+        }
+      }
+
+      if (freshCompIdCodes.length > 0) {
+        await Promise.allSettled(
+          freshCompIdCodes.slice(0, 4).map(async (code) => {
+            const fullOrderCode = `HF_EG${code}`;
+            const [detRes, delivRes, notesRes] = await Promise.allSettled([
+              hurrierGet(`/dispatcher-dashboard/orders/detail?code=${encodeURIComponent(code)}`),
+              hurrierGet(`/dispatcher-dashboard/orders/detail/deliveries?code=${encodeURIComponent(fullOrderCode)}`),
+              hurrierGet(`/dispatcher-dashboard/orders/dispatcher_notes?code=${encodeURIComponent(fullOrderCode)}`)
+            ]);
+            const detVal = detRes.status === "fulfilled" ? detRes.value : null;
+            const delivVal = delivRes.status === "fulfilled" ? delivRes.value : null;
+            const notesVal = notesRes.status === "fulfilled" ? notesRes.value : null;
+
+            if (detVal || delivVal) {
+              await firebaseReq("PUT", `/order_details/${encodeURIComponent(code)}`, {
+                detail: detVal,
+                deliveries: delivVal,
+                notes: notesVal,
+                updatedAt: Date.now()
+              });
+            }
+
+            const dOrder = detVal?.order || detVal;
+            if (!dOrder || (!dOrder.code && !dOrder.order_id && !dOrder.status)) {
+              await firebaseReq("PUT", `/session_bundles/comp_id_${encodeURIComponent(code)}`, {
+                code,
+                found: false,
+                status: "not_found",
+                record: null,
+                updatedAt: Date.now()
+              });
+            } else {
+              const stLower = String(dOrder.status || "").toLowerCase();
+              const delivList = Array.isArray(delivVal?.deliveries) ? delivVal.deliveries : [];
+              const compDel =
+                delivList.find((d) => String(d?.status || "").toLowerCase() === "completed") ||
+                delivList[0] ||
+                {};
+              const compTr = (Array.isArray(compDel.transitions) ? compDel.transitions : []).find(
+                (t) => String(t?.to_state || "").toLowerCase() === "completed"
+              );
+              const trIso =
+                compTr?.metadata?.performed_at ||
+                compTr?.created_at ||
+                dOrder.current_state_transition ||
+                dOrder.event_timestamp ||
+                "";
+              const trMs = trIso ? new Date(trIso).getTime() : 0;
+              const validCompMs = !Number.isNaN(trMs) && trMs > 946684800000 ? trMs : Date.now();
+              const placedMs = dOrder.placed_at ? new Date(dOrder.placed_at).getTime() : 0;
+              const durSec =
+                validCompMs > 0 && placedMs > 0 && validCompMs >= placedMs
+                  ? Math.round((validCompMs - placedMs) / 1000)
+                  : null;
+              const distMeters = Number(
+                compDel.delivery_distance ||
+                  dOrder?.estimations?.pickup_to_drop_off_distance ||
+                  dOrder?.estimations?.distance_and_time_estimated_dte?.bike?.distances ||
+                  0
+              );
+
+              const synthRec = slimCompletedRecord(
+                {
+                  starting_points: compDel.starting_points || [],
+                  order: {
+                    ...dOrder,
+                    confirmation_number: code,
+                    vendor_name: dOrder?.vendor?.vendor_name || dOrder.restaurant_name || "",
+                    vendor_order_number: dOrder?.vendor?.vendor_order_number || "",
+                    vendor_code: dOrder?.vendor?.vendor_code || "",
+                    drop_off_address: {
+                      ...(dOrder.drop_off_address || {}),
+                      starting_points: compDel.starting_points || []
+                    }
+                  },
+                  primary_delivery: {
+                    courier_name: compDel.courier_name || dOrder?.assigned_couriers?.[0]?.name || "",
+                    courier_id: compDel.courier_id || dOrder?.assigned_couriers?.[0]?.id || null,
+                    delivery_distance: distMeters
+                  },
+                  primary_delivery_timings: {
+                    total_time: durSec
+                  }
+                },
+                validCompMs
+              );
+
+              await firebaseReq("PUT", `/session_bundles/comp_id_${encodeURIComponent(code)}`, {
+                code,
+                found: true,
+                status: stLower,
+                record: synthRec,
+                updatedAt: Date.now()
+              });
+            }
+            firebaseReq("DELETE", `/config/completed_id_reqs/${encodeURIComponent(code)}`).catch(
+              () => {}
+            );
+          })
+        );
+      }
+
+      // Custom Completed Time Range Requests (Non-blocking background worker)
+      const rangeReqsObj =
+        cfg.completed_range_reqs && typeof cfg.completed_range_reqs === "object"
+          ? cfg.completed_range_reqs
+          : {};
+      if (activeCustomRangeWorkers < 2) {
+        for (const rReq of Object.values(rangeReqsObj)) {
+          if (!rReq || !rReq.reqId || !rReq.sessionId) continue;
+          if (now - Number(rReq.requestedAt || 0) > 90000) continue;
+          if (handledCustomRangeReqsMap.get(rReq.sessionId) !== rReq.reqId) {
+            handledCustomRangeReqsMap.set(rReq.sessionId, rReq.reqId);
+            executeCustomCompletedRangeSearch(rReq);
+            break;
+          }
+        }
+      }
+
+      // Optional Manual Force Refresh of Shared 2h Archive
+      if (
+        cfg.completed_force_sync_req &&
+        Number(cfg.completed_force_sync_req.requestedAt || 0) > lastForceCompletedReqHandledAt &&
+        now - Number(cfg.completed_force_sync_req.requestedAt || 0) < 30000
+      ) {
+        lastForceCompletedReqHandledAt = Number(cfg.completed_force_sync_req.requestedAt);
+        lastCompletedSweepAt = 0;
+        firebaseReq("DELETE", "/config/completed_force_sync_req").catch(() => {});
       }
 
       const cReq = cfg.courier_detail_req;
@@ -1515,6 +1955,7 @@
         return;
       }
 
+      await hydrateSharedCompletedArchiveIfNeeded();
       await refreshDynamicZonesCatalogIfNeeded();
 
       const unionZoneIds = new Set();
@@ -1690,6 +2131,7 @@
             tabRecords: sessTabRecords,
             completedRecords: sessCompleted,
             completedSyncing: isCompletedSyncInProgress,
+            completedLastSweepAt: lastCompletedSweepAt,
             zoneStats: sessZoneStats,
             couriers: sessCouriers,
             counts: sessCounts,
