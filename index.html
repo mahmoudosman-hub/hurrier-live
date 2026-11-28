@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hurrier Live Operations Dashboard v10.4</title>
+  <title>Hurrier Live Operations Dashboard v10.5</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -42,7 +42,7 @@
     // =========================================================================
     // 1) CENTRAL CONFIG & FIREBASE INITIALIZATION
     // =========================================================================
-    const APP_VERSION = "10.4";
+    const APP_VERSION = "10.5";
     const AUTH_BRIDGE_STORAGE_KEY = "hurrier_fb_bridge_auth";
     const SELECTED_ZONES_STORAGE_KEY = "hurrier_selected_zones_v2";
     const PAGE_SIZE = 50;
@@ -577,6 +577,64 @@
         return () => bRef.off("value", handler);
       }, [authUser, userAccess]);
 
+      // Direct Instant Read of Shared Completed Archive from Firebase (0.2s display on login/reload)
+      const [sharedCompletedCache, setSharedCompletedCache] = useState([]);
+      useEffect(() => {
+        if (!authUser || !userAccess) return;
+        const archRef = db.ref("/config/shared_completed_archive");
+        const handler = (snap) => {
+          const val = snap.val();
+          if (val && typeof val === "object") {
+            setSharedCompletedCache(Object.values(val).filter((r) => r && typeof r === "object"));
+          } else {
+            setSharedCompletedCache([]);
+          }
+        };
+        archRef.on("value", handler);
+        return () => archRef.off("value", handler);
+      }, [authUser, userAccess]);
+
+      // Merge Session Completed Records + Instant Shared Cache filtered by Selected Zones
+      const effectiveCompletedRecords = useMemo(() => {
+        const zoneIdSet = new Set(selectedZoneIds.map(Number));
+        const zoneNameSet = new Set();
+        dynamicZonesCatalog.forEach((z) => {
+          if (zoneIdSet.has(Number(z.id))) {
+            zoneNameSet.add(String(z.name).trim().toLowerCase());
+          }
+        });
+
+        const matchesZones = (rec) => {
+          const rawSps = Array.isArray(rec?.starting_points)
+            ? rec.starting_points
+            : Array.isArray(rec?.order?.drop_off_address?.starting_points)
+            ? rec.order.drop_off_address.starting_points
+            : Array.isArray(rec?.order?.dropoff_address?.starting_points)
+            ? rec.order.dropoff_address.starting_points
+            : [];
+          if (rawSps.length === 0) return true;
+          return rawSps.some((sp) => {
+            if (sp && typeof sp === "object" && sp.id && zoneIdSet.has(Number(sp.id))) return true;
+            const nm = String(typeof sp === "string" ? sp : sp?.name || "").trim().toLowerCase();
+            return nm ? zoneNameSet.has(nm) : false;
+          });
+        };
+
+        const mergedByCode = new Map();
+        sharedCompletedCache.forEach((r, idx) => {
+          if (!matchesZones(r)) return;
+          const ord = r?.order || r || {};
+          const code = String(ord.confirmation_number || ord.code || `cache_${idx}`).trim();
+          mergedByCode.set(code, r);
+        });
+        bundleData.completedRecords.forEach((r, idx) => {
+          const ord = r?.order || r || {};
+          const code = String(ord.confirmation_number || ord.code || `sess_${idx}`).trim();
+          mergedByCode.set(code, r);
+        });
+        return Array.from(mergedByCode.values());
+      }, [sharedCompletedCache, bundleData.completedRecords, selectedZoneIds, dynamicZonesCatalog]);
+
       // Reset pagination & status filter when switching tabs
       const handleSwitchTab = (tabName) => {
         setActiveTab(tabName);
@@ -780,7 +838,7 @@
           setCompDirectLookupResult(null);
           return;
         }
-        const existsLocally = bundleData.completedRecords.some((r) => {
+        const existsLocally = effectiveCompletedRecords.some((r) => {
           const ord = r?.order || r || {};
           const code = String(ord.confirmation_number || ord.code || "");
           return code.includes(digits);
@@ -812,7 +870,7 @@
           }, 6000);
         }, 550);
         return () => clearTimeout(timer);
-      }, [compSearchInput, activeTab, bundleData.completedRecords]);
+      }, [compSearchInput, activeTab, effectiveCompletedRecords]);
 
       // Admin Allowed Emails Listener
       useEffect(() => {
@@ -1758,8 +1816,8 @@
           compTimeWindow === "custom"
             ? compCustomRecords
             : compTimeWindow === "today"
-            ? bundleData.completedRecords
-            : bundleData.completedRecords.filter((r) => {
+            ? effectiveCompletedRecords
+            : effectiveCompletedRecords.filter((r) => {
                 const ms = Number(r?.__completed_at_ms || 0);
                 return ms === 0 || ms >= rolling2hCutoff;
               });
